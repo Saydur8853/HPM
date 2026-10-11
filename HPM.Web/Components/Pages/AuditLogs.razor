@@ -1,0 +1,88 @@
+@page "/admin/audit"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+
+<PageTitle>@I18n.T("Audit Trail", "Audit Log") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Security Administration", "Security administration")</span>
+        <h1>@I18n.T("System Security Audit Log", "Audit log")</h1>
+        <p>@I18n.T("Trace create, update and delete activity across the application.", "Trace create, update and delete activity across the application.")</p>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Filter & Search Events", "Filter & Search Events")</h2>
+            <p>@I18n.T("Filter audit trail by date range, action type, entity or staff username.", "Filter audit trail by date range, action type, entity or staff username.")</p>
+        </div>
+    </div>
+    <div class="report-filter">
+        <label><span>@I18n.T("From", "From")</span><InputDate @bind-Value="fromDate" /></label>
+        <label><span>@I18n.T("To", "To")</span><InputDate @bind-Value="toDate" /></label>
+        <label><span>@I18n.T("Action", "Action")</span><select @bind="action"><option value="">@I18n.T("All", "All")</option><option value="Create">@I18n.T("Create", "Create")</option><option value="Update">@I18n.T("Update", "Update")</option><option value="Delete">@I18n.T("Delete", "Delete")</option></select></label>
+        <label><span>@I18n.T("Entity contains", "Entity contains")</span><input @bind="entity" placeholder="@I18n.T("e.g. Patient, Doctor", "e.g. Patient, Doctor")" /></label>
+        <label><span>@I18n.T("User contains", "User contains")</span><input @bind="user" placeholder="@I18n.T("e.g. admin", "e.g. admin")" /></label>
+        <button class="btn btn-primary" @onclick="ApplyFilterAsync">@I18n.T("Apply filter", "Apply filter")</button>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Recorded activity", "Recorded activity")</h2>
+            <p>@totalCount @I18n.T("matching event(s)", "matching event(s)") · @I18n.T("page", "page") @(page) @I18n.T("of", "of") @TotalPages</p>
+        </div>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" disabled="@(page<=1)" @onclick="PreviousPageAsync">@I18n.T("Previous", "Previous")</button>
+            <button class="btn btn-secondary" disabled="@(page>=TotalPages)" @onclick="NextPageAsync">@I18n.T("Next", "Next")</button>
+        </div>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Time", "Time")</th>
+                    <th>@I18n.T("User", "User")</th>
+                    <th>@I18n.T("Action", "Action")</th>
+                    <th>@I18n.T("Entity", "Entity")</th>
+                    <th>@I18n.T("Record", "Record")</th>
+                    <th>@I18n.T("Fields / detail", "Fields / detail")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if(logs.Count==0){<tr><td colspan="6"><div class="empty-state small">@I18n.T("No matching audit events.", "No matching audit events.")</div></td></tr>}
+                @foreach(var log in logs){
+                    <tr>
+                        <td>@log.EventTime.ToLocalTime().ToString("dd MMM yyyy hh:mm:ss tt")</td>
+                        <td>@log.UserName</td>
+                        <td><span class="pill">@I18n.T(log.Action, log.Action)</span></td>
+                        <td>@log.EntityName</td>
+                        <td>@log.EntityID</td>
+                        <td>@log.ChangedFields</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code{
+    private const int PageSize=100;private DateTime fromDate=DateTime.Today.AddDays(-7);private DateTime toDate=DateTime.Today;private string action="";private string entity="";private string user="";private List<AuditLog> logs=[];private int page=1,totalCount;private int TotalPages=>Math.Max(1,(int)Math.Ceiling(totalCount/(double)PageSize));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){var start=fromDate.Date.ToUniversalTime();var end=toDate.Date.AddDays(1).ToUniversalTime();await using var db=await DbFactory.CreateDbContextAsync();var query=db.AuditLogs.AsNoTracking().Where(x=>x.EventTime>=start&&x.EventTime<end);if(!string.IsNullOrWhiteSpace(action))query=query.Where(x=>x.Action==action);if(!string.IsNullOrWhiteSpace(entity)){var value=entity.Trim();query=query.Where(x=>x.EntityName.Contains(value));}if(!string.IsNullOrWhiteSpace(user)){var value=user.Trim();query=query.Where(x=>x.UserName.Contains(value));}totalCount=await query.CountAsync();page=Math.Clamp(page,1,TotalPages);logs=await query.OrderByDescending(x=>x.ID).Skip((page-1)*PageSize).Take(PageSize).ToListAsync();}
+    private async Task ApplyFilterAsync(){page=1;await LoadAsync();}private async Task PreviousPageAsync(){if(page>1){page--;await LoadAsync();}}private async Task NextPageAsync(){if(page<TotalPages){page++;await LoadAsync();}}
+}

@@ -1,0 +1,668 @@
+@page "/diagnostic/results"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician + "," + RoleNames.Doctor)]
+@using System.Security.Claims
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
+@inject NavigationManager Navigation
+@implements IDisposable
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Results & Report") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Diagnostic & Lab")</span>
+        <h1>@I18n.T("Diagnostic Test Results", "Pathology & Lab Result Entry")</h1>
+        <p>@I18n.T("Enter clinical values, normal ranges and finalize diagnostic reports.")</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <NavLink href="diagnostic/worklist" class="btn btn-secondary">&larr; @I18n.T("Lab Worklist")</NavLink>
+        <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ Clear / New search")</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="workspace-grid compact">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(selectedMemo == null ? I18n.T("Search Invoice No or Reg No...", "Find Diagnostic Order") : $"{I18n.T("Results & Report")} — #{selectedMemo.ID}")</h2>
+                <p>@I18n.T("Test findings and reference value evaluation.", "Test findings and reference value evaluation.")</p>
+            </div>
+            @if (selectedMemo != null)
+            {
+                <span class="badge">MEMO #@selectedMemo.ID</span>
+            }
+        </div>
+
+        <div style="padding: 20px;">
+            <div class="scanner-search-group" style="margin-bottom: 1.25rem;">
+                <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+                <input type="text"
+                       class="scanner-input"
+                       placeholder="@I18n.T("Scan Sample Tube Barcode (SMP-XXXX), Invoice Barcode (LAB-XXXX), or Diagnostic QR...", "Scan Sample Tube Barcode (SMP-XXXX), Invoice Barcode (LAB-XXXX), or Diagnostic QR...")"
+                       @bind="resultsScanQuery"
+                       @bind:event="oninput"
+                       @onkeydown="HandleResultsScanKeyDown" />
+                @if (!string.IsNullOrWhiteSpace(resultsScanQuery))
+                {
+                    <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearResultsScan">✕</button>
+                }
+            </div>
+
+            <div class="form-grid" style="margin-bottom: 16px;">
+                <label>
+                    <span>@I18n.T("Bill No", "Diagnostic Memo # *")</span>
+                    <InputNumber @bind-Value="searchMemoId" placeholder="e.g. 1001" />
+                </label>
+                <label>
+                    <span>&nbsp;</span>
+                    <button type="button" class="btn btn-secondary" style="width:100%;" @onclick="LoadMemoAsync">@I18n.T("Find Bill", "Load Order")</button>
+                </label>
+            </div>
+
+            @if (selectedMemo != null)
+            {
+                <div class="patient-summary" style="margin-bottom: 20px;">
+                    <div>
+                        <b>@selectedMemo.PatientName</b>
+                        <small style="display:block; margin-top:2px;">
+                            ID: @(selectedMemo.PatientID ?? I18n.T("Walk-in")) · @I18n.T("Age"): @selectedMemo.Age · @I18n.T("Sex"): @selectedMemo.Sex · Ref: @DoctorName(selectedMemo.DoctorID)
+                        </small>
+                    </div>
+                    <div style="text-align:right;">
+                        <span>@I18n.T("Date"):</span>
+                        <b>@selectedMemo.TransDate.ToString("dd MMM yyyy")</b>
+                    </div>
+                </div>
+
+                <div class="form-section-title">@I18n.T("Selected Tests & Investigations")</div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 16px;">
+                    @foreach (var test in orderItems)
+                    {
+                        var sName = ServiceName(test.TestID);
+                        <button type="button" class="btn @(activeTestId == test.TestID ? "btn-primary" : "btn-secondary")" @onclick="() => SwitchActiveTest(test.TestID)">
+                            @sName
+                        </button>
+                    }
+                </div>
+
+                @if (activeTestId > 0)
+                {
+                    <div class="form-section-title">@I18n.T("Investigation Details"): @ServiceName(activeTestId)</div>
+                    <div class="data-table-wrap" style="margin-bottom: 16px;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>@I18n.T("Parameter Name")</th>
+                                    <th>@I18n.T("Observed Value") *</th>
+                                    <th>@I18n.T("Unit")</th>
+                                    <th>@I18n.T("Reference Normal Range")</th>
+                                    <th>@I18n.T("Status")</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @for (var i = 0; i < currentTestResults.Count; i++)
+                                {
+                                    var idx = i;
+                                    var row = currentTestResults[idx];
+                                    <tr>
+                                        <td>
+                                            <InputText @bind-Value="row.ParameterName" style="min-height:32px; font-weight:700;" />
+                                        </td>
+                                        <td>
+                                            <InputText @bind-Value="row.ResultValue" style="min-height:32px;" placeholder="e.g. 14.5 or Negative" />
+                                        </td>
+                                        <td>
+                                            <InputText @bind-Value="row.Unit" style="min-height:32px; width:80px;" placeholder="g/dL" />
+                                        </td>
+                                        <td>
+                                            <InputText @bind-Value="row.ReferenceRange" style="min-height:32px;" placeholder="12.0 - 16.0" />
+                                        </td>
+                                        <td>
+                                            <InputSelect @bind-Value="row.Flag" style="min-height:32px; font-size:11px;">
+                                                <option value="Normal">Normal</option>
+                                                <option value="High">High</option>
+                                                <option value="Low">Low</option>
+                                                <option value="Positive">Positive</option>
+                                                <option value="Negative">Negative</option>
+                                            </InputSelect>
+                                        </td>
+                                        <td>
+                                            <button class="icon-btn danger" type="button" @onclick="() => RemoveParameter(idx)">✕</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div style="display:flex; gap:10px; margin-bottom: 20px;">
+                        <button class="btn btn-secondary btn-sm" type="button" @onclick="AddBlankParameter">+ @I18n.T("Add")</button>
+                    </div>
+
+                    @if (canVerify)
+                    {
+                        <div class="form-grid">
+                            <label>
+                                <span>@I18n.T("Pathologist / Consultant", "Verified / Reported By *")</span>
+                                <InputSelect @bind-Value="selectedDoctorId" disabled="@(!isAdministrator)">
+                                    <option value="0">@I18n.T("Select Doctor")</option>
+                                    @foreach (var d in doctors)
+                                    {
+                                        <option value="@d.ID">@d.Title @d.Name</option>
+                                    }
+                                </InputSelect>
+                            </label>
+                            <label class="inline-check">
+                                <InputCheckbox @bind-Value="isVerified" />
+                                <span>@I18n.T("Verified By", "Mark Report Verified & Signed")</span>
+                            </label>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert info">@I18n.T("Lab technicians can enter draft results. A Doctor or Administrator must verify the report.")</div>
+                    }
+
+                    <div class="form-actions">
+                        <button class="btn btn-primary" type="button" @onclick="SaveResultsAsync">
+                            💾 @I18n.T("Save Test Results")
+                        </button>
+                        <button class="btn btn-secondary" type="button" @onclick="PrintAsync" disabled="@(!ReportVerified)">
+                            🖨 @I18n.T("Print Lab Report")
+                        </button>
+                    </div>
+                }
+            }
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Recent Diagnostic Bills", "Recent Lab Orders")</h2>
+                <p>@recentOrders.Count @I18n.T("transaction(s)")</p>
+            </div>
+        </div>
+
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Bill No")</th>
+                        <th>@I18n.T("Patient Name")</th>
+                        <th>@I18n.T("Date")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var o in recentOrders)
+                    {
+                        <tr>
+                            <td><b>#@o.ID</b></td>
+                            <td>@o.PatientName</td>
+                            <td>@o.TransDate.ToString("dd MMM hh:mm tt")</td>
+                            <td>
+                                <button class="icon-btn" @onclick="() => SelectOrder(o.ID)">@I18n.T("View")</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (selectedMemo != null)
+{
+    <div id="lab-report-print" class="print-sheet print-document">
+        <div class="clinical-report-sheet a4-page-sheet">
+            <PrintDocumentHeader Title="@I18n.T("OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT", "OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT")"
+                                 SubTitle="@Branding.LabHeaderDept"
+                                 DocumentNo="@($"# {selectedMemo.ID}")"
+                                 BarcodeCode="@($"LAB-{selectedMemo.ID}")"
+                                 QrPayload="@BarcodeQr.GenerateLabQrPayload(selectedMemo.ID, selectedMemo.PatientID ?? "", selectedMemo.PatientName, $"SMP-{selectedMemo.ID}", Navigation.BaseUri)" />
+
+            <!-- Patient Demographics Info Grid -->
+            <div class="report-patient-grid">
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Patient Name"):</span>
+                    <strong class="grid-value">@selectedMemo.PatientName</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Patient ID (PID)"):</span>
+                    <strong class="grid-value">@(selectedMemo.PatientID ?? I18n.T("Walk-in"))</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Age / Gender"):</span>
+                    <strong class="grid-value">@selectedMemo.Age / @selectedMemo.Sex</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Contact No"):</span>
+                    <strong class="grid-value">@(selectedMemo.Contact ?? "—")</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Invoice / Memo #"):</span>
+                    <strong class="grid-value">#@selectedMemo.ID</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Specimen / Tube ID"):</span>
+                    <strong class="grid-value">SMP-@selectedMemo.ID</strong>
+                </div>
+                <div class="patient-grid-item span-2">
+                    <span class="grid-label">@I18n.T("Referred By Doctor"):</span>
+                    <strong class="grid-value">@DoctorName(selectedMemo.DoctorID)</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Date of Order"):</span>
+                    <strong class="grid-value">@selectedMemo.TransDate.ToString("dd MMM yyyy, hh:mm tt")</strong>
+                </div>
+                <div class="patient-grid-item">
+                    <span class="grid-label">@I18n.T("Report Released"):</span>
+                    <strong class="grid-value">@DateTime.Now.ToString("dd MMM yyyy, hh:mm tt")</strong>
+                </div>
+            </div>
+
+            <!-- Investigation Test Results -->
+            @foreach (var testId in orderItems.Select(x => x.TestID).Distinct())
+            {
+                var testResults = allResults.Where(r => r.ServiceID == testId).ToList();
+                if (testResults.Count > 0)
+                {
+                    <div class="report-investigation-block">
+                        <div class="investigation-title-bar">
+                            <h3 class="investigation-name">🔬 @ServiceName(testId)</h3>
+                            <span class="investigation-badge">@I18n.T("VERIFIED TEST", "VERIFIED TEST")</span>
+                        </div>
+
+                        <table class="report-parameter-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 32%;">@I18n.T("Investigation Parameter", "Investigation Parameter")</th>
+                                    <th class="text-center" style="width: 20%;">@I18n.T("Observed Result", "Observed Result")</th>
+                                    <th class="text-center" style="width: 14%;">@I18n.T("Unit", "Unit")</th>
+                                    <th style="width: 22%;">@I18n.T("Reference Range", "Reference Range")</th>
+                                    <th class="text-center" style="width: 12%;">@I18n.T("Status", "Status")</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var res in testResults)
+                                {
+                                    var flagClass = (res.Flag ?? "Normal").ToLowerInvariant() switch
+                                    {
+                                        "high" => "flag-high",
+                                        "low" => "flag-low",
+                                        "critical" => "flag-critical",
+                                        "positive" => "flag-high",
+                                        _ => "flag-normal"
+                                    };
+                                    <tr>
+                                        <td class="param-name"><b>@res.ParameterName</b></td>
+                                        <td class="param-value text-center">
+                                            <span class="value-highlight @flagClass">@res.ResultValue</span>
+                                        </td>
+                                        <td class="param-unit text-center">@(res.Unit ?? "—")</td>
+                                        <td class="param-range">@(res.ReferenceRange ?? "—")</td>
+                                        <td class="param-flag text-center">
+                                            <span class="flag-pill @flagClass">
+                                                @(res.Flag ?? "Normal")
+                                            </span>
+                                        </td>
+                                    </tr>
+                                    @if (!string.IsNullOrWhiteSpace(res.Interpretation))
+                                    {
+                                        <tr class="interpretation-row">
+                                            <td colspan="5">
+                                                <small><b>@I18n.T("Interpretation / Clinical Note:", "Interpretation / Clinical Note:"):</b> @res.Interpretation</small>
+                                            </td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+
+            <PrintDocumentFooter Signatures='new string[] { I18n.T("Medical Technologist (Lab)", "Medical Technologist (Lab)"), DoctorName(selectedDoctorId > 0 ? selectedDoctorId : selectedMemo.DoctorID) }' />
+        </div>
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] public long? memoId { get; set; }
+
+    private long? searchMemoId;
+    private string resultsScanQuery = "";
+    private CashMemoDInvestigation? selectedMemo;
+    private List<CashMemoSubDInvestigation> orderItems = [];
+    private List<CashMemoDInvestigation> recentOrders = [];
+    private List<LabTestResult> allResults = [];
+    private List<LabTestResult> currentTestResults = [];
+    private List<Service> services = [];
+    private List<DoctorsProfile> doctors = [];
+
+    private int activeTestId = 0;
+    private int selectedDoctorId = 0;
+    private bool isVerified;
+    private bool canVerify;
+    private bool isAdministrator;
+    private int? currentDoctorProfileId;
+    private bool ReportVerified => orderItems.Count > 0
+        && orderItems.Select(x => x.TestID).Distinct().All(testId =>
+            allResults.Any(x => x.ServiceID == testId) && allResults.Where(x => x.ServiceID == testId).All(x => x.IsVerified));
+
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedDoctorId)) currentDoctorProfileId = mappedDoctorId;
+        canVerify = isAdministrator || (principal.IsInRole(RoleNames.Doctor) && currentDoctorProfileId.HasValue);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        services = await db.Services.AsNoTracking().ToListAsync();
+        recentOrders = await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.ModuleID == 2)
+            .OrderByDescending(x => x.ID)
+            .Take(30)
+            .ToListAsync();
+
+        if (memoId.HasValue && memoId.Value > 0)
+        {
+            searchMemoId = memoId.Value;
+            await LoadMemoAsync();
+        }
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadMemoAsync()
+    {
+        if (!searchMemoId.HasValue || searchMemoId.Value <= 0)
+        {
+            Fail(I18n.IsBangla ? "একটি সঠিক মেমো নম্বর লিখুন।" : "Enter a valid diagnostic memo number.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        selectedMemo = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ID == searchMemoId.Value && x.ModuleID == 2);
+
+        if (selectedMemo == null)
+        {
+            Fail(I18n.IsBangla ? "ডায়াগনস্টিক মেমো পাওয়া যায়নি।" : "Diagnostic memo was not found.");
+            return;
+        }
+
+        orderItems = selectedMemo.Items.ToList();
+        allResults = await db.LabTestResults.AsNoTracking()
+            .Where(x => x.MemoID == selectedMemo.ID)
+            .ToListAsync();
+
+        if (orderItems.Count > 0)
+        {
+            await SwitchActiveTest(orderItems[0].TestID);
+        }
+        message = "";
+    }
+
+    private async Task SwitchActiveTest(int testId)
+    {
+        activeTestId = testId;
+        currentTestResults = allResults.Where(r => r.ServiceID == testId).ToList();
+        isVerified = currentTestResults.Count > 0 && currentTestResults.All(x => x.IsVerified);
+        selectedDoctorId = currentTestResults.Where(x => x.ReportedBy.HasValue).Select(x => x.ReportedBy!.Value).FirstOrDefault();
+        if (!isAdministrator && currentDoctorProfileId.HasValue) selectedDoctorId = currentDoctorProfileId.Value;
+
+        if (currentTestResults.Count == 0)
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var templates = await db.LabTestParameters.AsNoTracking()
+                .Where(x => x.ServiceID == testId)
+                .OrderBy(x => x.SortOrder)
+                .ToListAsync();
+
+            if (templates.Count > 0)
+            {
+                currentTestResults = templates.Select(t => new LabTestResult
+                {
+                    MemoID = selectedMemo?.ID ?? 0,
+                    ServiceID = testId,
+                    ParameterName = t.ParameterName,
+                    Unit = t.Unit,
+                    ReferenceRange = t.ReferenceRange,
+                    Flag = "Normal"
+                }).ToList();
+            }
+            else
+            {
+                currentTestResults.Add(new LabTestResult
+                {
+                    MemoID = selectedMemo?.ID ?? 0,
+                    ServiceID = testId,
+                    ParameterName = ServiceName(testId),
+                    Flag = "Normal"
+                });
+            }
+        }
+    }
+
+    private void AddBlankParameter()
+    {
+        currentTestResults.Add(new LabTestResult
+        {
+            MemoID = selectedMemo?.ID ?? 0,
+            ServiceID = activeTestId,
+            ParameterName = I18n.IsBangla ? "নতুন প্যারামিটার" : "New Parameter",
+            Flag = "Normal"
+        });
+    }
+
+    private void RemoveParameter(int idx)
+    {
+        if (idx >= 0 && idx < currentTestResults.Count)
+        {
+            currentTestResults.RemoveAt(idx);
+        }
+    }
+
+    private async Task SaveResultsAsync()
+    {
+        if (selectedMemo == null || activeTestId <= 0) return;
+
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        var canVerifyNow = isAdministrator || (principal.IsInRole(RoleNames.Doctor) && currentDoctorProfileId.HasValue);
+        if (!isAdministrator && currentDoctorProfileId.HasValue) selectedDoctorId = currentDoctorProfileId.Value;
+        var verify = canVerifyNow && isVerified;
+        if (verify && selectedDoctorId <= 0)
+        {
+            Fail(I18n.IsBangla ? "রিপোর্ট সত্যায়নকারী ডাক্তার/প্যাথলজিস্ট নির্বাচন করুন।" : "Select the doctor/pathologist who verified the report.");
+            return;
+        }
+        if (currentTestResults.Count == 0 || currentTestResults.Any(x => string.IsNullOrWhiteSpace(x.ParameterName) || string.IsNullOrWhiteSpace(x.ResultValue)))
+        {
+            Fail(I18n.IsBangla ? "প্রতিটি প্যারামিটারের নাম এবং ফলাফল লিখুন।" : "Every result needs a parameter name and result value.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var existing = await db.LabTestResults
+            .Where(x => x.MemoID == selectedMemo.ID && x.ServiceID == activeTestId)
+            .ToListAsync();
+
+        if (!canVerifyNow && existing.Any(x => x.IsVerified))
+        {
+            Fail(I18n.IsBangla ? "এই টেস্ট রিপোর্টটি ইতিমধ্যে যাচাইকৃত। শুধুমাত্র ডাক্তার বা অ্যাডমিন এটি পরিবর্তন করতে পারবেন।" : "This test is already verified. Only a Doctor or Administrator can change it.");
+            return;
+        }
+        if (!isAdministrator && existing.Any(x => x.IsVerified && x.ReportedBy != currentDoctorProfileId))
+        {
+            Fail(I18n.T("A report verified by another doctor can be amended only by an administrator."));
+            return;
+        }
+
+        db.LabTestResults.RemoveRange(existing);
+
+        var now = DateTime.Now;
+        foreach (var r in currentTestResults)
+        {
+            r.MemoID = selectedMemo.ID;
+            r.ServiceID = activeTestId;
+            r.ReportedAt = now;
+            r.ReportedBy = verify ? selectedDoctorId : null;
+            r.IsVerified = verify;
+            db.LabTestResults.Add(r);
+        }
+
+        try
+        {
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? $"{ServiceName(activeTestId)}-এর ফলাফল সংরক্ষিত হয়েছে।" : $"Results for {ServiceName(activeTestId)} saved successfully.");
+            allResults = await db.LabTestResults.AsNoTracking().Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? $"ফলাফল সংরক্ষণ করা যায়নি: {ex.Message}" : $"Could not save results: {ex.Message}");
+        }
+    }
+
+    private async Task HandleResultsScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ProcessResultsScanAsync();
+        }
+    }
+
+    private async Task ProcessResultsScanAsync()
+    {
+        if (string.IsNullOrWhiteSpace(resultsScanQuery)) return;
+        var raw = resultsScanQuery.Trim();
+
+        long parsedMemoId = 0;
+        int targetTestSL = 0;
+
+        if (raw.StartsWith("HPM:TUBE|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:LAB|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            foreach (var p in parts)
+            {
+                if (p.StartsWith("INV:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p.Substring(4), out var invId))
+                {
+                    parsedMemoId = invId;
+                }
+                if (p.StartsWith("SMP:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var smp = p.Substring(4).Trim();
+                    if (smp.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var segs = smp.Substring(4).Split('-');
+                        if (segs.Length > 0 && long.TryParse(segs[0], out var smpMemoId))
+                        {
+                            parsedMemoId = smpMemoId;
+                        }
+                        if (segs.Length > 1 && int.TryParse(segs[1], out var sl))
+                        {
+                            targetTestSL = sl;
+                        }
+                    }
+                }
+            }
+        }
+        else if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(4), out var labId))
+        {
+            parsedMemoId = labId;
+        }
+        else if (raw.Contains("/portal/report/", StringComparison.OrdinalIgnoreCase))
+        {
+            var idx = raw.LastIndexOf("/portal/report/", StringComparison.OrdinalIgnoreCase);
+            var idStr = raw.Substring(idx + "/portal/report/".Length).Trim().TrimEnd('/');
+            if (long.TryParse(idStr, out var portalId))
+            {
+                parsedMemoId = portalId;
+            }
+        }
+        else if (raw.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+        {
+            var segs = raw.Substring(4).Split('-');
+            if (segs.Length > 0 && long.TryParse(segs[0], out var smpMemoId))
+            {
+                parsedMemoId = smpMemoId;
+            }
+            if (segs.Length > 1 && int.TryParse(segs[1], out var sl))
+            {
+                targetTestSL = sl;
+            }
+        }
+        else if (long.TryParse(raw, out var numId))
+        {
+            parsedMemoId = numId;
+        }
+
+        if (parsedMemoId > 0)
+        {
+            searchMemoId = parsedMemoId;
+            await LoadMemoAsync();
+            resultsScanQuery = "";
+
+            if (selectedMemo != null && targetTestSL > 0 && targetTestSL <= orderItems.Count)
+            {
+                var targetItem = orderItems[targetTestSL - 1];
+                await SwitchActiveTest(targetItem.TestID);
+            }
+        }
+        else
+        {
+            Fail(I18n.IsBangla ? "স্ক্যান করা কোড থেকে মেমো পাওয়া যায়নি।" : "Could not resolve diagnostic order from scanned code.");
+        }
+    }
+
+    private void ClearResultsScan() => resultsScanQuery = "";
+
+    private async Task SelectOrder(long id)
+    {
+        searchMemoId = id;
+        await LoadMemoAsync();
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("window.hpm.printElement", "lab-report-print", "Lab Investigation Report");
+
+    private void Reset()
+    {
+        searchMemoId = null;
+        selectedMemo = null;
+        orderItems.Clear();
+        allResults.Clear();
+        currentTestResults.Clear();
+        activeTestId = 0;
+        message = "";
+    }
+
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Test #{id}";
+    private string DoctorName(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d == null ? (I18n.IsBangla ? "ডিউটি ডাক্তার" : "Duty Doctor") : $"{d.Title} {d.Name}";
+    }
+
+    private void Success(string text) { messageClass = "alert success"; message = text; }
+    private void Fail(string text) { messageClass = "alert danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

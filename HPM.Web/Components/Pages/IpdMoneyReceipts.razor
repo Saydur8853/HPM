@@ -1,0 +1,462 @@
+@page "/ipd/advance-receipts"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier + "," + RoleNames.IPDOperator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("IPD Money Receipts") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("IPD & Bed management")</span>
+        <h1>@I18n.T("Money Receipt & Advance Collection")</h1>
+        <p>@I18n.T("Advance and running receipt entry with linked patient payment and central cash collection.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New money receipt")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(savedReceipt == null ? I18n.T("New Receipt") : $"{I18n.T("Money Receipt")} #{savedReceipt.ID}")</h2>
+                <p>@I18n.T("Inpatient advance and interim bill payments.", "Inpatient advance and interim bill payments.")</p>
+            </div>
+            @if (savedReceipt != null) { <span class="badge">@I18n.T("POSTED")</span> }
+        </div>
+
+        <div class="scanner-search-group" style="margin: 16px 20px 0;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan Patient Wristband / IPD Reg # / Patient ID...", "Scan Patient Wristband / IPD Reg # / Patient ID...")"
+                   @bind="searchQuery"
+                   @bind:event="oninput"
+                   @onkeydown="HandleSearchKeyDown" />
+            <button type="button" class="btn btn-secondary" style="white-space:nowrap; padding: 0 16px;" @onclick="SearchAdmissionAsync">@I18n.T("Find")</button>
+        </div>
+
+        <div class="form-grid">
+
+            <div class="span-2 patient-summary">
+                <div>
+                    <b>@(selectedAdmission == null ? I18n.T("No IPD admission selected") : $"{patientName} ({selectedAdmission.RegNo})")</b>
+                    @if (selectedAdmission != null)
+                    {
+                        <small style="display:block;margin-top:2px;">
+                            @I18n.T("Bed"): @BedName(selectedAdmission.BedCabinID) · @I18n.T("Admitted:"): @selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy")
+                        </small>
+                    }
+                </div>
+                @if (selectedAdmission != null)
+                {
+                    <div style="text-align:right;">
+                        <span style="font-size:10px;color:#64748b;display:block;">@I18n.T("Total received")</span>
+                        <b>@I18n.FormatCurrency(totalReceived)</b>
+                    </div>
+                }
+            </div>
+
+            <label>
+                <span>@I18n.T("Received against *")</span>
+                <InputSelect @bind-Value="against">
+                    <option value="Advance">@I18n.T("Advance")</option>
+                    <option value="FinalBill">@I18n.T("Final Bill")</option>
+                    <option value="Due">@I18n.T("Due")</option>
+                    <option value="DoctorPayment">@I18n.T("Doctor Payment")</option>
+                </InputSelect>
+            </label>
+            <label>
+                <span>@I18n.T("Receipt date *")</span>
+                <InputDate Type="InputDateType.DateTimeLocal" @bind-Value="receiptDate" />
+            </label>
+            <label class="span-2">
+                <span>@I18n.T("Amount (৳) *", "Amount (৳) *")</span>
+                <InputNumber @bind-Value="amount" placeholder="0.00" />
+            </label>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn btn-primary" type="button" @onclick="SaveAsync" disabled="@isSaving">
+                @(isSaving ? I18n.T("Saving…") : I18n.T("Post & Issue receipt"))
+            </button>
+            @if (savedReceipt != null)
+            {
+                <button class="btn btn-secondary" type="button" @onclick="PrintAsync">@I18n.T("Print receipt")</button>
+            }
+            <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+        </div>
+        <p style="padding:0 20px 16px;color:#64748b;font-size:12px;">@I18n.T("Posted financial receipts are immutable. Corrections should use a controlled reversal workflow.")</p>
+    </div>
+
+    <div class="panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Recent Money Receipts")</h2>
+                <p>@receipts.Count @I18n.T("latest entries")</p>
+            </div>
+            <span class="pill">@I18n.FormatCurrency(receipts.Sum(x => x.Amount))</span>
+        </div>
+
+        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan Receipt Barcode / QR or search MR #...", "Scan Receipt Barcode / QR or search MR #...")"
+                   @bind="receiptScanQuery"
+                   @bind:event="oninput" />
+            @if (!string.IsNullOrWhiteSpace(receiptScanQuery))
+            {
+                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearReceiptScan">✕</button>
+            }
+        </div>
+
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("MR No")</th>
+                        <th>@I18n.T("Reg. No / Patient")</th>
+                        <th>@I18n.T("Against")</th>
+                        <th>@I18n.T("Amount")</th>
+                        <th>@I18n.T("Date")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!FilteredReceipts.Any())
+                    {
+                        <tr><td colspan="6"><div class="empty-state small">@I18n.T("No matching money receipts found.")</div></td></tr>
+                    }
+                    @foreach (var item in FilteredReceipts)
+                    {
+                        <tr>
+                            <td><b>MR-@item.ID.ToString("D8")</b></td>
+                            <td><b>@item.RegNo</b><br /><small>@patientNamesByReg.GetValueOrDefault(item.RegNo, "—")</small></td>
+                            <td><span class="pill">@I18n.T(item.Against)</span></td>
+                            <td class="amount"><b>@I18n.FormatCurrency(item.Amount)</b></td>
+                            <td>@item.TransDate.ToString("dd MMM yyyy hh:mm tt")</td>
+                            <td>
+                                <button class="icon-btn" @onclick="() => SelectForPrintAsync(item)">@I18n.T("Print")</button>
+                                @if (reversedReceiptIds.Contains(item.ID))
+                                {
+                                    <span class="pill">@I18n.T("REVERSED")</span>
+                                }
+                                else
+                                {
+                                    <button class="icon-btn" @onclick="() => ReverseAsync(item)">@I18n.T("Reverse")</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (savedReceipt != null && selectedAdmission != null)
+{
+    <div id="receipt-print" class="print-sheet panel">
+        <PrintDocumentHeader Title="IPD Money Receipt"
+                             DocNo="@($"MR-{savedReceipt.ID:D8}")"
+                             DocNoLabel="Receipt #"
+                             BarcodeCode="@($"MR-{savedReceipt.ID:D8}")"
+                             QrPayload="@BarcodeQr.GenerateIpdQrPayload(savedReceipt.ID, selectedAdmission.RegNo ?? "", patientName, BedName(selectedAdmission.BedCabinID))" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("IPD Reg No:")</span> <b>@selectedAdmission.RegNo</b></div>
+            <div><span>@I18n.T("Patient ID")</span> <b>@selectedAdmission.PatientID</b></div>
+            <div><span>@I18n.T("Patient Name")</span> <b>@patientName</b></div>
+            <div><span>@I18n.T("Bed"):</span> <b>@BedName(selectedAdmission.BedCabinID)</b></div>
+            <div><span>@I18n.T("Admission Date:"):</span> <b>@selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy")</b></div>
+            <div><span>@I18n.T("Received against *"):</span> <b>@I18n.T(savedReceipt.Against)</b></div>
+        </div>
+        <div class="print-total">
+            <div class="grand">
+                <span>@I18n.T("Received Amount")</span>
+                <b>@I18n.FormatCurrency(savedReceipt.Amount)</b>
+            </div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Depositor's Signature"
+                             SignTitle3="Received By / Cashier"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+}
+
+@code {
+    private List<IpdMoneyReceipt> receipts = [];
+    private List<BedCabin> beds = [];
+    private HashSet<long> reversedReceiptIds = [];
+    private Dictionary<string, string> patientNamesByReg = new(StringComparer.OrdinalIgnoreCase);
+    private PatientAdmission? selectedAdmission;
+    private IpdMoneyReceipt? savedReceipt;
+    private string searchQuery = "";
+    private string receiptScanQuery = "";
+    private string patientName = "";
+    private string against = "Advance";
+    private decimal amount;
+    private DateTime receiptDate = DateTime.Now;
+    private decimal totalReceived;
+    private bool isSaving;
+    private string message = "";
+    private string messageClass = "success";
+
+    private IEnumerable<IpdMoneyReceipt> FilteredReceipts => string.IsNullOrWhiteSpace(receiptScanQuery)
+        ? receipts
+        : receipts.Where(r => r.ID.ToString().Contains(receiptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                           || (r.RegNo?.Contains(receiptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                           || (patientNamesByReg.TryGetValue(r.RegNo ?? "", out var pName) && pName.Contains(receiptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private void ClearReceiptScan()
+    {
+        receiptScanQuery = string.Empty;
+    }
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
+        {
+            await SearchAdmissionAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        beds = await db.BedCabins.AsNoTracking().ToListAsync();
+        receipts = await db.IpdMoneyReceipts.AsNoTracking().OrderByDescending(x => x.ID).Take(150).ToListAsync();
+        reversedReceiptIds = (await db.FinancialReversals.AsNoTracking()
+            .Where(x => x.EntityType == "IPD Money Receipt")
+            .Select(x => x.EntityID).ToListAsync()).ToHashSet();
+        var regNos = receipts.Select(x => x.RegNo).Distinct().ToArray();
+        List<PatientAdmission> admissions = regNos.Length == 0 ? [] : await db.PatientAdmissions.AsNoTracking().Where(x => regNos.Contains(x.RegNo)).ToListAsync();
+        var patientIds = admissions.Where(x => x.PatientID != null).Select(x => x.PatientID!).Distinct().ToArray();
+        var patientMap = patientIds.Length == 0 ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : await db.Registrations.AsNoTracking().Where(x => patientIds.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
+        patientNamesByReg = admissions.ToDictionary(x => x.RegNo, x => x.PatientID != null && patientMap.TryGetValue(x.PatientID, out var name) ? name : "—", StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task SearchAdmissionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            Fail(I18n.IsBangla ? "আইপিডি রেজি. নং বা পেশেন্ট আইডি লিখুন।" : "Enter an IPD Reg No or Patient ID.");
+            return;
+        }
+        var raw = searchQuery.Trim();
+
+        // Check if QR payload: HPM:IPD|... or HPM:WB|... or HPM:PAT|...
+        if (raw.StartsWith("HPM:IPD|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:WB|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                raw = regPart.Substring(4).Trim();
+            }
+        }
+        else if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                raw = regPart.Substring(4).Trim();
+            }
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        selectedAdmission = await db.PatientAdmissions.AsNoTracking().FirstOrDefaultAsync(x => x.RegNo == raw || x.PatientID == raw);
+        if (selectedAdmission == null)
+        {
+            Fail(I18n.IsBangla ? "আইপিডি ভর্তি পাওয়া যায়নি।" : "IPD admission was not found.");
+            return;
+        }
+        var patient = selectedAdmission.PatientID == null ? null : await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == selectedAdmission.PatientID);
+        patientName = patient?.Name ?? "—";
+        totalReceived = await db.PatientPayments.Where(x => x.RegNo == selectedAdmission.RegNo).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        message = "";
+    }
+
+    private async Task SaveAsync()
+    {
+        if (selectedAdmission == null)
+        {
+            Fail(I18n.IsBangla ? "প্রথমে একটি সঠিক আইপিডি ভর্তি নির্বাচন করুন।" : "Find and select a valid IPD admission first.");
+            return;
+        }
+        if (amount <= 0)
+        {
+            Fail(I18n.IsBangla ? "টাকার পরিমাণ অবশ্যই ০ এর বেশি হতে হবে।" : "Amount must be greater than zero.");
+            return;
+        }
+        if (receiptDate < (selectedAdmission.AdmissionDate ?? DateTime.MinValue))
+        {
+            Fail(I18n.IsBangla ? "রিসিটের তারিখ ভর্তির পূর্বের হতে পারবে না।" : "Receipt date cannot be before admission.");
+            return;
+        }
+
+        isSaving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            await FinancialControl.EnsurePostingAllowedAsync(db, receiptDate, userId);
+            var finalBill = await db.IpdFinalBills.SingleOrDefaultAsync(x => x.AdmissionID == selectedAdmission.ID);
+            var isHospitalReceipt = !string.Equals(against, "DoctorPayment", StringComparison.OrdinalIgnoreCase);
+            if (finalBill is not null && isHospitalReceipt)
+            {
+                if (receiptDate < finalBill.DischargeDate)
+                    throw new InvalidOperationException(I18n.IsBangla ? "ছাড়পত্রের পরের রিসিট চূড়ান্ত বিলের পূর্বের হতে পারবে না।" : "A post-discharge receipt cannot be dated before the final bill.");
+                if (string.Equals(against, "Advance", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(I18n.IsBangla ? "চূড়ান্ত বিল তৈরি হওয়া রোগীর ক্ষেত্রে Final Bill বা Due ব্যবহার করুন।" : "Use Final Bill or Due for a patient whose final bill is already generated.");
+                if (finalBill.BalanceDue <= 0)
+                    throw new InvalidOperationException(I18n.IsBangla ? "এই চূড়ান্ত বিলে কোনো বকেয়া অবশিষ্ট নেই।" : "This final bill has no outstanding balance.");
+                if (amount > finalBill.BalanceDue)
+                    throw new InvalidOperationException(I18n.IsBangla ? $"রিসিটের টাকা বকেয়া {I18n.FormatCurrency(finalBill.BalanceDue)}-এর চেয়ে বেশি হতে পারবে না।" : $"Receipt amount exceeds the outstanding balance of ৳{finalBill.BalanceDue:N2}.");
+            }
+
+            var receipt = new IpdMoneyReceipt { RegNo = selectedAdmission.RegNo, Against = against, Amount = amount, TransDate = receiptDate, EnteredBy = userId };
+            db.IpdMoneyReceipts.Add(receipt);
+            await db.SaveChangesAsync();
+            db.PatientPayments.Add(new PatientPayment { MoneyReceiptID = receipt.ID, RegNo = receipt.RegNo, Amount = receipt.Amount, IsHospitalPayment = isHospitalReceipt, EnteredBy = userId, TransDate = receipt.TransDate });
+            db.CentralCashCollections.Add(new CentralCashCollection { Amount = receipt.Amount, ModuleFlag = 1, HeadID = 1, EnteredBy = userId, TransDate = receipt.TransDate, TransDateCL = receipt.TransDate, ReferenceID = receipt.ID });
+            var creditAccount = receipt.Against == "Advance" ? AccountingPosting.PatientAdvance : AccountingPosting.PatientReceivable;
+            AccountingPosting.AddPostedVoucher(db, "Receipt", receipt.TransDate,
+                $"IPD {receipt.Against} receipt {receipt.RegNo}", $"IPD-RECEIPT:{receipt.ID}", userId,
+                (AccountingPosting.Cash, receipt.Amount, 0), (creditAccount, 0, receipt.Amount));
+            if (finalBill is not null && isHospitalReceipt)
+            {
+                finalBill.ReceiptAmount += receipt.Amount;
+                finalBill.BalanceDue = Math.Max(0, finalBill.NetAmount - finalBill.ReceiptAmount);
+                finalBill.ExcessPayment = Math.Max(0, finalBill.ReceiptAmount - finalBill.NetAmount);
+                finalBill.SettlementStatus = finalBill.BalanceDue > 0 ? "Due" : finalBill.ExcessPayment > 0 ? "Credit" : "Settled";
+                db.IpdFinalBillReceipts.Add(new IpdFinalBillReceipt
+                {
+                    BillNo = finalBill.BillNo,
+                    MoneyReceiptID = receipt.ID,
+                    Amount = receipt.Amount,
+                    Against = receipt.Against
+                });
+            }
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            savedReceipt = receipt;
+            Success(I18n.IsBangla ? $"মানি রিসিট MR-{receipt.ID:D8} সফলভাবে পোস্ট করা হয়েছে।" : $"Money receipt MR-{receipt.ID:D8} posted with payment and cash-ledger links.");
+            await LoadAsync();
+            totalReceived += receipt.Amount;
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            Fail(I18n.IsBangla ? $"রিসিট পোস্ট করা যায়নি: {ex.Message}" : $"Could not post receipt: {ex.Message}");
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task ReverseAsync(IpdMoneyReceipt item)
+    {
+        var promptMsg = I18n.IsBangla ? $"MR-{item.ID:D8} রিভার্স / বাতিল করার কারণ লিখুন:" : $"Reason for reversing MR-{item.ID:D8}:";
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", promptMsg);
+        if (string.IsNullOrWhiteSpace(reason)) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            await FinancialControl.EnsurePostingAllowedAsync(db, DateTime.Now, userId);
+            if (await db.FinancialReversals.AnyAsync(x => x.EntityType == "IPD Money Receipt" && x.EntityID == item.ID))
+                throw new InvalidOperationException(I18n.IsBangla ? "এই রিসিটটি ইতিমধ্যে রিভার্স করা হয়েছে।" : "This receipt is already reversed.");
+            if (await db.IpdFinalBillReceipts.AnyAsync(x => x.MoneyReceiptID == item.ID))
+                throw new InvalidOperationException(I18n.IsBangla ? "এই রিসিটটি চূড়ান্ত বিলে সমন্বিত হওয়ায় এটি সরাসরি রিভার্স করা যাবে না।" : "This receipt is already allocated to a finalized IPD bill and cannot be reversed.");
+
+            var reference = $"IPD-RECEIPT:{item.ID}";
+            var voucher = await db.AccountVouchers.FirstOrDefaultAsync(x => x.Reference == reference && x.Status != "Cancelled");
+            if (voucher is null)
+            {
+                var creditAccount = item.Against == "Advance" ? AccountingPosting.PatientAdvance : AccountingPosting.PatientReceivable;
+                AccountingPosting.AddPostedVoucher(db, "Receipt", item.TransDate,
+                    $"IPD {item.Against} receipt {item.RegNo}", reference, item.EnteredBy,
+                    (AccountingPosting.Cash, item.Amount, 0), (creditAccount, 0, item.Amount));
+                await db.SaveChangesAsync();
+                voucher = await db.AccountVouchers.SingleAsync(x => x.Reference == reference && x.Status != "Cancelled");
+            }
+
+            var reversalVoucher = await AccountingPosting.ReversePostedVoucherAsync(db, voucher, reason, userId, DateTime.Now);
+            await db.SaveChangesAsync();
+            db.PatientPayments.Add(new PatientPayment
+            {
+                MoneyReceiptID = item.ID, RegNo = item.RegNo, Amount = -item.Amount,
+                IsHospitalPayment = !string.Equals(item.Against, "DoctorPayment", StringComparison.OrdinalIgnoreCase),
+                EnteredBy = userId, TransDate = DateTime.Now
+            });
+            db.CentralCashCollections.Add(new CentralCashCollection
+            {
+                Amount = -item.Amount, ModuleFlag = 1, HeadID = 1, EnteredBy = userId,
+                TransDate = DateTime.Now, TransDateCL = DateTime.Now, ReferenceID = item.ID
+            });
+            db.FinancialReversals.Add(new FinancialReversal
+            {
+                EntityType = "IPD Money Receipt", EntityID = item.ID, Amount = item.Amount,
+                Reason = reason.Trim(), ReversedBy = userId, ReversedAt = DateTime.Now,
+                ReversalVoucherID = reversalVoucher.ID
+            });
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            Success(I18n.IsBangla ? $"MR-{item.ID:D8} সফলভাবে রিভার্স করা হয়েছে।" : $"MR-{item.ID:D8} reversed. Original receipt remains in the audit history.");
+            await LoadAsync();
+            if (selectedAdmission?.RegNo == item.RegNo) await SearchAdmissionAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            Fail(I18n.IsBangla ? $"রিসিট রিভার্স করা যায়নি: {ex.GetBaseException().Message}" : $"Could not reverse receipt: {ex.GetBaseException().Message}");
+        }
+    }
+
+    private async Task SelectForPrintAsync(IpdMoneyReceipt item)
+    {
+        savedReceipt = item;
+        searchQuery = item.RegNo;
+        await SearchAdmissionAsync();
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "receipt-print");
+    private void Reset() { selectedAdmission = null; savedReceipt = null; searchQuery = ""; patientName = ""; against = "Advance"; amount = 0; receiptDate = DateTime.Now; totalReceived = 0; message = ""; }
+    private string BedName(int? id) => beds.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

@@ -1,0 +1,98 @@
+@page "/ipd/medical-discharge-orders"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Medical Discharge Orders") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div><span class="eyebrow">@I18n.T("IPD Clinical Care")</span><h1>@I18n.T("Medical Discharge Orders")</h1><p>@I18n.T("Doctor clinical clearance before final billing and administrative discharge.")</p></div>
+    <button class="btn btn-secondary" @onclick="LoadAsync">↻ @I18n.T("Refresh")</button>
+</div>
+@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
+
+<div class="workspace-grid compact">
+    <div class="panel list-panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Active Inpatients")</h2><p>@admissions.Count @I18n.T("assigned patient(s)")</p></div></div>
+        <div class="record-list">
+            @if(admissions.Count==0){<div class="empty-state">@I18n.T("No active assigned inpatient.")</div>}
+            @foreach(var admission in admissions)
+            {
+                <button type="button" class="record-card static" style="width:100%;text-align:left;" @onclick="()=>SelectAsync(admission)">
+                    <span class="ticket-no">@admission.RegNo</span><span class="record-main"><strong>@PatientName(admission.PatientID)</strong><small>@DoctorName(admission.Consultant??admission.AdmittedBy) · @admission.AdmissionDate?.ToString("dd MMM yyyy")</small></span><span class="pill">@OrderStatus(admission.ID)</span>
+                </button>
+            }
+        </div>
+    </div>
+
+    <div class="panel form-panel">
+        @if(selectedAdmission is null){<div class="empty-state">@I18n.T("Select an active inpatient.")</div>}
+        else
+        {
+            <div class="panel-heading"><div><h2>@PatientName(selectedAdmission.PatientID)</h2><p>@selectedAdmission.RegNo · @I18n.T("Admitted") @selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy hh:mm tt")</p></div><span class="badge">@(order?.Status??"NEW")</span></div>
+            <div class="form-grid">
+                <label><span>@I18n.T("Discharging Doctor *")</span><select @bind="doctorId" disabled="@(!isAdministrator)"><option value="0">@I18n.T("Select doctor")</option>@foreach(var doctor in doctors){<option value="@doctor.ID">@DoctorName(doctor.ID)</option>}</select></label>
+                <label><span>@I18n.T("Outcome *")</span><select @bind="outcome" disabled="@(order?.Status=="Completed")"><option value="Cured">Cured / Recovered</option><option value="Improved">Improved</option><option value="Referred">Referred to Higher Centre</option><option value="DOR">Discharge on Request (DOR)</option><option value="DAMA">Discharged Against Medical Advice (DAMA)</option><option value="Expired">Expired</option></select></label>
+                <label class="span-2"><span>@I18n.T("Final Diagnosis *")</span><InputTextArea @bind-Value="finalDiagnosis" disabled="@(order?.Status=="Completed")" /></label>
+                <label class="span-2"><span>@I18n.T("Condition at Discharge")</span><InputTextArea @bind-Value="condition" disabled="@(order?.Status=="Completed")" /></label>
+                <label class="span-2"><span>@I18n.T("Treatment Advice / Medication Instructions *")</span><InputTextArea @bind-Value="advice" disabled="@(order?.Status=="Completed")" /></label>
+                <label class="span-2"><span>@I18n.T("Follow-up Plan")</span><InputTextArea @bind-Value="followUp" disabled="@(order?.Status=="Completed")" /></label>
+            </div>
+            @if(order?.Status!="Completed")
+            {
+                <div class="form-actions"><button class="btn btn-primary" @onclick="SaveAsync">@I18n.T("Mark Medically Ready for Discharge")</button>@if(order?.Status=="Ready"){<button class="btn btn-ghost" style="color:#dc2626" @onclick="CancelAsync">@I18n.T("Cancel Medical Order")</button>}</div>
+            }
+        }
+    </div>
+</div>
+
+@code{
+    private List<PatientAdmission> admissions=[];private List<DoctorsProfile> doctors=[];private Dictionary<string,string> patientNames=new(StringComparer.OrdinalIgnoreCase);private Dictionary<long,string> orderStatuses=[];
+    private PatientAdmission? selectedAdmission;private IpdMedicalDischargeOrder? order;private int doctorId;private int? currentDoctorProfileId;private bool isAdministrator;
+    private string outcome="Improved",finalDiagnosis="",condition="",advice="",followUp="",message="",messageClass="success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var principal=(await AuthStateProvider.GetAuthenticationStateAsync()).User;isAdministrator=principal.IsInRole(RoleNames.Administrator);
+        if(int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim),out var mappedId))currentDoctorProfileId=mappedId;
+        if(!isAdministrator&&!currentDoctorProfileId.HasValue){Fail(I18n.T("This Doctor account is not linked to a Doctors Profile."));return;}
+        await LoadAsync();
+    }
+    private async Task LoadAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();doctors=await db.Doctors.AsNoTracking().Where(x=>x.Name!=null).OrderBy(x=>x.Name).ToListAsync();
+        var query=db.PatientAdmissions.AsNoTracking().Where(x=>x.IsAdmitted==true);
+        if(currentDoctorProfileId.HasValue)query=query.Where(x=>x.Consultant==currentDoctorProfileId||x.AdmittedBy==currentDoctorProfileId);
+        admissions=await query.OrderBy(x=>x.AdmissionDate).ToListAsync();
+        var ids=admissions.Select(x=>x.ID).ToArray();orderStatuses=ids.Length==0?[]:await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x=>ids.Contains(x.AdmissionID)).ToDictionaryAsync(x=>x.AdmissionID,x=>x.Status);
+        var patientIds=admissions.Where(x=>x.PatientID!=null).Select(x=>x.PatientID!).Distinct().ToArray();patientNames=patientIds.Length==0?new(StringComparer.OrdinalIgnoreCase):await db.Registrations.AsNoTracking().Where(x=>patientIds.Contains(x.PatientID)).ToDictionaryAsync(x=>x.PatientID,x=>x.Name,StringComparer.OrdinalIgnoreCase);
+    }
+    private async Task SelectAsync(PatientAdmission admission)
+    {
+        selectedAdmission=admission;await using var db=await DbFactory.CreateDbContextAsync();order=await db.IpdMedicalDischargeOrders.AsNoTracking().SingleOrDefaultAsync(x=>x.AdmissionID==admission.ID);
+        doctorId=currentDoctorProfileId??order?.DoctorID??admission.Consultant??admission.AdmittedBy??0;outcome=order?.Outcome??"Improved";finalDiagnosis=order?.FinalDiagnosis??admission.Diagnosis??"";condition=order?.ConditionAtDischarge??"";advice=order?.Advice??"";followUp=order?.FollowUp??"";message="";
+    }
+    private async Task SaveAsync()
+    {
+        if(selectedAdmission is null||doctorId<=0||string.IsNullOrWhiteSpace(finalDiagnosis)||string.IsNullOrWhiteSpace(advice)){Fail(I18n.T("Doctor, final diagnosis and discharge advice are required."));return;}
+        if(!isAdministrator&&doctorId!=currentDoctorProfileId){Fail(I18n.T("A doctor can issue discharge orders only under their own profile."));return;}
+        await using var db=await DbFactory.CreateDbContextAsync();await using var tx=await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        try
+        {
+            var admission=await db.PatientAdmissions.SingleAsync(x=>x.ID==selectedAdmission.ID);if(admission.IsAdmitted!=true)throw new InvalidOperationException("Patient is already discharged.");
+            if(!isAdministrator&&admission.Consultant!=currentDoctorProfileId&&admission.AdmittedBy!=currentDoctorProfileId)throw new InvalidOperationException("This inpatient is not assigned to your profile.");
+            var entity=await db.IpdMedicalDischargeOrders.SingleOrDefaultAsync(x=>x.AdmissionID==admission.ID);
+            if(entity?.Status=="Completed")throw new InvalidOperationException("Completed medical discharge order cannot be changed.");
+            entity??=new IpdMedicalDischargeOrder{AdmissionID=admission.ID,RegNo=admission.RegNo};if(entity.ID==0)db.IpdMedicalDischargeOrders.Add(entity);
+            entity.DoctorID=doctorId;entity.Status="Ready";entity.Outcome=outcome;entity.FinalDiagnosis=finalDiagnosis.Trim();entity.ConditionAtDischarge=string.IsNullOrWhiteSpace(condition)?null:condition.Trim();entity.Advice=advice.Trim();entity.FollowUp=string.IsNullOrWhiteSpace(followUp)?null:followUp.Trim();entity.OrderedBy=await CurrentUserIdAsync();entity.OrderedAt=DateTime.Now;
+            await db.SaveChangesAsync();await tx.CommitAsync();order=entity;Success(I18n.IsBangla?"রোগীকে চিকিৎসাগতভাবে ছাড়পত্রের জন্য প্রস্তুত করা হয়েছে।":"Patient marked medically ready for discharge.");await LoadAsync();
+        }catch(Exception ex){await tx.RollbackAsync();Fail(ex.GetBaseException().Message);}
+    }
+    private async Task CancelAsync(){if(order is null||order.Status!="Ready"||!await JS.InvokeAsync<bool>("hpm.confirm",I18n.T("Cancel this medical discharge order?")))return;await using var db=await DbFactory.CreateDbContextAsync();var entity=await db.IpdMedicalDischargeOrders.SingleAsync(x=>x.ID==order.ID);if(!isAdministrator&&entity.DoctorID!=currentDoctorProfileId){Fail(I18n.T("Only the issuing doctor can cancel this order."));return;}entity.Status="Cancelled";await db.SaveChangesAsync();order=entity;Success(I18n.T("Medical discharge order cancelled."));await LoadAsync();}
+    private async Task<int> CurrentUserIdAsync(){var p=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
+    private string PatientName(string? id)=>id!=null&&patientNames.TryGetValue(id,out var name)?name:"—";private string DoctorName(int? id){var d=doctors.FirstOrDefault(x=>x.ID==id);return d is null?"—":$"{d.Title} {d.Name}".Trim();}private string OrderStatus(long id)=>orderStatuses.TryGetValue(id,out var s)?s:"Not Ready";
+    private void Success(string x){messageClass="success";message=x;}private void Fail(string x){messageClass="danger";message=x;}
+}

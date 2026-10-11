@@ -1,0 +1,295 @@
+@page "/masters/ipd"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>@I18n.T("IPD & Bed Masters") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <a class="back-link" href="masters">&larr; @I18n.T("Master setup")</a>
+        <h1>@I18n.T("IPD & bed setup")</h1>
+        <p>@I18n.T("Configure hospital departments, ward categories and bed numbers.", "Configure hospital departments, ward categories and bed numbers.")</p>
+    </div>
+</div>
+@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
+
+<div class="master-layout">
+    <div>
+        <div class="panel form-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(department.ID==0?I18n.T("Add IPD department"):$"{I18n.T("Edit department")} #{department.ID}")</h2>
+                </div>
+                <button class="icon-btn" @onclick="ResetDepartment">@I18n.T("New")</button>
+            </div>
+            <EditForm Model="department" OnSubmit="SaveDepartmentAsync">
+                <div class="form-grid">
+                    <label class="span-2">
+                        <span>@I18n.T("Department name *")</span>
+                        <InputText @bind-Value="department.Name" />
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary">@I18n.T("Save department")</button>
+                    @if(department.ID>0){
+                        <button type="button" class="btn btn-ghost" @onclick="DeleteDepartmentAsync">@I18n.T("Delete")</button>
+                    }
+                </div>
+            </EditForm>
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>@I18n.T("Department")</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach(var item in departments){
+                            <tr>
+                                <td>@item.Name</td>
+                                <td><button class="icon-btn" @onclick="()=>SelectDepartment(item)">@I18n.T("Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="panel form-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(category.ID==0?I18n.T("Add bed category"):$"{I18n.T("Edit category")} #{category.ID}")</h2>
+                </div>
+                <button class="icon-btn" @onclick="ResetCategory">@I18n.T("New")</button>
+            </div>
+            <EditForm Model="category" OnSubmit="SaveCategoryAsync">
+                <div class="form-grid">
+                    <label><span>@I18n.T("Category name *")</span><InputText @bind-Value="category.Name" /></label>
+                    <label><span>@I18n.T("IPD department *")</span><InputSelect @bind-Value="category.IpdDepartmentID"><option value="">@I18n.T("Select")</option>@foreach(var item in departments){<option value="@item.ID">@item.Name</option>}</InputSelect></label>
+                    <label><span>@I18n.T("Daily rate")</span><InputNumber @bind-Value="category.Rate" /></label>
+                    <label><span>@I18n.T("Admission fee")</span><InputNumber @bind-Value="category.AdmissionFee" /></label>
+                    <label><span>@I18n.T("Service charge")</span><InputNumber @bind-Value="category.ServiceCharge" /></label>
+                    <label><span>@I18n.T("Food charge")</span><InputNumber @bind-Value="category.Food" /></label>
+                    <label class="span-2"><span>@I18n.T("Specification")</span><InputTextArea @bind-Value="category.Specification" /></label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary">@I18n.T("Save category")</button>
+                    @if(category.ID>0){
+                        <button type="button" class="btn btn-ghost" @onclick="DeleteCategoryAsync">@I18n.T("Delete")</button>
+                    }
+                </div>
+            </EditForm>
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>@I18n.T("Category")</th><th>@I18n.T("Department")</th><th class="num">@I18n.T("Daily rate")</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach(var item in categories){
+                            <tr>
+                                <td>@item.Name</td>
+                                <td>@DepartmentName(item.IpdDepartmentID)</td>
+                                <td class="num">@I18n.FormatCurrency(item.Rate??0)</td>
+                                <td><button class="icon-btn" @onclick="()=>SelectCategory(item)">@I18n.T("Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(bed.ID==0?I18n.T("Add bed/cabin"):$"{I18n.T("Edit bed")} #{bed.ID}")</h2>
+                <p>@beds.Count @I18n.T("Total"), @beds.Count(x=>x.IsAllocated) @I18n.T("Admitted")</p>
+            </div>
+            <button class="icon-btn" @onclick="ResetBed">@I18n.T("New")</button>
+        </div>
+        <EditForm Model="bed" OnSubmit="SaveBedAsync">
+            <div class="form-grid">
+                <label><span>@I18n.T("Bed/cabin name *")</span><InputText @bind-Value="bed.Name" /></label>
+                <label><span>@I18n.T("Category *")</span><InputSelect @bind-Value="bed.CategoryID"><option value="0">@I18n.T("Select")</option>@foreach(var item in categories){<option value="@item.ID">@item.Name</option>}</InputSelect></label>
+            </div>
+            @if(bed.ID>0){
+                <p><span class="pill">@(bed.IsAllocated?I18n.T("OCCUPIED"):I18n.T("AVAILABLE"))</span> @I18n.T("Occupancy changes only through admission/discharge.")</p>
+            }
+            <div class="form-actions">
+                <button class="btn btn-primary">@I18n.T("Save bed")</button>
+                @if(bed.ID>0){
+                    <button type="button" class="btn btn-ghost" @onclick="DeleteBedAsync">@I18n.T("Delete")</button>
+                }
+            </div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("Bed/cabin")</th><th>@I18n.T("Category")</th><th>@I18n.T("Status")</th><th></th></tr></thead>
+                <tbody>
+                    @foreach(var item in beds){
+                        <tr>
+                            <td><b>@item.Name</b></td>
+                            <td>@CategoryName(item.CategoryID)</td>
+                            <td><span class="pill">@(item.IsAllocated?I18n.T("OCCUPIED"):I18n.T("AVAILABLE"))</span></td>
+                            <td><button class="icon-btn" @onclick="()=>SelectBed(item)">@I18n.T("Edit")</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code{
+    private IpdDepartment department=new();
+    private BedCategory category=new();
+    private BedCabin bed=new();
+    private List<IpdDepartment> departments=[];
+    private List<BedCategory> categories=[];
+    private List<BedCabin> beds=[];
+    private string message="";
+    private string messageClass="success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        departments=await db.IpdDepartments.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+        categories=await db.BedCategories.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+        beds=await db.BedCabins.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+    }
+
+    private async Task SaveDepartmentAsync()
+    {
+        if(string.IsNullOrWhiteSpace(department.Name)){
+            Fail(I18n.IsBangla ? "বিভাগের নাম আবশ্যক।" : "Department name is required.");
+            return;
+        }
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(department.ID==0) db.IpdDepartments.Add(department);
+        else db.IpdDepartments.Update(department);
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "আইপিডি বিভাগ সংরক্ষিত হয়েছে।" : "IPD department saved.");
+        ResetDepartment();
+        await LoadAsync();
+    }
+
+    private async Task SaveCategoryAsync()
+    {
+        if(string.IsNullOrWhiteSpace(category.Name)||category.IpdDepartmentID is null){
+            Fail(I18n.IsBangla ? "ক্যাটাগরির নাম ও বিভাগ আবশ্যক।" : "Category name and department are required.");
+            return;
+        }
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(category.ID==0){
+            category.ID=(await db.BedCategories.MaxAsync(x=>(int?)x.ID)??0)+1;
+            db.BedCategories.Add(category);
+        }
+        else db.BedCategories.Update(category);
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "বেড ক্যাটাগরি সংরক্ষিত হয়েছে।" : "Bed category saved.");
+        ResetCategory();
+        await LoadAsync();
+    }
+
+    private async Task SaveBedAsync()
+    {
+        if(string.IsNullOrWhiteSpace(bed.Name)||bed.CategoryID<=0){
+            Fail(I18n.IsBangla ? "বেড/কেবিনের নাম ও ক্যাটাগরি আবশ্যক।" : "Bed/cabin name and category are required.");
+            return;
+        }
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(await db.BedCabins.AnyAsync(x=>x.Name==bed.Name&&x.ID!=bed.ID)){
+            Fail(I18n.IsBangla ? "এই নামের বেড/কেবিন ইতিমধ্যে বিদ্যমান।" : "This bed/cabin name already exists.");
+            return;
+        }
+        if(bed.ID==0) db.BedCabins.Add(bed);
+        else{
+            var current=await db.BedCabins.FindAsync(bed.ID);
+            if(current is null){
+                Fail(I18n.IsBangla ? "বেড পাওয়া যায়নি।" : "Bed was not found.");
+                return;
+            }
+            current.Name=bed.Name.Trim();
+            current.CategoryID=bed.CategoryID;
+        }
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "বেড/কেবিন সংরক্ষিত হয়েছে।" : "Bed/cabin saved.");
+        ResetBed();
+        await LoadAsync();
+    }
+
+    private async Task DeleteDepartmentAsync()
+    {
+        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বিভাগ {department.Name} মুছে ফেলতে চান?" : $"Delete department {department.Name}?")) return;
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(await db.BedCategories.AnyAsync(x=>x.IpdDepartmentID==department.ID)||await db.PatientAdmissions.AnyAsync(x=>x.Department==department.ID)){
+            Fail(I18n.IsBangla ? "এই বিভাগটি অন্যান্য রেকর্ডে ব্যবহৃত হচ্ছে, তাই মুছে ফেলা যাবে না।" : "Department is referenced and cannot be deleted.");
+            return;
+        }
+        var item=await db.IpdDepartments.FindAsync(department.ID);
+        if(item is not null){
+            db.Remove(item);
+            await db.SaveChangesAsync();
+        }
+        Success(I18n.IsBangla ? "বিভাগ মুছে ফেলা হয়েছে।" : "Department deleted.");
+        ResetDepartment();
+        await LoadAsync();
+    }
+
+    private async Task DeleteCategoryAsync()
+    {
+        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ক্যাটাগরি {category.Name} মুছে ফেলতে চান?" : $"Delete category {category.Name}?")) return;
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(await db.BedCabins.AnyAsync(x=>x.CategoryID==category.ID)){
+            Fail(I18n.IsBangla ? "এই ক্যাটাগরিতে বেড/কেবিন বিদ্যমান থাকায় মুছে ফেলা যাবে না।" : "Category contains beds/cabins and cannot be deleted.");
+            return;
+        }
+        var item=await db.BedCategories.FindAsync(category.ID);
+        if(item is not null){
+            db.Remove(item);
+            await db.SaveChangesAsync();
+        }
+        Success(I18n.IsBangla ? "ক্যাটাগরি মুছে ফেলা হয়েছে।" : "Category deleted.");
+        ResetCategory();
+        await LoadAsync();
+    }
+
+    private async Task DeleteBedAsync()
+    {
+        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বেড/কেবিন {bed.Name} মুছে ফেলতে চান?" : $"Delete bed/cabin {bed.Name}?")) return;
+        await using var db=await DbFactory.CreateDbContextAsync();
+        if(bed.IsAllocated||await db.PatientAdmissions.AnyAsync(x=>x.BedCabinID==bed.ID)||await db.BedCabinTransactions.AnyAsync(x=>x.BedCabinID==bed.ID)){
+            Fail(I18n.IsBangla ? "বেডটিতে রোগী ভর্তি বা ইতিহাস রয়েছে, তাই মুছে ফেলা যাবে না।" : "Bed/cabin is occupied or has transaction history and cannot be deleted.");
+            return;
+        }
+        var item=await db.BedCabins.FindAsync(bed.ID);
+        if(item is not null){
+            db.Remove(item);
+            await db.SaveChangesAsync();
+        }
+        Success(I18n.IsBangla ? "বেড/কেবিন মুছে ফেলা হয়েছে।" : "Bed/cabin deleted.");
+        ResetBed();
+        await LoadAsync();
+    }
+
+    private void SelectDepartment(IpdDepartment x)=>department=new(){ID=x.ID,Name=x.Name};
+    private void SelectCategory(BedCategory x)=>category=new(){ID=x.ID,Name=x.Name,Rate=x.Rate,Specification=x.Specification,IpdDepartmentID=x.IpdDepartmentID,AdmissionFee=x.AdmissionFee,ServiceCharge=x.ServiceCharge,Food=x.Food};
+    private void SelectBed(BedCabin x)=>bed=new(){ID=x.ID,Name=x.Name,CategoryID=x.CategoryID,IsAllocated=x.IsAllocated};
+    private void ResetDepartment()=>department=new();
+    private void ResetCategory()=>category=new();
+    private void ResetBed()=>bed=new();
+    private string DepartmentName(int? id)=>departments.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private string CategoryName(int id)=>categories.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private void Success(string text){messageClass="success";message=text;}
+    private void Fail(string text){messageClass="danger";message=text;}
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

@@ -1,0 +1,174 @@
+@page "/"
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>@I18n.T("Hospital Overview") | @Branding.HospitalName</PageTitle>
+
+<!-- Clean Dashboard Header -->
+<div class="page-heading" style="margin-bottom: 22px;">
+    <div>
+        <h1 style="font-size: 24px; font-weight: 800; color: var(--ink); margin: 0; letter-spacing: -0.5px;">@Greeting</h1>
+    </div>
+</div>
+
+<!-- Primary Performance Metrics (4 Clean KPI Cards) -->
+<div class="metric-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
+    <div class="metric-card accent-blue">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@I18n.T("OPD Tickets Today")</span>
+            <span style="font-size: 18px; opacity: 0.85;">🎫</span>
+        </div>
+        <strong>@ticketCount</strong>
+        <small>@appointmentCount @I18n.T("Appointments scheduled")</small>
+    </div>
+    
+    <div class="metric-card accent-emerald">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@I18n.T("Active Inpatients (IPD)")</span>
+            <span style="font-size: 18px; opacity: 0.85;">🛏️</span>
+        </div>
+        <strong>@activeAdmissionCount</strong>
+        <small>@(occupiedBeds > 0 ? $"{occupiedBeds} / {totalBeds} {I18n.T("Beds occupied")}" : I18n.T("Currently admitted"))</small>
+    </div>
+
+    <div class="metric-card accent-red">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@I18n.T("Emergency & OT Today")</span>
+            <span style="font-size: 18px; opacity: 0.85;">⚡</span>
+        </div>
+        <strong>@(emergencyCount + otCount)</strong>
+        <small>@emergencyCount @I18n.T("Emergency") &bull; @otCount @I18n.T("OT procedures")</small>
+    </div>
+
+    <div class="metric-card accent-violet">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@I18n.T("Today's Revenue")</span>
+            <span style="font-size: 18px; opacity: 0.85;">💰</span>
+        </div>
+        <strong>@(I18n.FormatCurrency(collection))</strong>
+        <small>@I18n.T("Total daily collections")</small>
+    </div>
+</div>
+
+<!-- Primary Actions -->
+<div class="panel" style="padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-xs);">
+    <div style="margin-bottom: 16px;">
+        <h3 style="font-size: 15px; font-weight: 750; margin: 0; color: var(--ink);">
+            @I18n.T("Quick Actions")
+        </h3>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px;">
+        <a href="patients" class="clean-action-card">
+            <span class="action-icon" style="background: #e0f2fe; color: #0284c7;">👤</span>
+            <span class="action-title">@I18n.T("Patient Registration")</span>
+        </a>
+
+        <a href="tickets" class="clean-action-card">
+            <span class="action-icon" style="background: #fef3c7; color: #d97706;">🎫</span>
+            <span class="action-title">@I18n.T("OPD Ticket")</span>
+        </a>
+
+        <a href="ipd/bed-occupancy" class="clean-action-card">
+            <span class="action-icon" style="background: #ccfbf1; color: #0d9488;">🛏️</span>
+            <span class="action-title">@I18n.T("Bed Occupancy")</span>
+        </a>
+
+        <a href="pharmacy/pos" class="clean-action-card">
+            <span class="action-icon" style="background: #f3e8ff; color: #7c3aed;">💊</span>
+            <span class="action-title">@I18n.T("Pharmacy POS")</span>
+        </a>
+    </div>
+</div>
+
+<style>
+    .clean-action-card {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 18px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        text-decoration: none;
+        transition: all 0.16s ease;
+    }
+    .clean-action-card:hover {
+        border-color: #0284c7;
+        background: #f8fafc;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(2, 132, 199, 0.08);
+    }
+    .action-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        flex-shrink: 0;
+    }
+    .action-title {
+        font-weight: 750;
+        font-size: 13.5px;
+        color: var(--ink, #0f172a);
+    }
+</style>
+
+@code {
+    private int patientCount;
+    private int appointmentCount;
+    private int ticketCount;
+    private int emergencyCount;
+    private int otCount;
+    private int activeAdmissionCount;
+    private int totalBeds;
+    private int occupiedBeds;
+    private decimal collection;
+    
+    private string Greeting => I18n.IsBangla
+        ? (DateTime.Now.Hour < 12 ? "শুভ সকাল" : DateTime.Now.Hour < 17 ? "শুভ অপরাহ্ন" : "শুভ সন্ধ্যা")
+        : (DateTime.Now.Hour < 12 ? "Good Morning" : DateTime.Now.Hour < 17 ? "Good Afternoon" : "Good Evening");
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var today = DateTime.Today;
+            var tomorrow = today.AddDays(1);
+            
+            patientCount = await db.Registrations.AsNoTracking().CountAsync();
+            appointmentCount = await db.DoctorAppointments.AsNoTracking().CountAsync(x => x.ApptDate == today);
+            ticketCount = await db.OPDTickets.AsNoTracking().CountAsync(x => x.TransDate >= today && x.TransDate < tomorrow);
+            emergencyCount = await db.EmergencyMemos.AsNoTracking().CountAsync(x => x.TransDate >= today && x.TransDate < tomorrow && x.ModuleID == 11);
+            otCount = await db.OTCashMemos.AsNoTracking().CountAsync(x => x.TransDate >= today && x.TransDate < tomorrow);
+            activeAdmissionCount = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.IsAdmitted == true);
+            totalBeds = await db.BedCabins.AsNoTracking().CountAsync();
+            occupiedBeds = await db.BedCabins.AsNoTracking().CountAsync(x => x.IsAllocated == true);
+            
+            var ticketTotal = await db.OPDTickets.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).SumAsync(x => (decimal?)x.Total) ?? 0;
+            var emergencyTotal = await db.EmergencyMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow && x.ModuleID == 11).SumAsync(x => (decimal?)x.Paid) ?? 0;
+            var otGross = await db.OTCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).SumAsync(x => (decimal?)x.Total) ?? 0;
+            var otDiscount = await db.OTCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).SumAsync(x => (decimal?)x.Discount) ?? 0;
+            collection = ticketTotal + emergencyTotal + otGross - otDiscount;
+        }
+        catch
+        {
+            // Fallback gracefully on transient DB timeouts
+        }
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

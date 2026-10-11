@@ -1,0 +1,263 @@
+@page "/pharmacy/masters"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.PharmacyOperator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Pharmacy Masters Setup", "Pharmacy Masters") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div><span class="eyebrow">@I18n.T("Pharmacy & Dispensary", "Pharmacy & dispensary")</span><h1>@I18n.T("Medicine & Supplier Masters", "Medicine & Supplier Masters")</h1><p>@I18n.T("Medicine catalogue, generic names, dosage types and registered suppliers.", "Medicine catalogue, generic names, dosage types and registered suppliers.")</p></div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="panel form-panel" style="margin-bottom:24px;">
+    <div class="panel-heading">
+        <div><h2>@(medicine.ID == 0 ? I18n.T("Add medicine", "Add medicine") : $"{I18n.T("Edit medicine", "Edit medicine")} #{medicine.ID}")</h2><p>@I18n.T("Add and manage pharmacy medicine products and pricing.", "Add and manage pharmacy medicine products and pricing.")</p></div>
+        <button class="icon-btn" @onclick="ResetMedicine">@I18n.T("New", "New")</button>
+    </div>
+    <EditForm Model="medicine" OnSubmit="SaveMedicineAsync">
+        <div class="form-grid three">
+            <label class="span-2"><span>@I18n.T("Brand / medicine name *", "Brand / medicine name *")</span><InputText @bind-Value="medicine.Name" placeholder="@I18n.T("Brand, strength and pack size", "Brand, strength and pack size")" /></label>
+            <label><span>@I18n.T("Dosage form / type *", "Dosage form / type *")</span><InputSelect @bind-Value="medicine.TypeID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in medicineTypes) { <option value="@item.ID">@item.Type</option> }</InputSelect></label>
+            <label><span>@I18n.T("Generic name *", "Generic name *")</span><InputSelect @bind-Value="medicine.GenericID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in genericGroups) { <option value="@item.ID">@item.Name</option> }</InputSelect></label>
+            <label><span>@I18n.T("Supplier / manufacturer *", "Supplier / manufacturer *")</span><InputSelect @bind-Value="medicine.SupplierID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in suppliers) { <option value="@item.ID">@item.Name</option> }</InputSelect></label>
+            <label><span>@I18n.T("Re-order level", "Re-order level")</span><InputNumber @bind-Value="medicine.ReOrderLevel" /></label>
+            <label><span>@I18n.T("Purchase rate", "Purchase rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="medicine.BuyRate" /></label>
+            <label><span>@I18n.T("Sale rate", "Sale rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="medicine.SaleRate" /></label>
+            <label><span>@I18n.T("VAT applicable?", "VAT applicable?")</span><InputSelect @bind-Value="medicine.IsVATApp"><option value="">@I18n.T("Not set", "Not set")</option><option value="true">@I18n.T("Yes", "Yes")</option><option value="false">@I18n.T("No", "No")</option></InputSelect></label>
+        </div>
+        <div class="form-actions">
+            <button class="btn btn-primary" type="submit">@(medicine.ID == 0 ? I18n.T("Save medicine", "Save medicine") : I18n.T("Update medicine", "Update medicine"))</button>
+            @if (medicine.ID > 0) { <button class="btn btn-ghost" type="button" @onclick="DeleteMedicineAsync">@I18n.T("Delete", "Delete")</button> }
+        </div>
+    </EditForm>
+    <div style="padding:0 20px 14px;"><input @bind="medicineSearch" @bind:event="oninput" placeholder="@I18n.T("Search medicines by brand, generic, type or supplier...", "Search medicines by brand, generic, type or supplier...")" /></div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead><tr><th>@I18n.T("Medicine", "Medicine")</th><th>@I18n.T("Generic / Type", "Generic / Type")</th><th>@I18n.T("Supplier", "Supplier")</th><th class="num">@I18n.T("Buy", "Buy")</th><th class="num">@I18n.T("Sale", "Sale")</th><th class="num">@I18n.T("Re-order", "Re-order")</th><th></th></tr></thead>
+            <tbody>
+                @if (FilteredMedicines.Count == 0) { <tr><td colspan="7"><div class="empty-state small">@I18n.T("No medicines found.", "No medicines found.")</div></td></tr> }
+                @foreach (var item in FilteredMedicines)
+                {
+                    <tr><td><b>@item.Name</b><br /><small>@I18n.T("Service", "Service") #@item.ID</small></td><td>@GenericName(item.GenericID)<br /><small>@TypeName(item.TypeID)</small></td><td>@SupplierName(item.SupplierID)</td><td class="num">@I18n.FormatCurrency(item.BuyRate ?? 0)</td><td class="num"><b>@I18n.FormatCurrency(item.SaleRate ?? 0)</b></td><td class="num">@(item.ReOrderLevel ?? 0)</td><td><button class="icon-btn" @onclick="() => SelectMedicine(item)">@I18n.T("Edit", "Edit")</button></td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="master-layout">
+    <div>
+        <div class="panel form-panel">
+            <div class="panel-heading"><div><h2>@(generic.ID == 0 ? I18n.T("Add generic", "Add generic") : $"{I18n.T("Edit generic", "Edit generic")} #{generic.ID}")</h2><p>@I18n.T("Generic drug names and therapeutic categories.", "Generic drug names and therapeutic categories.")</p></div><button class="icon-btn" @onclick="ResetGeneric">@I18n.T("New", "New")</button></div>
+            <EditForm Model="generic" OnSubmit="SaveGenericAsync">
+                <div class="form-grid"><label class="span-2"><span>@I18n.T("Generic name *", "Generic name *")</span><InputText @bind-Value="generic.Name" /></label></div>
+                <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save generic", "Save generic")</button>@if (generic.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteGenericAsync">@I18n.T("Delete", "Delete")</button> }</div>
+            </EditForm>
+            <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Generic name", "Generic name")</th><th></th></tr></thead><tbody>@foreach (var item in genericGroups) { <tr><td>@item.Name</td><td><button class="icon-btn" @onclick="() => SelectGeneric(item)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
+        </div>
+
+        <div class="panel form-panel">
+            <div class="panel-heading"><div><h2>@(medicineType.ID == 0 ? I18n.T("Add dosage form", "Add dosage form") : $"{I18n.T("Edit type", "Edit type")} #{medicineType.ID}")</h2><p>@I18n.T("Dosage forms (Tablet, Syrup, Injection, etc.).", "Dosage forms (Tablet, Syrup, Injection, etc.).")</p></div><button class="icon-btn" @onclick="ResetType">@I18n.T("New", "New")</button></div>
+            <EditForm Model="medicineType" OnSubmit="SaveTypeAsync">
+                <div class="form-grid"><label class="span-2"><span>@I18n.T("Type / dosage form *", "Type / dosage form *")</span><InputText @bind-Value="medicineType.Type" placeholder="@I18n.T("Tablet, capsule, syrup...", "Tablet, capsule, syrup...")" /></label></div>
+                <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save type", "Save type")</button>@if (medicineType.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteTypeAsync">@I18n.T("Delete", "Delete")</button> }</div>
+            </EditForm>
+            <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Dosage form", "Dosage form")</th><th></th></tr></thead><tbody>@foreach (var item in medicineTypes) { <tr><td>@item.Type</td><td><button class="icon-btn" @onclick="() => SelectType(item)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
+        </div>
+    </div>
+
+    <div class="panel form-panel">
+        <div class="panel-heading"><div><h2>@(supplier.ID == 0 ? I18n.T("Add supplier", "Add supplier") : $"{I18n.T("Edit supplier", "Edit supplier")} #{supplier.ID}")</h2><p>@I18n.T("Add and manage registered medicine pharmaceutical suppliers.", "Add and manage registered medicine pharmaceutical suppliers.")</p></div><button class="icon-btn" @onclick="ResetSupplier">@I18n.T("New", "New")</button></div>
+        <EditForm Model="supplier" OnSubmit="SaveSupplierAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Supplier / manufacturer name *", "Supplier / manufacturer name *")</span><InputText @bind-Value="supplier.Name" /></label>
+                <label class="span-2"><span>@I18n.T("Address", "Address")</span><InputTextArea @bind-Value="supplier.Address" /></label>
+                <label><span>@I18n.T("Contact", "Contact")</span><InputText @bind-Value="supplier.Contact" /></label>
+                <label><span>@I18n.T("Opening amount", "Opening amount") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="supplier.Amount" /></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save supplier", "Save supplier")</button>@if (supplier.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteSupplierAsync">@I18n.T("Delete", "Delete")</button> }</div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table"><thead><tr><th>@I18n.T("Supplier", "Supplier")</th><th>@I18n.T("Contact", "Contact")</th><th class="num">@I18n.T("Amount", "Amount")</th><th></th></tr></thead><tbody>
+                @if (suppliers.Count == 0) { <tr><td colspan="4"><div class="empty-state small">@I18n.T("No suppliers configured.", "No suppliers configured.")</div></td></tr> }
+                @foreach (var item in suppliers) { <tr><td><b>@item.Name</b><br /><small>@item.Address</small></td><td>@item.Contact</td><td class="num">@I18n.FormatCurrency(item.Amount ?? 0)</td><td><button class="icon-btn" @onclick="() => SelectSupplier(item)">@I18n.T("Edit", "Edit")</button></td></tr> }
+            </tbody></table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const int MedicineCategoryId = 3;
+    private Service medicine = NewMedicine();
+    private GenericGroup generic = new();
+    private MedicineType medicineType = new();
+    private SupplierPharmacy supplier = new();
+    private List<Service> medicines = [];
+    private List<GenericGroup> genericGroups = [];
+    private List<MedicineType> medicineTypes = [];
+    private List<SupplierPharmacy> suppliers = [];
+    private string medicineSearch = "";
+    private string message = "";
+    private string messageClass = "success";
+
+    private List<Service> FilteredMedicines
+    {
+        get
+        {
+            var query = medicineSearch.Trim();
+            return medicines.Where(x => string.IsNullOrWhiteSpace(query)
+                || (x.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                || GenericName(x.GenericID).Contains(query, StringComparison.OrdinalIgnoreCase)
+                || TypeName(x.TypeID).Contains(query, StringComparison.OrdinalIgnoreCase)
+                || SupplierName(x.SupplierID).Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        genericGroups = await db.GenericGroups.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        medicineTypes = await db.MedicineTypes.AsNoTracking().OrderBy(x => x.Type).ToListAsync();
+        suppliers = await db.PharmacySuppliers.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == MedicineCategoryId).OrderBy(x => x.Name).ToListAsync();
+    }
+
+    private async Task SaveMedicineAsync()
+    {
+        medicine.Name = medicine.Name?.Trim();
+        if (string.IsNullOrWhiteSpace(medicine.Name) || medicine.TypeID is null or <= 0 || medicine.GenericID is null or <= 0 || medicine.SupplierID is null or <= 0)
+        { Fail(I18n.IsBangla ? "ঔষধের নাম, ডোজ ফরম, জেনেরিক এবং সরবরাহকারী আবশ্যক।" : "Medicine name, dosage form, generic and supplier are required."); return; }
+        if ((medicine.BuyRate ?? 0) < 0 || (medicine.SaleRate ?? 0) < 0 || (medicine.ReOrderLevel ?? 0) < 0)
+        { Fail(I18n.IsBangla ? "মূল্য এবং রিঅর্ডার লেভেল ঋণাত্মক হতে পারে না।" : "Rates and re-order level cannot be negative."); return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.Services.AnyAsync(x => x.CategoryID == MedicineCategoryId && x.Name == medicine.Name && x.ID != medicine.ID))
+        { Fail(I18n.IsBangla ? "এই নামের একটি ঔষধ ইতিমধ্যে বিদ্যমান।" : "A medicine with this name already exists."); return; }
+
+        if (medicine.ID == 0)
+        {
+            medicine.CategoryID = MedicineCategoryId;
+            medicine.InvestigationModuleID = 0;
+            db.Services.Add(medicine);
+        }
+        else
+        {
+            var current = await db.Services.FirstOrDefaultAsync(x => x.ID == medicine.ID && x.CategoryID == MedicineCategoryId);
+            if (current == null) { Fail(I18n.IsBangla ? "ঔষধ খুঁজে পাওয়া যায়নি।" : "Medicine was not found."); return; }
+            current.Name = medicine.Name; current.TypeID = medicine.TypeID; current.GenericID = medicine.GenericID;
+            current.SupplierID = medicine.SupplierID; current.BuyRate = medicine.BuyRate; current.SaleRate = medicine.SaleRate;
+            current.ReOrderLevel = medicine.ReOrderLevel; current.IsVATApp = medicine.IsVATApp;
+        }
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ঔষধ সংরক্ষিত হয়েছে।" : "Medicine saved."); ResetMedicine(); await LoadAsync();
+    }
+
+    private async Task SaveGenericAsync()
+    {
+        generic.Name = generic.Name?.Trim();
+        if (string.IsNullOrWhiteSpace(generic.Name)) { Fail(I18n.IsBangla ? "জেনেরিক নাম আবশ্যক।" : "Generic name is required."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.GenericGroups.AnyAsync(x => x.Name == generic.Name && x.ID != generic.ID)) { Fail(I18n.IsBangla ? "এই জেনেরিক নাম ইতিমধ্যে বিদ্যমান।" : "This generic name already exists."); return; }
+        var userId = await CurrentUserIdAsync();
+        if (generic.ID == 0) { generic.EnteredBy = userId; generic.TransDate = DateTime.Now; db.GenericGroups.Add(generic); }
+        else { var current = await db.GenericGroups.FindAsync(generic.ID); if (current == null) return; current.Name = generic.Name; current.EnteredBy = userId; current.TransDate = DateTime.Now; }
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "জেনেরিক নাম সংরক্ষিত হয়েছে।" : "Generic name saved."); ResetGeneric(); await LoadAsync();
+    }
+
+    private async Task SaveTypeAsync()
+    {
+        medicineType.Type = medicineType.Type.Trim();
+        if (string.IsNullOrWhiteSpace(medicineType.Type)) { Fail(I18n.IsBangla ? "ঔষধের ধরন আবশ্যক।" : "Medicine type is required."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.MedicineTypes.AnyAsync(x => x.Type == medicineType.Type && x.ID != medicineType.ID)) { Fail(I18n.IsBangla ? "এই ধরনের ঔষধ ইতিমধ্যে বিদ্যমান।" : "This medicine type already exists."); return; }
+        var userId = await CurrentUserIdAsync();
+        if (medicineType.ID == 0) { medicineType.EnteredBy = userId; medicineType.TransDate = DateTime.Now; db.MedicineTypes.Add(medicineType); }
+        else { var current = await db.MedicineTypes.FindAsync(medicineType.ID); if (current == null) return; current.Type = medicineType.Type; current.EnteredBy = userId; current.TransDate = DateTime.Now; }
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "ঔষধের ধরন সংরক্ষিত হয়েছে।" : "Medicine type saved."); ResetType(); await LoadAsync();
+    }
+
+    private async Task SaveSupplierAsync()
+    {
+        supplier.Name = supplier.Name?.Trim();
+        if (string.IsNullOrWhiteSpace(supplier.Name)) { Fail(I18n.IsBangla ? "সরবরাহকারীর নাম আবশ্যক।" : "Supplier name is required."); return; }
+        if ((supplier.Amount ?? 0) < 0) { Fail(I18n.IsBangla ? "প্রারম্ভিক পরিমাণ ঋণাত্মক হতে পারে না।" : "Opening amount cannot be negative."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.PharmacySuppliers.AnyAsync(x => x.Name == supplier.Name && x.ID != supplier.ID)) { Fail(I18n.IsBangla ? "এই সরবরাহকারী ইতিমধ্যে বিদ্যমান।" : "This supplier already exists."); return; }
+        supplier.TransDate = DateTime.Now;
+        if (supplier.ID == 0) db.PharmacySuppliers.Add(supplier);
+        else { var current = await db.PharmacySuppliers.FindAsync(supplier.ID); if (current == null) return; current.Name = supplier.Name; current.Address = supplier.Address?.Trim(); current.Contact = supplier.Contact?.Trim(); current.Amount = supplier.Amount; current.TransDate = supplier.TransDate; }
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "সরবরাহকারী সংরক্ষিত হয়েছে।" : "Supplier saved."); ResetSupplier(); await LoadAsync();
+    }
+
+    private async Task DeleteMedicineAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ঔষধ {medicine.Name} মুছে ফেলতে চান?" : $"Delete medicine {medicine.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var used = await db.MedicineStoreBalances.AnyAsync(x => x.ServiceID == medicine.ID)
+            || await db.EmergencyMemoItems.AnyAsync(x => x.TestID == medicine.ID)
+            || await db.OTCashMemoItems.AnyAsync(x => x.ServiceID == medicine.ID)
+            || await db.IpdPatientServiceItems.AnyAsync(x => x.ServiceID == medicine.ID);
+        if (used) { Fail(I18n.IsBangla ? "ঔষধের স্টক বা লেনদেনের রেকর্ড রয়েছে এবং এটি মুছে ফেলা যাবে না।" : "Medicine has stock or transaction history and cannot be deleted."); return; }
+        var item = await db.Services.FirstOrDefaultAsync(x => x.ID == medicine.ID && x.CategoryID == MedicineCategoryId);
+        if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
+        Success(I18n.IsBangla ? "ঔষধ মুছে ফেলা হয়েছে।" : "Medicine deleted."); ResetMedicine(); await LoadAsync();
+    }
+
+    private async Task DeleteGenericAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"জেনেরিক {generic.Name} মুছে ফেলতে চান?" : $"Delete generic {generic.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.Services.AnyAsync(x => x.GenericID == generic.ID)) { Fail(I18n.IsBangla ? "জেনেরিকটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Generic is used by medicines and cannot be deleted."); return; }
+        var item = await db.GenericGroups.FindAsync(generic.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
+        Success(I18n.IsBangla ? "জেনেরিক মুছে ফেলা হয়েছে।" : "Generic deleted."); ResetGeneric(); await LoadAsync();
+    }
+
+    private async Task DeleteTypeAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ধরন {medicineType.Type} মুছে ফেলতে চান?" : $"Delete type {medicineType.Type}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.Services.AnyAsync(x => x.TypeID == medicineType.ID)) { Fail(I18n.IsBangla ? "ধরনটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Type is used by medicines and cannot be deleted."); return; }
+        var item = await db.MedicineTypes.FindAsync(medicineType.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
+        Success(I18n.IsBangla ? "ঔষধের ধরন মুছে ফেলা হয়েছে।" : "Medicine type deleted."); ResetType(); await LoadAsync();
+    }
+
+    private async Task DeleteSupplierAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"সরবরাহকারী {supplier.Name} মুছে ফেলতে চান?" : $"Delete supplier {supplier.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.Services.AnyAsync(x => x.SupplierID == supplier.ID)) { Fail(I18n.IsBangla ? "সরবরাহকারীটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Supplier is used by medicines and cannot be deleted."); return; }
+        var item = await db.PharmacySuppliers.FindAsync(supplier.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
+        Success(I18n.IsBangla ? "সরবরাহকারী মুছে ফেলা হয়েছে।" : "Supplier deleted."); ResetSupplier(); await LoadAsync();
+    }
+
+    private void SelectMedicine(Service x) => medicine = new Service { ID = x.ID, Name = x.Name, CategoryID = x.CategoryID, TypeID = x.TypeID, GenericID = x.GenericID, SupplierID = x.SupplierID, BuyRate = x.BuyRate, SaleRate = x.SaleRate, ReOrderLevel = x.ReOrderLevel, IsVATApp = x.IsVATApp, InvestigationModuleID = x.InvestigationModuleID };
+    private void SelectGeneric(GenericGroup x) => generic = new GenericGroup { ID = x.ID, Name = x.Name, EnteredBy = x.EnteredBy, TransDate = x.TransDate };
+    private void SelectType(MedicineType x) => medicineType = new MedicineType { ID = x.ID, Type = x.Type, EnteredBy = x.EnteredBy, TransDate = x.TransDate };
+    private void SelectSupplier(SupplierPharmacy x) => supplier = new SupplierPharmacy { ID = x.ID, Name = x.Name, Address = x.Address, Contact = x.Contact, Amount = x.Amount, TransDate = x.TransDate };
+    private void ResetMedicine() => medicine = NewMedicine();
+    private void ResetGeneric() => generic = new();
+    private void ResetType() => medicineType = new();
+    private void ResetSupplier() => supplier = new();
+    private static Service NewMedicine() => new() { CategoryID = MedicineCategoryId, BuyRate = 0, SaleRate = 0, ReOrderLevel = 0, IsVATApp = false, InvestigationModuleID = 0 };
+    private string GenericName(int? id) => genericGroups.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string TypeName(int? id) => medicineTypes.FirstOrDefault(x => x.ID == id)?.Type ?? "—";
+    private string SupplierName(int? id) => suppliers.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private async Task<int> CurrentUserIdAsync() { var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+}

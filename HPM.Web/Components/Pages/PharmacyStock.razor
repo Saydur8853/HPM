@@ -1,0 +1,129 @@
+@page "/pharmacy/stock"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.PharmacyOperator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+
+<PageTitle>@I18n.T("Pharmacy Stock Level", "Pharmacy Stock") | @Branding.HospitalName</PageTitle>
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Pharmacy & Dispensary", "Pharmacy & dispensary")</span>
+        <h1>@I18n.T("Stock, Batch & Expiry", "Stock, Batch & Expiry")</h1>
+        <p>@I18n.T("Real-time medicine balance with low-stock and expiry alerts.", "Real-time medicine balance with low-stock and expiry alerts.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="LoadAsync">@I18n.T("Refresh", "Refresh")</button>
+</div>
+
+<div class="metric-grid" style="margin-bottom:24px;">
+    <div class="metric-card accent-blue"><span>@I18n.T("Medicine products", "Medicine products")</span><strong>@rows.Count</strong><small>@I18n.T("With stock history", "With stock history")</small></div>
+    <div class="metric-card accent-red"><span>@I18n.T("Low / out of stock", "Low / out of stock")</span><strong>@rows.Count(x=>x.IsLow)</strong><small>@I18n.T("At or below re-order level", "At or below re-order level")</small></div>
+    <div class="metric-card accent-amber"><span>@I18n.T("Expiring in 90 days", "Expiring in 90 days")</span><strong>@batches.Count(x=>x.Balance>0&&x.ExpireDate<=DateTime.Today.AddDays(90))</strong><small>@I18n.T("Includes already expired", "Includes already expired")</small></div>
+    <div class="metric-card accent-violet"><span>@I18n.T("Stock value", "Stock value")</span><strong>@I18n.FormatCurrency(rows.Sum(x=>x.StockValue))</strong><small>@I18n.T("At latest purchase rate", "At latest purchase rate")</small></div>
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div><h2>@I18n.T("Stock summary", "Stock summary")</h2><p>@I18n.T("Real-time pharmacy warehouse and branch stock balance.", "Real-time pharmacy warehouse and branch stock balance.")</p></div>
+    </div>
+    <div class="scanner-search-group" style="margin: 0 1.25rem 0.75rem 1.25rem;">
+        <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+        <input type="text"
+               class="scanner-input"
+               placeholder="@I18n.T("Scan Medicine Barcode or Search Batch / Store...", "Scan Medicine Barcode or Search Batch / Store...")"
+               @bind="search"
+               @bind:event="oninput" />
+        @if (!string.IsNullOrWhiteSpace(search))
+        {
+            <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick='() => search = ""'>✕</button>
+        }
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine", "Medicine")</th>
+                    <th>@I18n.T("Store", "Store")</th>
+                    <th class="num">@I18n.T("Balance", "Balance")</th>
+                    <th class="num">@I18n.T("Re-order", "Re-order")</th>
+                    <th>@I18n.T("Nearest expiry", "Nearest expiry")</th>
+                    <th>@I18n.T("Status", "Status")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if(FilteredRows.Count==0){<tr><td colspan="6"><div class="empty-state small">@I18n.T("No stock records found.", "No stock records found.")</div></td></tr>}
+                @foreach(var x in FilteredRows)
+                {
+                    <tr>
+                        <td><b>@x.MedicineName</b><br/><small>@x.BatchSummary</small></td>
+                        <td>@x.StoreName</td>
+                        <td class="num"><b>@x.Balance.ToString("N2")</b></td>
+                        <td class="num">@x.ReOrderLevel</td>
+                        <td>@(x.NearestExpiry?.ToString("dd MMM yyyy")??"—")</td>
+                        <td><span class="pill @(x.IsLow?"pill-danger":"pill-success")">@(x.IsLow ? I18n.T("LOW STOCK", "LOW STOCK") : I18n.T("AVAILABLE", "AVAILABLE"))</span></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="panel" style="margin-top:24px;">
+    <div class="panel-heading">
+        <div><h2>@I18n.T("Batch details", "Batch details")</h2><p>@I18n.T("FEFO order: earliest expiry first", "FEFO order: earliest expiry first")</p></div>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine", "Medicine")</th>
+                    <th>@I18n.T("Store", "Store")</th>
+                    <th>@I18n.T("Batch", "Batch")</th>
+                    <th>@I18n.T("Expiry", "Expiry")</th>
+                    <th class="num">@I18n.T("Balance", "Balance")</th>
+                    <th>@I18n.T("Status", "Status")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var x in FilteredBatches)
+                {
+                    <tr>
+                        <td>@MedicineName(x.ServiceID)</td>
+                        <td>@StoreName(x.MedicineStoreID)</td>
+                        <td>@(x.BatchNo??"—")</td>
+                        <td>@(x.ExpireDate?.ToString("dd MMM yyyy")??"—")</td>
+                        <td class="num">@x.Balance.ToString("N2")</td>
+                        <td><span class="pill @(BatchStatusClass(x))">@BatchStatusText(x)</span></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code{
+    private List<Service> medicines=[];private List<MedicineStore> stores=[];private List<MedicineStoreBalance> batches=[];private List<StockRow> rows=[];private string search="";
+    private List<StockRow> FilteredRows=>rows.Where(x=>string.IsNullOrWhiteSpace(search)||x.MedicineName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.StoreName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.BatchSummary.Contains(search,StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<MedicineStoreBalance> FilteredBatches=>batches.Where(x=>string.IsNullOrWhiteSpace(search)||MedicineName(x.ServiceID).Contains(search,StringComparison.OrdinalIgnoreCase)||StoreName(x.MedicineStoreID).Contains(search,StringComparison.OrdinalIgnoreCase)||(x.BatchNo?.Contains(search,StringComparison.OrdinalIgnoreCase)??false)).OrderBy(x=>x.ExpireDate).ToList();
+    
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){await using var db=await DbFactory.CreateDbContextAsync();medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).ToListAsync();stores=await db.MedicineStores.AsNoTracking().ToListAsync();batches=await db.MedicineStoreBalances.AsNoTracking().ToListAsync();rows=batches.GroupBy(x=>new{x.ServiceID,x.MedicineStoreID}).Select(g=>{var m=medicines.FirstOrDefault(x=>x.ID==g.Key.ServiceID);return new StockRow(m?.Name??"—",StoreName(g.Key.MedicineStoreID),g.Sum(x=>x.Balance),m?.ReOrderLevel??0,g.Where(x=>x.Balance>0).Min(x=>x.ExpireDate),string.Join(", ",g.Where(x=>x.Balance>0).Select(x=>x.BatchNo).Distinct()),(m?.BuyRate??0)*g.Sum(x=>x.Balance));}).OrderBy(x=>x.MedicineName).ToList();}
+    private string MedicineName(int id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—";private string StoreName(int id)=>stores.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private static string BatchStatus(MedicineStoreBalance x)=>x.Balance<=0?"OUT":x.ExpireDate<DateTime.Today?"EXPIRED":x.ExpireDate<=DateTime.Today.AddDays(90)?"EXPIRING":"OK";
+    private string BatchStatusText(MedicineStoreBalance x) => BatchStatus(x) switch
+    {
+        "OUT" => I18n.T("OUT", "OUT"),
+        "EXPIRED" => I18n.T("EXPIRED", "EXPIRED"),
+        "EXPIRING" => I18n.T("EXPIRING", "EXPIRING"),
+        _ => I18n.T("OK", "OK")
+    };
+    private static string BatchStatusClass(MedicineStoreBalance x)=>BatchStatus(x) is "OUT" or "EXPIRED"?"pill-danger":BatchStatus(x)=="EXPIRING"?"pill-warning":"pill-success";
+    private sealed record StockRow(string MedicineName,string StoreName,decimal Balance,int ReOrderLevel,DateTime? NearestExpiry,string BatchSummary,decimal StockValue){public bool IsLow=>Balance<=ReOrderLevel;}
+}

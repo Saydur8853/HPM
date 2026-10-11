@@ -1,0 +1,536 @@
+@page "/ipd/patient-services"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.IPDOperator + "," + RoleNames.Cashier + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Inpatient Services") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("IPD & Bed management")</span>
+        <h1>@I18n.T("IPD Patient Services & Charges")</h1>
+        <p>@I18n.T("Record daily doctor visits, nursing procedures, investigations and patient services during bed stay.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ Clear / New search")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Add Patient Service / Charge")</h2>
+                <p>@I18n.T("Daily service charges, procedures and rounds.", "Daily service charges, procedures and rounds.")</p>
+            </div>
+            @if (selectedAdmission != null)
+            {
+                <span class="pill pill-success">@I18n.T("ADMITTED")</span>
+            }
+        </div>
+
+        <div style="padding: 20px;">
+            <div class="scanner-search-group" style="margin-bottom: 16px;">
+                <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+                <input type="text"
+                       class="scanner-input"
+                       placeholder="@I18n.T("Scan Patient Wristband / IPD Reg # / Patient ID...", "Scan Patient Wristband / IPD Reg # / Patient ID...")"
+                       @bind="searchQuery"
+                       @bind:event="oninput"
+                       @onkeydown="HandleSearchKeyDown" />
+                <button type="button" class="btn btn-secondary" style="white-space:nowrap; padding: 0 16px;" @onclick="SearchAdmissionAsync">@I18n.T("Find")</button>
+            </div>
+
+            <div class="patient-summary" style="margin-bottom: 20px;">
+                <div>
+                    <b>@(selectedAdmission == null ? I18n.T("No IPD admission selected") : $"{patientName} ({selectedAdmission.RegNo})")</b>
+                    @if (selectedAdmission != null)
+                    {
+                        <small style="display:block; margin-top:2px;">
+                            @I18n.T("Bed"): @BedName(selectedAdmission.BedCabinID) · @I18n.T("Age"): @selectedAdmission.Age · Dr: @DoctorName(selectedAdmission.Consultant)
+                        </small>
+                    }
+                </div>
+                @if (selectedAdmission != null)
+                {
+                    <div style="display:flex; align-items:center; gap:14px;">
+                        <button type="button" class="btn btn-secondary" style="padding: 6px 14px; font-size:12px; font-weight:700;" @onclick="OpenPrescriptionModal">
+                            🖨️ @I18n.T("Print A4 Medication Chart / Prescription", "Print A4 Medication Chart / Prescription")
+                        </button>
+                        <div style="text-align:right;">
+                            <span style="font-size:10px; color:#64748b; display:block;">@I18n.T("Total Services Consumed:")</span>
+                            <b style="color:#0369a1; font-size:14px;">@I18n.FormatCurrency(patientServices.Sum(x => x.Total))</b>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            @if (selectedAdmission != null)
+            {
+                <EditForm Model="serviceEntry" OnSubmit="AddServiceAsync">
+                    <div class="form-grid">
+                        <label class="span-2">
+                            <span>@I18n.T("Service / Procedure / Test *")</span>
+                            <select @onchange="ServiceSelected" style="width:100%;">
+                                <option value="0">@I18n.T("-- Select service --")</option>
+                                @foreach (var s in availableServices)
+                                {
+                                    <option value="@s.ID">@s.Name (@I18n.FormatCurrency(s.SaleRate ?? 0))</option>
+                                }
+                            </select>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Unit Rate (৳) *")</span>
+                            <InputNumber @bind-Value="serviceEntry.Rate" @bind-Value:after="RecalculateTotal" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Quantity *", "Quantity *")</span>
+                            <InputNumber @bind-Value="serviceEntry.Quantity" @bind-Value:after="RecalculateTotal" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Total", "Total")</span>
+                            <input value="@I18n.FormatCurrency(serviceEntry.Total)" disabled />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Attending Doctor / Consultant")</span>
+                            <InputSelect @bind-Value="serviceEntry.DoctorID">
+                                <option value="">@I18n.T("Not assigned")</option>
+                                @foreach (var d in doctors)
+                                {
+                                    <option value="@d.ID">@d.Title @d.Name</option>
+                                }
+                            </InputSelect>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Service Date & Time *")</span>
+                            <InputDate Type="InputDateType.DateTimeLocal" @bind-Value="serviceEntry.ServiceDate" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Remarks / Notes")</span>
+                            <InputText @bind-Value="serviceEntry.Remarks" placeholder="@I18n.T("Remarks")" />
+                        </label>
+                    </div>
+
+                    <div class="form-actions" style="margin-top:20px;">
+                        <button class="btn btn-primary" type="submit">@I18n.T("➕ Add service charge")</button>
+                    </div>
+                </EditForm>
+            }
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Services Rendered During Stay")</h2>
+                <p>@patientServices.Count @I18n.T("recorded service(s)")</p>
+            </div>
+            <span class="pill">@I18n.T("Sub Total"): @I18n.FormatCurrency(patientServices.Sum(x => x.Total))</span>
+        </div>
+
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Service / Test")</th>
+                        <th>@I18n.T("Rate × Qty")</th>
+                        <th>@I18n.T("Total")</th>
+                        <th>@I18n.T("Doctor")</th>
+                        <th>@I18n.T("Date")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (patientServices.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6"><div class="empty-state small">@I18n.T("No services added for this admission yet.")</div></td>
+                        </tr>
+                    }
+                    @foreach (var item in patientServices)
+                    {
+                        <tr>
+                            <td>
+                                <b>@item.ServiceName</b>
+                                @if (!string.IsNullOrWhiteSpace(item.Remarks))
+                                {
+                                    <br /><small style="color:#64748b;">@item.Remarks</small>
+                                }
+                            </td>
+                            <td>@item.Quantity × @I18n.FormatCurrency(item.Rate)</td>
+                            <td class="amount"><b>@I18n.FormatCurrency(item.Total)</b></td>
+                            <td>@DoctorName(item.DoctorID)</td>
+                            <td>@item.ServiceDate.ToString("dd MMM yyyy hh:mm tt")</td>
+                            <td>
+                                <button class="icon-btn danger" @onclick="() => DeleteServiceAsync(item)">✕</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (showPrescriptionModal && selectedAdmission != null)
+{
+    <div class="modal-backdrop" @onclick="ClosePrescriptionModal">
+        <div class="doc-preview-modal" @onclick:stopPropagation="true">
+            <div class="doc-preview-modal-header">
+                <div>
+                    <h3 style="font-size:16px; font-weight:800; margin:0; color:#0f172a;">
+                        @I18n.T("Inpatient Clinical Medication & Treatment Chart", "Inpatient Clinical Medication & Treatment Chart")
+                    </h3>
+                    <small style="color:#64748b;">Reg #@selectedAdmission.RegNo &bull; @patientName</small>
+                </div>
+                <button type="button" class="icon-btn" @onclick="ClosePrescriptionModal">✕</button>
+            </div>
+
+            <div class="doc-preview-modal-body" id="ipd-prescription-print-modal">
+                <PrescriptionA4PrintSheet
+                    Title="@I18n.T("INPATIENT CLINICAL MEDICATION & TREATMENT CHART", "INPATIENT CLINICAL MEDICATION & TREATMENT CHART")"
+                    DocNo="@($"RX-IPD-{selectedAdmission.RegNo}")"
+                    BarcodeCode="@($"IPD-{selectedAdmission.RegNo}")"
+                    PatientName="@patientName"
+                    PatientId="@selectedAdmission.PatientID"
+                    RegNo="@selectedAdmission.RegNo"
+                    BedName="@BedName(selectedAdmission.BedCabinID)"
+                    Age="@(selectedAdmission.Age ?? "—")"
+                    Sex="@(patientSex ?? "—")"
+                    BloodGroup="@patientBloodGroup"
+                    ContactNo="@patientContact"
+                    PrescriptionDate="@(selectedAdmission.AdmissionDate ?? selectedAdmission.TransDate ?? DateTime.Now)"
+                    DoctorName="@DoctorName(selectedAdmission.Consultant)"
+                    DoctorQualification="@DoctorQualification(selectedAdmission.Consultant)"
+                    DoctorDesignation="@DoctorDesignation(selectedAdmission.Consultant)"
+                    DepartmentName="@DepartmentName(selectedAdmission.Department)"
+                    Diagnosis="@selectedAdmission.Diagnosis"
+                    ChiefComplaints="@selectedAdmission.Comments"
+                    AdvisedTests="@prescriptionAdvisedTests"
+                    MedicationItems="@prescriptionMedications" />
+            </div>
+
+            <div class="doc-preview-modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="ClosePrescriptionModal">
+                    @I18n.T("Close")
+                </button>
+                <button type="button" class="btn btn-primary" @onclick="PrintPrescriptionModalAsync">
+                    🖨️ @I18n.T("Print A4 Prescription", "Print A4 Prescription")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private IpdPatientServiceItem serviceEntry = NewServiceItem();
+    private List<IpdPatientServiceItem> patientServices = [];
+    private List<Service> availableServices = [];
+    private List<BedCabin> beds = [];
+    private List<DoctorsProfile> doctors = [];
+    private List<Department> departments = [];
+
+    private PatientAdmission? selectedAdmission;
+    private string searchQuery = "";
+    private string patientName = "";
+    private string? patientSex;
+    private string? patientBloodGroup;
+    private string? patientContact;
+
+    private bool showPrescriptionModal;
+    private List<PrescriptionA4PrintSheet.PrescriptionMedItem> prescriptionMedications = [];
+    private List<string> prescriptionAdvisedTests = [];
+
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        beds = await db.BedCabins.AsNoTracking().ToListAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        departments = await db.Departments.AsNoTracking().ToListAsync();
+        availableServices = await db.Services.AsNoTracking().OrderBy(x => x.Name).Take(200).ToListAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
+        {
+            await SearchAdmissionAsync();
+        }
+    }
+
+    private async Task SearchAdmissionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery))
+        {
+            Fail(I18n.IsBangla ? "আইপিডি রেজি. নং বা পেশেন্ট আইডি লিখুন।" : "Enter an IPD Reg No or Patient ID to search.");
+            return;
+        }
+
+        var raw = searchQuery.Trim();
+
+        // 1. Check if it is an IPD QR payload or Wristband payload
+        if (raw.StartsWith("HPM:IPD|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:WB|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                raw = regPart.Substring(4).Trim();
+            }
+        }
+        else if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                raw = regPart.Substring(4).Trim();
+            }
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var adm = await db.PatientAdmissions.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RegNo == raw || x.PatientID == raw);
+
+        if (adm == null)
+        {
+            Fail(I18n.IsBangla ? "আইপিডি ভর্তি রেকর্ড পাওয়া যায়নি।" : "Active or past IPD admission was not found.");
+            return;
+        }
+
+        selectedAdmission = adm;
+        serviceEntry.RegNo = adm.RegNo;
+        serviceEntry.PatientID = adm.PatientID;
+
+        var patient = adm.PatientID == null ? null : await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == adm.PatientID);
+        patientName = patient?.Name ?? "—";
+        patientSex = patient?.Sex;
+        patientBloodGroup = patient?.BloodGroup;
+        patientContact = patient?.Contact;
+
+        await LoadPatientServicesAsync();
+        message = "";
+    }
+
+    private async Task LoadPatientServicesAsync()
+    {
+        if (selectedAdmission == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        
+        patientServices = await db.IpdPatientServiceItems.AsNoTracking()
+            .Where(x => x.RegNo == selectedAdmission.RegNo)
+            .OrderByDescending(x => x.ServiceDate)
+            .ToListAsync();
+
+        var legacyTransactions = await db.PatientTransactions.AsNoTracking()
+            .Where(x => x.RegNo == selectedAdmission.RegNo)
+            .ToListAsync();
+
+        var allServices = await db.Services.AsNoTracking().ToListAsync();
+
+        prescriptionMedications.Clear();
+        prescriptionAdvisedTests.Clear();
+
+        // 1. Process legacy transactions
+        foreach (var tx in legacyTransactions)
+        {
+            var s = allServices.FirstOrDefault(x => x.ID == tx.ServiceID);
+            if (IsMedication(s))
+            {
+                prescriptionMedications.Add(new PrescriptionA4PrintSheet.PrescriptionMedItem
+                {
+                    MedicineName = s?.Name ?? $"Medicine #{tx.ServiceID}",
+                    Quantity = tx.Quantity,
+                    Dosage = "Daily IV / Routine Dose",
+                    Duration = "Bed Stay",
+                    Instruction = "Administered by Nursing Staff"
+                });
+            }
+            else if (s?.InvestigationModuleID != null || (s?.CategoryID != null && s.CategoryID == 2))
+            {
+                if (s?.Name != null && !prescriptionAdvisedTests.Contains(s.Name))
+                {
+                    prescriptionAdvisedTests.Add(s.Name);
+                }
+            }
+        }
+
+        // 2. Process new service items
+        foreach (var sItem in patientServices)
+        {
+            var s = allServices.FirstOrDefault(x => x.ID == sItem.ServiceID);
+            if (IsMedication(s))
+            {
+                prescriptionMedications.Add(new PrescriptionA4PrintSheet.PrescriptionMedItem
+                {
+                    MedicineName = sItem.ServiceName,
+                    Quantity = sItem.Quantity,
+                    Dosage = "Routine Inpatient Dose",
+                    Duration = "Bed Stay",
+                    Instruction = sItem.Remarks ?? "As instructed"
+                });
+            }
+        }
+    }
+
+    private static bool IsMedication(Service? s)
+    {
+        if (s == null) return false;
+        if (s.CategoryID == 3) return true;
+        var name = (s.Name ?? "").ToLowerInvariant();
+        return name.Contains("inj") || name.Contains("infusion") || name.Contains("tab") ||
+               name.Contains("syp") || name.Contains("capsule") || name.Contains("ceftizone") ||
+               name.Contains("levoxin") || name.Contains("napa") || name.Contains("maxpro") ||
+               name.Contains("amibac") || name.Contains("frusin") || name.Contains("fluid") ||
+               name.Contains("saline") || name.Contains("dextrosal") || name.Contains("salpac") ||
+               name.Contains("resp") || name.Contains("hypertonic");
+    }
+
+    private void OpenPrescriptionModal() => showPrescriptionModal = true;
+    private void ClosePrescriptionModal() => showPrescriptionModal = false;
+
+    private async Task PrintPrescriptionModalAsync()
+    {
+        await JS.InvokeVoidAsync("hpm.printElement", "ipd-prescription-print-modal", $"Prescription - {patientName} (Reg #{selectedAdmission?.RegNo})");
+    }
+
+    private void ServiceSelected(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var sId) && sId > 0)
+        {
+            var s = availableServices.FirstOrDefault(x => x.ID == sId);
+            if (s != null)
+            {
+                serviceEntry.ServiceID = s.ID;
+                serviceEntry.ServiceName = s.Name ?? string.Empty;
+                serviceEntry.Rate = s.SaleRate ?? 0;
+                RecalculateTotal();
+            }
+        }
+    }
+
+    private void RecalculateTotal()
+    {
+        serviceEntry.Total = serviceEntry.Rate * Math.Max(1, serviceEntry.Quantity);
+    }
+
+    private async Task AddServiceAsync()
+    {
+        if (selectedAdmission == null || serviceEntry.ServiceID == 0)
+        {
+            Fail(I18n.IsBangla ? "একটি সঠিক সেবা নির্বাচন করুন।" : "Select a valid service to add.");
+            return;
+        }
+
+        if (serviceEntry.Rate < 0 || serviceEntry.Quantity <= 0)
+        {
+            Fail(I18n.IsBangla ? "সঠিক রেট ও পরিমাণ লিখুন।" : "Enter valid rate and quantity.");
+            return;
+        }
+
+        serviceEntry.RegNo = selectedAdmission.RegNo;
+        serviceEntry.PatientID = selectedAdmission.PatientID;
+        serviceEntry.Total = serviceEntry.Rate * serviceEntry.Quantity;
+        serviceEntry.EnteredBy = 1;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.IpdPatientServiceItems.Add(serviceEntry);
+
+        try
+        {
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? $"সেবা '{serviceEntry.ServiceName}' সফলভাবে যোগ করা হয়েছে।" : $"Service '{serviceEntry.ServiceName}' added successfully.");
+            serviceEntry = NewServiceItem();
+            serviceEntry.RegNo = selectedAdmission.RegNo;
+            serviceEntry.PatientID = selectedAdmission.PatientID;
+            await LoadPatientServicesAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? $"সেবা যোগ করা যায়নি: {ex.Message}" : $"Could not add service: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteServiceAsync(IpdPatientServiceItem item)
+    {
+        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে '{item.ServiceName}' সেবাটি মুছে ফেলতে চান?" : $"Remove service '{item.ServiceName}'?";
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.IpdPatientServiceItems.FindAsync(item.ID);
+        if (entity == null) return;
+
+        db.IpdPatientServiceItems.Remove(entity);
+        await db.SaveChangesAsync();
+
+        Success(I18n.IsBangla ? "সেবা মুছে ফেলা হয়েছে।" : "Service removed.");
+        await LoadPatientServicesAsync();
+    }
+
+    private void Reset()
+    {
+        selectedAdmission = null;
+        patientName = "";
+        patientSex = null;
+        patientBloodGroup = null;
+        patientContact = null;
+        searchQuery = "";
+        serviceEntry = NewServiceItem();
+        patientServices.Clear();
+        prescriptionMedications.Clear();
+        prescriptionAdvisedTests.Clear();
+        showPrescriptionModal = false;
+        message = "";
+    }
+
+    private static IpdPatientServiceItem NewServiceItem() => new()
+    {
+        ServiceDate = DateTime.Now,
+        Quantity = 1,
+        Rate = 0,
+        Total = 0
+    };
+
+    private string BedName(int? id) => beds.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string DoctorName(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d == null ? "—" : $"{d.Title} {d.Name}";
+    }
+    private string DoctorQualification(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d?.Degree ?? "MBBS, Specialist Consultant";
+    }
+    private string DoctorDesignation(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d?.Attachment ?? "Consultant Physician";
+    }
+    private string DepartmentName(int? id)
+    {
+        var dept = departments.FirstOrDefault(x => x.ID == id);
+        return dept?.Name ?? "Inpatient Medicine (IPD)";
+    }
+
+    private void Success(string text) { messageClass = "alert success"; message = text; }
+    private void Fail(string text) { messageClass = "alert danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

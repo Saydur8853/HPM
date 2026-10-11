@@ -1,0 +1,240 @@
+@page "/diagnostic/masters"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>@I18n.T("Diagnostic Masters") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Diagnostic & Lab")</span>
+        <h1>@I18n.T("Lab Parameters", "Lab Test Parameters Setup")</h1>
+        <p>@I18n.T("Configure investigation test parameters, normal reference ranges and measurement units.")</p>
+    </div>
+    <NavLink href="masters" class="btn btn-secondary">&larr; @I18n.T("Master setup")</NavLink>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="master-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID == 0 ? I18n.T("Add Test", "Add Test Parameter") : I18n.T("Edit", "Edit Parameter"))</h2>
+                <p>@I18n.T("Test parameter names, units and normal ranges.", "Test parameter names, units and normal ranges.")</p>
+            </div>
+        </div>
+
+        <EditForm Model="editor" OnSubmit="SaveAsync">
+            <div class="form-grid">
+                <label class="span-2">
+                    <span>@I18n.T("Select Test / Investigation") *</span>
+                    <select @bind="editor.ServiceID" style="width:100%;">
+                        <option value="0">@I18n.T("-- Select Test --")</option>
+                        @foreach (var s in labServices)
+                        {
+                            <option value="@s.ID">@s.Name</option>
+                        }
+                    </select>
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Parameter Name") *</span>
+                    <InputText @bind-Value="editor.ParameterName" placeholder="e.g. Hemoglobin (Hb), Fasting Blood Glucose, SGPT/ALT" />
+                </label>
+                <label>
+                    <span>@I18n.T("Unit")</span>
+                    <InputText @bind-Value="editor.Unit" placeholder="e.g. g/dL, mg/dL, U/L, %" />
+                </label>
+                <label>
+                    <span>@I18n.T("Serial No", "Sort Order")</span>
+                    <InputNumber @bind-Value="editor.SortOrder" />
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Reference Normal Range")</span>
+                    <InputText @bind-Value="editor.ReferenceRange" placeholder="e.g. Male: 13.5-17.5 g/dL, Female: 12.0-15.5 g/dL or 70 - 100 mg/dL" />
+                </label>
+            </div>
+
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(editor.ID == 0 ? I18n.T("Save") : I18n.T("Update"))</button>
+                @if (editor.ID > 0)
+                {
+                    <button class="btn btn-ghost" type="button" @onclick="DeleteAsync">@I18n.T("Delete")</button>
+                }
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+
+    <div class="panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Lab Parameters")</h2>
+                <p>@I18n.T("Select an investigation to view its parameter template")</p>
+            </div>
+            <select class="date-filter" style="min-width:180px;" @bind="selectedFilterServiceId" @bind:after="FilterParameters">
+                <option value="0">@I18n.T("All investigations", "All investigations")</option>
+                @foreach (var s in labServices)
+                {
+                    <option value="@s.ID">@s.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Investigation Details", "Investigation")</th>
+                        <th>@I18n.T("Parameter Name", "Parameter")</th>
+                        <th>@I18n.T("Unit")</th>
+                        <th>@I18n.T("Reference Normal Range")</th>
+                        <th>#</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (filteredParameters.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6"><div class="empty-state small">@I18n.T("No records found.")</div></td>
+                        </tr>
+                    }
+                    @foreach (var p in filteredParameters)
+                    {
+                        <tr>
+                            <td><b>@ServiceName(p.ServiceID)</b></td>
+                            <td>@p.ParameterName</td>
+                            <td><span class="pill">@(string.IsNullOrWhiteSpace(p.Unit) ? "—" : p.Unit)</span></td>
+                            <td><small>@(string.IsNullOrWhiteSpace(p.ReferenceRange) ? "—" : p.ReferenceRange)</small></td>
+                            <td>@p.SortOrder</td>
+                            <td>
+                                <button class="icon-btn" @onclick="() => Select(p)">@I18n.T("Edit")</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private LabTestParameter editor = new();
+    private List<LabTestParameter> parameters = [];
+    private List<LabTestParameter> filteredParameters = [];
+    private List<Service> labServices = [];
+    private int selectedFilterServiceId = 0;
+
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        labServices = await db.Services.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        parameters = await db.LabTestParameters.AsNoTracking().OrderBy(x => x.ServiceID).ThenBy(x => x.SortOrder).ToListAsync();
+        FilterParameters();
+    }
+
+    private void FilterParameters()
+    {
+        filteredParameters = selectedFilterServiceId <= 0
+            ? parameters
+            : parameters.Where(x => x.ServiceID == selectedFilterServiceId).ToList();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (editor.ServiceID <= 0 || string.IsNullOrWhiteSpace(editor.ParameterName))
+        {
+            Fail(I18n.IsBangla ? "টেস্ট এবং প্যারামিটারের নাম আবশ্যক।" : "Investigation service and parameter name are required.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (editor.ID == 0)
+        {
+            db.LabTestParameters.Add(editor);
+        }
+        else
+        {
+            var entity = await db.LabTestParameters.FindAsync(editor.ID);
+            if (entity == null) { Fail(I18n.IsBangla ? "প্যারামিটার পাওয়া যায়নি।" : "Parameter not found."); return; }
+            db.Entry(entity).CurrentValues.SetValues(editor);
+        }
+
+        try
+        {
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? "ল্যাব প্যারামিটার সংরক্ষিত হয়েছে।" : "Lab parameter saved successfully.");
+            var curService = editor.ServiceID;
+            Reset();
+            editor.ServiceID = curService;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? $"প্যারামিটার সংরক্ষণ করা যায়নি: {ex.Message}" : $"Could not save parameter: {ex.Message}");
+        }
+    }
+
+    private void Select(LabTestParameter item)
+    {
+        editor = new LabTestParameter
+        {
+            ID = item.ID,
+            ServiceID = item.ServiceID,
+            ParameterName = item.ParameterName,
+            Unit = item.Unit,
+            ReferenceRange = item.ReferenceRange,
+            SortOrder = item.SortOrder
+        };
+        message = "";
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্যারামিটার '{editor.ParameterName}' মুছে ফেলতে চান?" : $"Delete parameter '{editor.ParameterName}'?")) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.LabTestParameters.FindAsync(editor.ID);
+        if (entity != null)
+        {
+            db.LabTestParameters.Remove(entity);
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? "প্যারামিটার মুছে ফেলা হয়েছে।" : "Parameter deleted.");
+            Reset();
+            await LoadAsync();
+        }
+    }
+
+    private void Reset()
+    {
+        editor = new LabTestParameter { SortOrder = 1 };
+        message = "";
+    }
+
+    private string ServiceName(int id) => labServices.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+
+    private void Success(string text) { messageClass = "alert success"; message = text; }
+    private void Fail(string text) { messageClass = "alert danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

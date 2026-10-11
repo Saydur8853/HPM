@@ -1,0 +1,611 @@
+@page "/ipd/bed-occupancy"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.IPDOperator + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Bed Occupancy Board") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("IPD & Bed management")</span>
+        <h1>@I18n.T("Bed Occupancy Board")</h1>
+        <p>@I18n.T("Live bed status, patient location tracking and seamless bed transfers.")</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        @if (lastTransfer != null)
+        {
+            <button class="btn btn-secondary" @onclick="PrintTransferAsync">@I18n.T("Print last transfer")</button>
+        }
+        <button class="btn btn-secondary" @onclick="LoadAsync">@I18n.T("↻ Refresh status")</button>
+        <NavLink href="ipd/admissions" class="btn btn-primary">@I18n.T("+ New admission")</NavLink>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="metric-grid" style="margin-bottom: 24px;">
+    <div class="metric-card accent-blue">
+        <span>@I18n.T("Total capacity")</span>
+        <strong>@beds.Count</strong>
+        <small>@I18n.T("Configured beds & cabins")</small>
+    </div>
+    <div class="metric-card accent-red">
+        <span>@I18n.T("Occupied beds")</span>
+        <strong>@occupiedCount</strong>
+        <small>@I18n.T("Admitted patients")</small>
+    </div>
+    <div class="metric-card" style="--metric:#10b981;">
+        <span>@I18n.T("Available / Free")</span>
+        <strong>@availableCount</strong>
+        <small>@I18n.T("Ready for admission")</small>
+    </div>
+    <div class="metric-card" style="--metric:#f59e0b;">
+        <span>@I18n.T("Awaiting cleaning")</span>
+        <strong>@cleaningCount</strong>
+        <small>@I18n.T("Not available for admission")</small>
+    </div>
+    <div class="metric-card accent-violet">
+        <span>@I18n.T("Occupancy rate")</span>
+        <strong>@(beds.Count == 0 ? "0%" : $"{Math.Round((double)occupiedCount / beds.Count * 100, 1)}%")</strong>
+        <small>@I18n.T("Current utilization")</small>
+    </div>
+</div>
+
+<div class="panel" style="margin-bottom: 24px;">
+    <div class="panel-heading">
+        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+            <div>
+                <h2>@I18n.T("Filter wards & beds")</h2>
+                <p>@I18n.T("Narrow down by department, bed type or occupancy state")</p>
+            </div>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <div class="scanner-search-group" style="margin: 0; min-width: 220px;">
+                <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+                <input type="text"
+                       class="scanner-input"
+                       placeholder="@I18n.T("Scan Wristband/Bed or Search...", "Scan Wristband/Bed or Search...")"
+                       @bind="bedScanQuery"
+                       @bind:event="oninput"
+                       @bind:after="FilterChanged" />
+                @if (!string.IsNullOrWhiteSpace(bedScanQuery))
+                {
+                    <button type="button" class="btn btn-ghost" style="padding: 0 6px; font-size: 11px;" @onclick="ClearBedScan">✕</button>
+                }
+            </div>
+            <select class="date-filter" style="min-width:160px;" @bind="selectedDeptId" @bind:after="FilterChanged">
+                <option value="0">@I18n.T("All IPD Departments")</option>
+                @foreach (var d in departments)
+                {
+                    <option value="@d.ID">@d.Name</option>
+                }
+            </select>
+            <select class="date-filter" style="min-width:150px;" @bind="selectedCatId" @bind:after="FilterChanged">
+                <option value="0">@I18n.T("All Bed Categories")</option>
+                @foreach (var c in categories)
+                {
+                    <option value="@c.ID">@c.Name</option>
+                }
+            </select>
+            <select class="date-filter" style="min-width:140px;" @bind="statusFilter" @bind:after="FilterChanged">
+                <option value="all">@I18n.T("All statuses")</option>
+                <option value="occupied">@I18n.T("Occupied only")</option>
+                <option value="available">@I18n.T("Available only")</option>
+                <option value="cleaning">@I18n.T("Cleaning / approval")</option>
+                <option value="maintenance">@I18n.T("Maintenance only")</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<div class="occupancy-grid">
+    @if (filteredBeds.Count == 0)
+    {
+        <div class="panel" style="grid-column: 1/-1;">
+            <div class="empty-state">@I18n.T("No beds match the selected filters.")</div>
+        </div>
+    }
+    @foreach (var bed in filteredBeds)
+    {
+        var category = categories.FirstOrDefault(c => c.ID == bed.CategoryID);
+        var dept = departments.FirstOrDefault(d => d.ID == category?.IpdDepartmentID);
+        var occupancy = activeOccupancies.GetValueOrDefault(bed.ID);
+        var isOccupied = bed.IsAllocated || occupancy != null;
+        var effectiveStatus = isOccupied ? BedStatuses.Occupied : bed.Status;
+        var isAvailable = effectiveStatus == BedStatuses.Available;
+
+        <div class="bed-card @(isOccupied ? "occupied" : isAvailable ? "available" : "")">
+            <div class="bed-card-header">
+                <div>
+                    <span class="bed-number">@bed.Name</span>
+                    <small class="bed-category">@(category?.Name ?? I18n.T("General")) · @(dept?.Name ?? I18n.T("General"))</small>
+                </div>
+                <span class="pill @(isOccupied ? "pill-danger" : isAvailable ? "pill-success" : "pill-warning")">
+                    @I18n.T(effectiveStatus.ToUpperInvariant())
+                </span>
+            </div>
+
+            <div class="bed-card-body">
+                @if (isOccupied && occupancy != null)
+                {
+                    <div class="occupant-details">
+                        <div class="occupant-name">
+                            <b>@(occupancy.PatientName ?? I18n.T("Admitted Patient"))</b>
+                            <small>ID: @occupancy.PatientID · Reg: @occupancy.RegNo</small>
+                        </div>
+                        <div class="occupant-meta">
+                            <div><span>@I18n.T("Admitted:")</span> <b>@occupancy.AdmissionDate?.ToString("dd MMM yyyy")</b></div>
+                            <div><span>@I18n.T("Stay:")</span> <b>@CalculateStay(occupancy.AdmissionDate)</b></div>
+                            @if (!string.IsNullOrWhiteSpace(occupancy.ConsultantName))
+                            {
+                                <div><span>@I18n.T("Doctor:")</span> <b>@occupancy.ConsultantName</b></div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(occupancy.Diagnosis))
+                            {
+                                <div><span>@I18n.T("Diagnosis:")</span> <i>@occupancy.Diagnosis</i></div>
+                            }
+                        </div>
+                    </div>
+                }
+                else if (isAvailable)
+                {
+                    <div class="bed-vacant-info">
+                        <div class="rate-tag">@I18n.FormatCurrency(category?.Rate ?? 0) <small>@I18n.T("/ day")</small></div>
+                        <p class="vacant-note">@I18n.T("Ready for immediate patient assignment.")</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="bed-vacant-info">
+                        <p class="vacant-note">@(effectiveStatus == BedStatuses.Cleaning ? I18n.T("Cleaning or supervisor approval is pending.") : I18n.T("Bed is unavailable during maintenance."))</p>
+                    </div>
+                }
+            </div>
+
+            <div class="bed-card-footer">
+                @if (isOccupied && occupancy != null)
+                {
+                    <button class="btn btn-secondary btn-sm" @onclick="() => OpenTransferModal(bed, occupancy)">
+                        ⇄ @I18n.T("Transfer")
+                    </button>
+                    <NavLink href="ipd/patient-services" class="btn btn-ghost btn-sm">
+                        🩺 @I18n.T("Services")
+                    </NavLink>
+                    <NavLink href="ipd/discharge-billing" class="btn btn-ghost btn-sm">
+                        📄 @I18n.T("Discharge")
+                    </NavLink>
+                }
+                else if (isAvailable)
+                {
+                    <NavLink href="@($"ipd/admissions?bedId={bed.ID}")" class="btn btn-primary btn-sm" style="width: 100%;">
+                        + @I18n.T("Admit to") @bed.Name
+                    </NavLink>
+                }
+                else
+                {
+                    <NavLink href="ipd/bed-turnover" class="btn btn-secondary btn-sm" style="width:100%;">@I18n.T("Manage bed status")</NavLink>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@if (transferModalOpen && activeTransferSource != null)
+{
+    <div class="modal-backdrop" @onclick="CloseTransferModal">
+        <div class="modal-dialog" @onclick:stopPropagation="true">
+            <div class="panel">
+                <div class="panel-heading">
+                    <div>
+                        <h2>@I18n.T("Transfer Patient Bed")</h2>
+                        <p>@I18n.T("Move patient to a different available bed or cabin")</p>
+                    </div>
+                    <button class="icon-btn" @onclick="CloseTransferModal">✕</button>
+                </div>
+                <div style="padding: 20px;">
+                    <div class="patient-summary" style="margin-bottom: 16px;">
+                        <div>
+                            <b>@activeTransferSource.Occupancy.PatientName</b>
+                            <br /><small>Reg No: @activeTransferSource.Occupancy.RegNo · Patient ID: @activeTransferSource.Occupancy.PatientID</small>
+                        </div>
+                        <div style="text-align:right;">
+                            <span>@I18n.T("Current Bed:")</span> <b>@activeTransferSource.Bed.Name</b>
+                        </div>
+                    </div>
+
+                    <label style="display:block; margin-bottom: 16px;">
+                        <span style="font-weight:700; font-size:11px; color:#5c687a; display:block; margin-bottom:6px;">@I18n.T("Select destination bed / cabin *")</span>
+                        <select @bind="targetBedId" style="width:100%;">
+                            <option value="0">@I18n.T("-- Select available bed --")</option>
+                            @foreach (var candidate in availableBedsForTransfer)
+                            {
+                                var cCat = categories.FirstOrDefault(c => c.ID == candidate.CategoryID);
+                                <option value="@candidate.ID">@candidate.Name (@(cCat?.Name ?? "Bed") - @I18n.FormatCurrency(cCat?.Rate ?? 0)/day)</option>
+                            }
+                        </select>
+                    </label>
+
+                    <label style="display:block; margin-bottom: 16px;">
+                        <span style="font-weight:700; font-size:11px; color:#5c687a; display:block; margin-bottom:6px;">@I18n.T("Transfer date & time *")</span>
+                        <InputDate Type="InputDateType.DateTimeLocal" @bind-Value="transferDate" />
+                    </label>
+
+                    <label style="display:block; margin-bottom: 16px;">
+                        <span style="font-weight:700; font-size:11px; color:#5c687a; display:block; margin-bottom:6px;">@I18n.T("Transfer remarks (optional)")</span>
+                        <input @bind="transferRemarks" placeholder="@I18n.T("Reason for transfer, medical urgency, upgraded cabin...")" />
+                    </label>
+
+                    <div class="form-actions" style="margin-top:10px;">
+                        <button class="btn btn-primary" @onclick="ExecuteTransferAsync" disabled="@(targetBedId <= 0 || isSubmitting)">
+                            @(isSubmitting ? I18n.T("Saving…") : I18n.T("Confirm & Transfer Bed"))
+                        </button>
+                        <button class="btn btn-ghost" @onclick="CloseTransferModal">@I18n.T("Cancel")</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (lastTransfer != null)
+{
+    <div id="bed-transfer-print" class="print-sheet panel">
+        <PrintDocumentHeader Title="Patient Bed Transfer Slip"
+                             DocNo="@lastTransfer.RegNo"
+                             DocNoLabel="IPD Reg. #"
+                             QrPayload="@BarcodeQr.GenerateIpdQrPayload(0, lastTransfer.RegNo, lastTransfer.PatientName ?? "", lastTransfer.ToBed ?? "")" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("IPD Reg No:")</span> <b>@lastTransfer.RegNo</b></div>
+            <div><span>@I18n.T("Patient ID")</span> <b>@lastTransfer.PatientID</b></div>
+            <div><span>@I18n.T("Patient Name")</span> <b>@lastTransfer.PatientName</b></div>
+            <div><span>@I18n.T("From Bed:")</span> <b>@lastTransfer.FromBed</b></div>
+            <div><span>@I18n.T("To Bed:")</span> <b>@lastTransfer.ToBed</b></div>
+            <div><span>@I18n.T("New Rate:")</span> <b>@I18n.FormatCurrency(lastTransfer.Rate) / day</b></div>
+            <div><span>@I18n.T("Reason:")</span> <b>@(string.IsNullOrWhiteSpace(lastTransfer.Remarks) ? "—" : lastTransfer.Remarks)</b></div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                             SignTitle3="Transferred By / Floor Nurse"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+}
+
+@code {
+    private List<BedCabin> beds = [];
+    private List<BedCabin> filteredBeds = [];
+    private List<BedCategory> categories = [];
+    private List<IpdDepartment> departments = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<int, OccupancyDetails> activeOccupancies = [];
+
+    private int selectedDeptId = 0;
+    private int selectedCatId = 0;
+    private string statusFilter = "all";
+    private string bedScanQuery = "";
+    private int occupiedCount = 0;
+    private int availableCount = 0;
+    private int cleaningCount = 0;
+
+    private bool transferModalOpen = false;
+    private bool isSubmitting = false;
+    private TransferSource? activeTransferSource;
+    private int targetBedId = 0;
+    private string transferRemarks = "";
+    private DateTime transferDate = DateTime.Now;
+    private List<BedCabin> availableBedsForTransfer = [];
+    private TransferReceipt? lastTransfer;
+
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        departments = await db.IpdDepartments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        categories = await db.BedCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        beds = await db.BedCabins.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+
+        var activeAdmissions = await db.PatientAdmissions.AsNoTracking()
+            .Where(x => x.IsAdmitted == true && x.BedCabinID != null)
+            .ToListAsync();
+
+        var patientIds = activeAdmissions.Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToArray();
+        var patientMap = patientIds.Length == 0 
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) 
+            : await db.Registrations.AsNoTracking()
+                .Where(x => patientIds.Contains(x.PatientID))
+                .ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
+
+        activeOccupancies.Clear();
+        foreach (var adm in activeAdmissions)
+        {
+            if (adm.BedCabinID.HasValue)
+            {
+                var doc = doctors.FirstOrDefault(d => d.ID == adm.Consultant);
+                activeOccupancies[adm.BedCabinID.Value] = new OccupancyDetails
+                {
+                    AdmissionID = adm.ID,
+                    RegNo = adm.RegNo,
+                    PatientID = adm.PatientID,
+                    PatientName = adm.PatientID != null && patientMap.TryGetValue(adm.PatientID, out var pName) ? pName : null,
+                    AdmissionDate = adm.AdmissionDate,
+                    ConsultantName = doc != null ? $"{doc.Title} {doc.Name}" : null,
+                    Diagnosis = adm.Diagnosis
+                };
+            }
+        }
+
+        occupiedCount = beds.Count(b => b.IsAllocated || activeOccupancies.ContainsKey(b.ID));
+        availableCount = beds.Count(b => !b.IsAllocated && !activeOccupancies.ContainsKey(b.ID) && b.Status == BedStatuses.Available);
+        cleaningCount = beds.Count(b => !b.IsAllocated && !activeOccupancies.ContainsKey(b.ID) && b.Status == BedStatuses.Cleaning);
+        FilterChanged();
+    }
+
+    private void FilterChanged()
+    {
+        IEnumerable<BedCabin> query = beds;
+
+        if (selectedDeptId > 0)
+        {
+            var deptCategoryIds = categories.Where(c => c.IpdDepartmentID == selectedDeptId).Select(c => c.ID).ToHashSet();
+            query = query.Where(b => deptCategoryIds.Contains(b.CategoryID));
+        }
+
+        if (selectedCatId > 0)
+        {
+            query = query.Where(b => b.CategoryID == selectedCatId);
+        }
+
+        if (statusFilter == "occupied")
+        {
+            query = query.Where(b => b.IsAllocated || activeOccupancies.ContainsKey(b.ID));
+        }
+        else if (statusFilter == "available")
+        {
+            query = query.Where(b => !b.IsAllocated && !activeOccupancies.ContainsKey(b.ID) && b.Status == BedStatuses.Available);
+        }
+        else if (statusFilter == "cleaning")
+        {
+            query = query.Where(b => !b.IsAllocated && !activeOccupancies.ContainsKey(b.ID) && b.Status == BedStatuses.Cleaning);
+        }
+        else if (statusFilter == "maintenance")
+        {
+            query = query.Where(b => !b.IsAllocated && !activeOccupancies.ContainsKey(b.ID) && b.Status == BedStatuses.Maintenance);
+        }
+
+        if (!string.IsNullOrWhiteSpace(bedScanQuery))
+        {
+            var q = bedScanQuery.Trim();
+            query = query.Where(b => (b.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || (activeOccupancies.TryGetValue(b.ID, out var occ) && (
+                                        (occ.RegNo?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                                     || (occ.PatientID?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                                     || (occ.PatientName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))));
+        }
+
+        filteredBeds = query.ToList();
+    }
+
+    private void ClearBedScan()
+    {
+        bedScanQuery = string.Empty;
+        FilterChanged();
+    }
+
+    private string CalculateStay(DateTime? admissionDate)
+    {
+        if (!admissionDate.HasValue) return "—";
+        var span = DateTime.Now - admissionDate.Value;
+        if (span.TotalDays < 1) return I18n.T("Today");
+        var days = (int)Math.Floor(span.TotalDays);
+        return $"{days} {I18n.T(days == 1 ? "day" : "days")}";
+    }
+
+    private void OpenTransferModal(BedCabin bed, OccupancyDetails occupancy)
+    {
+        activeTransferSource = new TransferSource(bed, occupancy);
+        targetBedId = 0;
+        transferRemarks = "";
+        transferDate = DateTime.Now;
+        availableBedsForTransfer = beds.Where(b => b.ID != bed.ID && !b.IsAllocated && b.Status == BedStatuses.Available && !activeOccupancies.ContainsKey(b.ID)).OrderBy(b => b.Name).ToList();
+        transferModalOpen = true;
+    }
+
+    private void CloseTransferModal()
+    {
+        transferModalOpen = false;
+        activeTransferSource = null;
+        isSubmitting = false;
+    }
+
+    private async Task ExecuteTransferAsync()
+    {
+        if (activeTransferSource == null || targetBedId <= 0) return;
+        isSubmitting = true;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+
+        try
+        {
+            var sourceBed = await db.BedCabins.FindAsync(activeTransferSource.Bed.ID);
+            var targetBed = await db.BedCabins.FindAsync(targetBedId);
+            var admission = await db.PatientAdmissions.FirstOrDefaultAsync(x => x.ID == activeTransferSource.Occupancy.AdmissionID);
+
+            if (sourceBed == null || targetBed == null || admission == null)
+            {
+                Fail(I18n.IsBangla ? "বেড স্থানান্তর ত্রুটি: রেকর্ড পাওয়া যায়নি।" : "Bed transfer error: Record not found.");
+                CloseTransferModal();
+                return;
+            }
+
+            var targetHasActiveAdmission = await db.PatientAdmissions
+                .AnyAsync(x => x.IsAdmitted == true && x.BedCabinID == targetBed.ID && x.ID != admission.ID);
+            if (targetBed.IsAllocated || targetBed.Status != BedStatuses.Available || targetHasActiveAdmission)
+            {
+                Fail(I18n.IsBangla ? "নির্বাচিত গন্তব্য বেডটি ইতিমধ্যে অন্য রোগীর জন্য বরাদ্দকৃত।" : "Selected destination bed is already allocated.");
+                CloseTransferModal();
+                return;
+            }
+
+            var activeMovement = await db.BedCabinTransactions
+                .Where(x => x.RegNo == admission.RegNo && x.EndDate == null)
+                .OrderByDescending(x => x.StartDate)
+                .FirstOrDefaultAsync();
+
+            if (transferDate < (admission.AdmissionDate ?? DateTime.MinValue)
+                || (activeMovement != null && transferDate <= activeMovement.StartDate))
+            {
+                Fail(I18n.IsBangla ? "স্থানান্তরের সময় অবশ্যই ভর্তি ও বর্তমান বেড বরাদ্দের পরের হতে হবে।" : "Transfer time must be after the admission and current bed-allocation time.");
+                isSubmitting = false;
+                return;
+            }
+
+            var openTransactions = await db.BedCabinTransactions
+                .Where(x => x.RegNo == admission.RegNo && x.EndDate == null)
+                .ToListAsync();
+
+            foreach (var t in openTransactions)
+            {
+                t.EndDate = transferDate.AddMinutes(-1);
+            }
+
+            sourceBed.IsAllocated = false;
+            sourceBed.Status = BedStatuses.Cleaning;
+            targetBed.IsAllocated = true;
+            targetBed.Status = BedStatuses.Occupied;
+
+            db.BedTurnovers.Add(new BedTurnover
+            {
+                BedCabinID = sourceBed.ID,
+                AdmissionID = admission.ID,
+                RegNo = admission.RegNo,
+                Status = "Cleaning",
+                RequestedAt = DateTime.Now
+            });
+
+            admission.BedCabinID = targetBed.ID;
+            admission.BedAdmissionDate = transferDate;
+            if (!string.IsNullOrWhiteSpace(transferRemarks))
+            {
+                admission.Comments = string.IsNullOrWhiteSpace(admission.Comments)
+                    ? $"Transferred to {targetBed.Name}: {transferRemarks}"
+                    : $"{admission.Comments} | Transferred to {targetBed.Name}: {transferRemarks}";
+            }
+
+            var targetCategory = await db.BedCategories.FindAsync(targetBed.CategoryID);
+            var userId = await CurrentUserIdAsync();
+            var targetRate = targetCategory?.Rate ?? 0;
+            long patientTransactionId;
+
+            if (admission.IsPackage == true)
+            {
+                var charge = new PatientPackageTransaction
+                {
+                    RegNo = admission.RegNo,
+                    ServiceID = targetBed.ID,
+                    ServiceRate = targetRate,
+                    Quantity = 0,
+                    IpdDepartmentID = targetCategory?.IpdDepartmentID,
+                    EnteredBy = userId,
+                    TransDate = DateTime.Now
+                };
+                db.PatientPackageTransactions.Add(charge);
+                await db.SaveChangesAsync();
+                patientTransactionId = charge.ID;
+            }
+            else
+            {
+                var charge = new PatientTransaction
+                {
+                    RegNo = admission.RegNo,
+                    ServiceID = targetBed.ID,
+                    ServiceRate = targetRate,
+                    Quantity = 0,
+                    IpdDepartmentID = targetCategory?.IpdDepartmentID,
+                    EnteredBy = userId,
+                    TransDate = DateTime.Now
+                };
+                db.PatientTransactions.Add(charge);
+                await db.SaveChangesAsync();
+                patientTransactionId = charge.ID;
+            }
+
+            db.BedCabinTransactions.Add(new BedCabinTransaction
+            {
+                BedCabinID = targetBed.ID,
+                RegNo = admission.RegNo,
+                PatientID = admission.PatientID,
+                Rate = targetRate,
+                PatientTransactionID = patientTransactionId,
+                StartDate = transferDate
+            });
+
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            lastTransfer = new TransferReceipt(admission.RegNo, admission.PatientID, activeTransferSource.Occupancy.PatientName,
+                sourceBed.Name, targetBed.Name, targetRate, transferDate, transferRemarks);
+            Success(I18n.IsBangla ? $"রোগী {admission.RegNo}-কে {sourceBed.Name} থেকে {targetBed.Name}-এ সফলভাবে স্থানান্তর করা হয়েছে। স্লিপ প্রিন্টের জন্য প্রস্তুত।" : $"Patient {admission.RegNo} successfully transferred from {sourceBed.Name} to {targetBed.Name}. Transfer slip is ready to print.");
+            CloseTransferModal();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            Fail(I18n.IsBangla ? $"স্থানান্তর ব্যর্থ হয়েছে: {ex.Message}" : $"Transfer failed: {ex.Message}");
+            CloseTransferModal();
+        }
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private async Task PrintTransferAsync() => await JS.InvokeVoidAsync("hpm.printElement", "bed-transfer-print");
+
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    private sealed class OccupancyDetails
+    {
+        public long AdmissionID { get; set; }
+        public string RegNo { get; set; } = "";
+        public string? PatientID { get; set; }
+        public string? PatientName { get; set; }
+        public DateTime? AdmissionDate { get; set; }
+        public string? ConsultantName { get; set; }
+        public string? Diagnosis { get; set; }
+    }
+
+    private sealed record TransferSource(BedCabin Bed, OccupancyDetails Occupancy);
+    private sealed record TransferReceipt(string RegNo, string? PatientID, string? PatientName, string FromBed,
+        string ToBed, decimal Rate, DateTime TransferDate, string Remarks);
+}

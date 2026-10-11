@@ -1,0 +1,604 @@
+@page "/tickets"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Consultation Tickets") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Module 03", "Module 03")</span>
+        <h1>@I18n.T("OPD Consultation Tickets")</h1>
+        <p>@I18n.T("Doctor consultation fee collection & token queue.")</p>
+    </div>
+    <div class="record-actions">
+        <button class="btn btn-secondary" @onclick="PrintDailyAsync">🖨️ @I18n.T("Print Daily List")</button>
+        <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New Ticket")</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="workspace-grid compact">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID == 0 ? I18n.T("Issue New Consultation Ticket") : $"{I18n.T("Edit Ticket")} #{editor.ID}")</h2>
+                <p>@I18n.T("Doctor assignment, room scheduling & ticket fee.")</p>
+            </div>
+            <span class="badge @(editor.ID == 0 ? "emerald-badge" : "teal-badge")">@(editor.ID == 0 ? I18n.T("AUTO POST ON SAVE", "AUTO POST ON SAVE") : "TICKET #" + editor.ID)</span>
+        </div>
+        <EditForm Model="editor" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="form-grid">
+                <label>
+                    <span>@I18n.T("Patient ID (Optional)")</span>
+                    <span class="input-action">
+                        <InputText @bind-Value="editor.RegNo" placeholder="e.g. 202600001" />
+                        <button type="button" @onclick="FindPatientAsync">@I18n.T("Find")</button>
+                    </span>
+                </label>
+                <label>
+                    <span>@I18n.T("Patient Name *")</span>
+                    <InputText @bind-Value="editor.Name" placeholder="Patient's full name" />
+                </label>
+                <label>
+                    <span>@I18n.T("Age")</span>
+                    <InputText @bind-Value="editor.Age" placeholder="e.g. 35Y" />
+                </label>
+                <label>
+                    <span>@I18n.T("Sex")</span>
+                    <InputSelect @bind-Value="editor.Sex">
+                        <option value="">@I18n.T("Select")</option>
+                        <option value="Male">@I18n.T("Male")</option>
+                        <option value="Female">@I18n.T("Female")</option>
+                        <option value="Other">@I18n.T("Other")</option>
+                    </InputSelect>
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Consultant Doctor *")</span>
+                    <InputSelect @bind-Value="editor.DoctorID" @bind-Value:after="DoctorChanged">
+                        @foreach (var doctor in doctors)
+                        {
+                            <option value="@doctor.ID">@DoctorLabel(doctor)</option>
+                        }
+                    </InputSelect>
+                </label>
+                <label>
+                    <span>@I18n.T("Department *")</span>
+                    <InputSelect @bind-Value="editor.DeptID">
+                        @foreach (var dept in departments)
+                        {
+                            <option value="@dept.ID">@dept.Name</option>
+                        }
+                    </InputSelect>
+                </label>
+                <label>
+                    <span>@I18n.T("Room No.")</span>
+                    <InputText @bind-Value="editor.Room" placeholder="Room" />
+                </label>
+                <label>
+                    <span>@I18n.T("Ticket Type / Rate")</span>
+                    <select value="@editor.TicketRate" @onchange="TicketTypeChanged">
+                        @foreach (var type in ticketTypes)
+                        {
+                            <option value="@type.ID">@type.Name (@I18n.FormatCurrency(type.Amount))</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Total Fee")</span>
+                    <InputNumber @bind-Value="editor.Total" />
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Clinical Comments / Notes")</span>
+                    <InputTextArea @bind-Value="editor.Comments" placeholder="Optional notes for doctor..." />
+                </label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit" disabled="@saving">@(saving ? I18n.T("Issuing Ticket…") : editor.ID == 0 ? I18n.T("Issue Consultation Ticket") : I18n.T("Update Ticket"))</button>
+                @if (editor.ID > 0)
+                {
+                    <button class="btn btn-secondary" type="button" @onclick="PrintTicketAsync">🖨️ @I18n.T("Print Ticket")</button>
+                    <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync" style="color: #dc2626;">@I18n.T("Delete")</button>
+                }
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+
+    <div class="panel list-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Today's Issued Tickets")</h2>
+                <p>@tickets.Count @I18n.T("consultation(s) issued")</p>
+            </div>
+            <span class="date-chip">@DateTime.Today.ToString("dd MMM")</span>
+        </div>
+
+        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan Ticket Barcode / QR or type Ticket # / Patient ID...", "Scan Ticket Barcode / QR or type Ticket # / Patient ID...")"
+                   @bind="ticketScanQuery"
+                   @bind:event="oninput"
+                   @onkeydown="HandleTicketScanKeyDown" />
+            @if (!string.IsNullOrWhiteSpace(ticketScanQuery))
+            {
+                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearTicketScan">✕</button>
+            }
+        </div>
+
+        <div class="record-list">
+            @if (!FilteredTickets.Any())
+            {
+                <div class="empty-state">@I18n.T("No matching consultation tickets found.")</div>
+            }
+            @foreach (var ticket in FilteredTickets)
+            {
+                <div class="record-card static">
+                    <span class="ticket-no">#@ticket.ID</span>
+                    <span class="record-main">
+                        <strong>@ticket.Name</strong>
+                        <small>@DoctorName(ticket.DoctorID) &bull; @DepartmentName(ticket.DeptID) &bull; Rm: @ticket.Room</small>
+                    </span>
+                    <strong class="amount">@(I18n.FormatCurrency(ticket.Total))</strong>
+                    <span class="record-actions">
+                        <button class="icon-btn" @onclick="() => Select(ticket)" title="@I18n.T("Edit")">@I18n.T("Edit")</button>
+                        <button class="icon-btn" @onclick="() => Print(ticket)" title="@I18n.T("Print")">🖨️</button>
+                        <button class="icon-btn danger" @onclick="() => DeleteAsync(ticket)" title="@I18n.T("Delete")">×</button>
+                    </span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div id="ticket-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="OPD Doctor Consultation Ticket"
+                             DocNo="@($"#{editor.ID}")"
+                             DocNoLabel="Ticket"
+                             BarcodeCode="@($"TKT-{editor.ID:00000}")"
+                             QrPayload="@BarcodeQr.GenerateTicketQrPayload(editor.ID, int.TryParse(editor.RegNo, out var pid) ? pid : 0, editor.Name ?? "", DoctorName(editor.DoctorID), editor.Total)" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Patient Name")</span><b>@editor.Name</b></div>
+            <div><span>@I18n.T("Patient ID")</span>@(string.IsNullOrWhiteSpace(editor.RegNo) ? I18n.T("Walk-in") : editor.RegNo)</div>
+            <div><span>@I18n.T("Age / Sex")</span>@editor.Age / @editor.Sex</div>
+            <div><span>@I18n.T("Issue Date")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
+            <div><span>@I18n.T("Consultant Doctor")</span><b>@DoctorName(editor.DoctorID)</b></div>
+            <div><span>@I18n.T("Department")</span>@DepartmentName(editor.DeptID)</div>
+            <div><span>@I18n.T("Room No.")</span><b>@editor.Room</b></div>
+            <div><span>@I18n.T("Consultation Fee")</span><b style="color:#059669;">@(I18n.FormatCurrency(editor.Total))</b></div>
+            <div><span>@I18n.T("Clinical Notes")</span>@editor.Comments</div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                             SignTitle3="Reception / Cash Desk"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+<div id="tickets-daily-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Daily Consultation Tickets Register"
+                             Subtitle="@($"Register Date: {DateTime.Today:dd MMM yyyy}")" />
+
+        <table class="data-table" style="margin-top: 12px;">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Ticket #", "Ticket #")</th>
+                    <th>@I18n.T("Patient Name")</th>
+                    <th>@I18n.T("Doctor")</th>
+                    <th>@I18n.T("Department")</th>
+                    <th>@I18n.T("Room")</th>
+                    <th class="num">@I18n.T("Fee", "Fee")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var t in tickets)
+                {
+                    <tr>
+                        <td>#@t.ID</td>
+                        <td>@t.Name</td>
+                        <td>@DoctorName(t.DoctorID)</td>
+                        <td>@DepartmentName(t.DeptID)</td>
+                        <td>@t.Room</td>
+                        <td class="num">@(I18n.FormatCurrency(t.Total))</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-total">
+            <div class="grand">
+                <span>@I18n.T("Total Collection:")</span>
+                <strong>@(I18n.FormatCurrency(tickets.Sum(x => x.Total)))</strong>
+            </div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Duty Cashier"
+                             SignTitle3="Accounts Supervisor"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "patientId")]
+    public string? QueryPatientId { get; set; }
+
+    private OPDTicket editor = NewTicket();
+    private List<DoctorsProfile> doctors = [];
+    private List<Department> departments = [];
+    private List<TicketType> ticketTypes = [];
+    private List<OPDTicket> tickets = [];
+    private string ticketScanQuery = string.Empty;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+
+    private IEnumerable<OPDTicket> FilteredTickets => string.IsNullOrWhiteSpace(ticketScanQuery)
+        ? tickets
+        : tickets.Where(t => t.ID.ToString().Contains(ticketScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                          || (t.Name?.Contains(ticketScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (t.RegNo?.Contains(ticketScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        ticketTypes = await db.TicketTypes.AsNoTracking().OrderBy(x => x.ID).ToListAsync();
+        SetDefaults();
+        await LoadTicketsAsync();
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryPatientId) && editor.ID == 0)
+        {
+            editor.RegNo = QueryPatientId.Trim();
+            await FindPatientAsync();
+        }
+    }
+
+    private async Task LoadTicketsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var today = DateTime.Today;
+        var tomorrow = today.AddDays(1);
+        tickets = await db.OPDTickets.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).OrderByDescending(x => x.ID).Take(50).ToListAsync();
+    }
+
+    private async Task FindPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.RegNo)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.RegNo.Trim());
+        if (patient is null)
+        {
+            messageClass = "danger";
+            message = $"Patient ID '{editor.RegNo}' was not found.";
+            return;
+        }
+        editor.Name = patient.Name;
+        editor.Age = Age(patient.DateOfBirth);
+        editor.Sex = patient.Sex;
+        messageClass = "success";
+        message = $"Loaded details for patient {patient.Name} ({patient.PatientID}).";
+    }
+
+    private void DoctorChanged()
+    {
+        var doc = doctors.FirstOrDefault(x => x.ID == editor.DoctorID);
+        if (doc != null)
+        {
+            if (!string.IsNullOrWhiteSpace(doc.Room)) editor.Room = doc.Room;
+            if (doc.Department is int deptId && deptId > 0) editor.DeptID = deptId;
+        }
+    }
+
+    private void TicketTypeChanged(ChangeEventArgs e)
+    {
+        editor.TicketRate = e.Value?.ToString();
+        if (int.TryParse(editor.TicketRate, out var id))
+        {
+            editor.Total = ticketTypes.FirstOrDefault(x => x.ID == id)?.Amount ?? 0;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            editor.Posted = true;
+            editor.OPD = 1;
+            editor.Vat = 0;
+            if (editor.ID == 0)
+            {
+                editor.TransDate = DateTime.Now;
+                editor.EnteredBy = userId;
+                db.OPDTickets.Add(editor);
+            }
+            else
+            {
+                db.OPDTickets.Update(editor);
+            }
+            await db.SaveChangesAsync();
+            var encounter = await ClinicalEncounterWorkflow.AttachTicketAsync(db, editor, userId);
+            await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{editor.ID}", editor.ID,
+                editor.Total, editor.TransDate, userId, $"OPD consultation ticket #{editor.ID}",
+                AccountingPosting.Cash, 10);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            var number = editor.ID;
+            messageClass = "success";
+            message = $"Consultation ticket #{number} issued successfully. Doctor queue #{encounter.QueueNo}.";
+            await LoadTicketsAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            messageClass = "danger";
+            message = $"Could not issue ticket: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Reset()
+    {
+        ResetEditor();
+        message = string.Empty;
+    }
+
+    private void ResetEditor()
+    {
+        editor = NewTicket();
+        SetDefaults();
+    }
+
+    private void Select(OPDTicket t)
+    {
+        editor = new OPDTicket
+        {
+            ID = t.ID,
+            TransDate = t.TransDate,
+            RegNo = t.RegNo,
+            TicketRate = t.TicketRate,
+            Name = t.Name,
+            Age = t.Age,
+            Sex = t.Sex,
+            OPD = t.OPD,
+            Vat = t.Vat,
+            DoctorID = t.DoctorID,
+            DeptID = t.DeptID,
+            Room = t.Room,
+            Comments = t.Comments,
+            Total = t.Total,
+            Posted = t.Posted,
+            EnteredBy = t.EnteredBy
+        };
+        message = string.Empty;
+    }
+
+    private async Task DeleteAsync(OPDTicket t)
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", $"Delete consultation ticket #{t.ID} for {t.Name}?")) return;
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", "Reason for reversing this consultation ticket:");
+        if (string.IsNullOrWhiteSpace(reason)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        var entity = await db.OPDTickets.FindAsync(t.ID);
+        if (entity is not null)
+        {
+            var encounter = await db.PatientEncounters.SingleOrDefaultAsync(x => x.TicketID == entity.ID);
+            if (encounter?.Status is EncounterStatuses.InConsultation or EncounterStatuses.Completed)
+            {
+                messageClass = "danger";
+                message = "A ticket linked to an active or completed consultation cannot be deleted.";
+                return;
+            }
+            var userId = await CurrentUserIdAsync();
+            await OperationalAccounting.ReverseRevenueAsync(db, "OPD Ticket", $"OPD-TICKET:{entity.ID}", entity.ID,
+                entity.Total, entity.TransDate, userId, reason, AccountingPosting.Cash, 10);
+            if (encounter is not null)
+            {
+                encounter.TicketID = null;
+                encounter.Status = EncounterStatuses.Cancelled;
+                encounter.UpdatedAt = DateTime.Now;
+            }
+            db.Remove(entity);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+        }
+        if (editor.ID == t.ID) ResetEditor();
+        messageClass = "success";
+        message = "Consultation ticket deleted.";
+        await LoadTicketsAsync();
+    }
+
+    private Task DeleteSelectedAsync() => DeleteAsync(editor);
+    private async Task Print(OPDTicket t)
+    {
+        Select(t);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("hpm.printElement", "ticket-print", $"Ticket {t.ID}");
+    }
+    private async Task HandleTicketScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(ticketScanQuery))
+        {
+            await ProcessTicketScanAsync(ticketScanQuery.Trim());
+        }
+    }
+
+    private async Task ProcessTicketScanAsync(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        // 1. Check if it is a QR payload: HPM:TKT|ID:123...
+        if (raw.StartsWith("HPM:TKT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var idPart = parts.FirstOrDefault(p => p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase));
+            if (idPart != null && long.TryParse(idPart.Substring(3), out var tktId))
+            {
+                await LoadTicketByIdAsync(tktId);
+                return;
+            }
+        }
+
+        // 2. Check if it is a Patient QR payload: HPM:PAT|ID:12|REG:202600001...
+        if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                var regNo = regPart.Substring(4).Trim();
+                editor.RegNo = regNo;
+                await FindPatientAsync();
+                return;
+            }
+        }
+
+        // 3. Check for TKT-XXXXX format
+        if (raw.StartsWith("TKT-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(4), out var scannedId))
+        {
+            await LoadTicketByIdAsync(scannedId);
+            return;
+        }
+
+        // 4. If numeric, check if it matches an existing ticket ID first
+        if (long.TryParse(raw, out var numericId))
+        {
+            var matched = tickets.FirstOrDefault(t => t.ID == numericId);
+            if (matched != null)
+            {
+                Select(matched);
+                messageClass = "success";
+                message = $"Ticket #{numericId} selected from scan.";
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dbTicket = await db.OPDTickets.AsNoTracking().FirstOrDefaultAsync(t => t.ID == numericId);
+            if (dbTicket != null)
+            {
+                Select(dbTicket);
+                messageClass = "success";
+                message = $"Ticket #{numericId} loaded from database.";
+                return;
+            }
+
+            // Otherwise treat as Patient ID
+            editor.RegNo = raw;
+            await FindPatientAsync();
+            return;
+        }
+
+        // 5. Try loading patient with this search term
+        editor.RegNo = raw;
+        await FindPatientAsync();
+    }
+
+    private async Task LoadTicketByIdAsync(long id)
+    {
+        var matched = tickets.FirstOrDefault(t => t.ID == id);
+        if (matched != null)
+        {
+            Select(matched);
+            messageClass = "success";
+            message = $"Ticket #{id} selected from scan.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var dbTicket = await db.OPDTickets.AsNoTracking().FirstOrDefaultAsync(t => t.ID == id);
+        if (dbTicket != null)
+        {
+            Select(dbTicket);
+            messageClass = "success";
+            message = $"Ticket #{id} loaded from database.";
+        }
+        else
+        {
+            messageClass = "danger";
+            message = $"Ticket #{id} not found.";
+        }
+    }
+
+    private void ClearTicketScan()
+    {
+        ticketScanQuery = string.Empty;
+    }
+
+    private Task PrintTicketAsync() => JS.InvokeVoidAsync("hpm.printElement", "ticket-print", $"Ticket {editor.ID}").AsTask();
+    private Task PrintDailyAsync() => JS.InvokeVoidAsync("hpm.printElement", "tickets-daily-print", $"Tickets {DateTime.Today:yyyy-MM-dd}").AsTask();
+
+    private void SetDefaults()
+    {
+        if (doctors.Count > 0)
+        {
+            editor.DoctorID = doctors[0].ID;
+            editor.Room = doctors[0].Room;
+            if (doctors[0].Department is int deptId && deptId > 0)
+            {
+                editor.DeptID = deptId;
+            }
+        }
+        if (editor.DeptID == 0 && departments.Count > 0) editor.DeptID = departments[0].ID;
+        if (ticketTypes.Count > 0)
+        {
+            editor.TicketRate = ticketTypes[0].ID.ToString();
+            editor.Total = ticketTypes[0].Amount;
+        }
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private static OPDTicket NewTicket() => new() { TransDate = DateTime.Now, Posted = true, OPD = 1 };
+    private string DoctorName(int id) => doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
+    private string DepartmentName(int id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "Department";
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private static string Age(DateTime birth)
+    {
+        var years = DateTime.Today.Year - birth.Year;
+        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        return $"{Math.Max(0, years)}Y";
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

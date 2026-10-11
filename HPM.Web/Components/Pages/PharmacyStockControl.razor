@@ -1,0 +1,338 @@
+@page "/pharmacy/stock-control"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.PharmacyOperator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@using System.Data
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Stock Adjustments & Audit", "Pharmacy Stock Control") | @Branding.HospitalName</PageTitle>
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Pharmacy Governance", "Pharmacy governance")</span>
+        <h1>@I18n.T("Stock Adjustment, Disposal & Audit", "Stock Adjustment, Disposal & Audit")</h1>
+        <p>@I18n.T("Controlled physical-count correction, damaged/expired disposal and movement reconciliation.", "Controlled physical-count correction, damaged/expired disposal and movement reconciliation.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New adjustment", "New adjustment")</button>
+</div>
+@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
+
+<div class="metric-grid" style="margin-bottom:24px">
+    <div class="metric-card accent-red"><span>@I18n.T("Expired on hand", "Expired on hand")</span><strong>@stocks.Count(x=>x.Balance>0&&x.ExpireDate<DateTime.Today)</strong><small>@I18n.T("Batch lines requiring disposal", "Batch lines requiring disposal")</small></div>
+    <div class="metric-card accent-amber"><span>@I18n.T("Damage/expired value", "Damage/expired value")</span><strong>@I18n.FormatCurrency(disposedValue)</strong><small>@I18n.T("Posted write-offs", "Posted write-offs")</small></div>
+    <div class="metric-card accent-blue"><span>@I18n.T("Audit lines", "Audit lines")</span><strong>@audit.Count</strong><small>@I18n.T("Medicine-store balances", "Medicine-store balances")</small></div>
+    <div class="metric-card accent-violet"><span>@I18n.T("Variance lines", "Variance lines")</span><strong>@audit.Count(x=>x.Variance!=0)</strong><small>@I18n.T("Needs investigation", "Needs investigation")</small></div>
+</div>
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(savedAdjustment==null ? I18n.T("Post stock adjustment", "Post stock adjustment") : $"{I18n.T("Adjustment", "Adjustment")} #{savedAdjustment.ID}")</h2>
+                <p>@I18n.T("Posted records are immutable", "Posted records are immutable")</p>
+            </div>
+            @if(savedAdjustment!=null){<span class="badge">@I18n.T("POSTED", "POSTED")</span>}
+        </div>
+        <div class="form-grid">
+            <label>
+                <span>@I18n.T("Store *", "Store *")</span>
+                <select @bind="storeId" @bind:after="SelectionContextChanged">
+                    <option value="0">@I18n.T("Select store", "Select store")</option>
+                    @foreach(var x in stores.Where(x=>x.IsActive)){<option value="@x.ID">@x.Name</option>}
+                </select>
+            </label>
+            <label>
+                <span>@I18n.T("Adjustment type *", "Adjustment type *")</span>
+                <select @bind="adjustmentType" @bind:after="SelectionContextChanged">
+                    <option value="Count Correction">@I18n.T("Count Correction", "Count Correction")</option>
+                    <option value="Damaged Disposal">@I18n.T("Damaged Disposal", "Damaged Disposal")</option>
+                    <option value="Expired Disposal">@I18n.T("Expired Disposal", "Expired Disposal")</option>
+                </select>
+            </label>
+            <label class="span-2">
+                <span>@I18n.T("Reason / authorization *", "Reason / authorization *")</span>
+                <textarea @bind="reason" maxlength="500" disabled="@(savedAdjustment!=null)"></textarea>
+            </label>
+        </div>
+        @if(savedAdjustment==null)
+        {
+            <div class="form-section-title">@I18n.T("Batch adjustment", "Batch adjustment")</div>
+            <div class="form-grid three">
+                <label class="span-2">
+                    <span>@I18n.T("Medicine batch *", "Medicine batch *")</span>
+                    <select @bind="stockId" @bind:after="StockChanged">
+                        <option value="0">@I18n.T("Select batch", "Select batch")</option>
+                        @foreach(var x in AvailableStocks){
+                            <option value="@x.ID">@MedicineName(x.ServiceID) · @x.BatchNo · exp @x.ExpireDate?.ToString("MMM yy") · balance @x.Balance</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@LocalizedInputLabel *</span>
+                    <InputNumber @bind-Value="enteredQuantity"/>
+                </label>
+                <label>
+                    <span>@I18n.T("Current balance", "Current balance")</span>
+                    <input value="@selectedBalance.ToString("N2")" disabled/>
+                </label>
+                <label>
+                    <span>@I18n.T("Calculated change", "Calculated change")</span>
+                    <input value="@CalculatedChange.ToString("+0.##;-0.##;0")" disabled/>
+                </label>
+            </div>
+            <div class="form-actions"><button class="btn btn-secondary" @onclick="AddLine">+ @I18n.T("Add batch", "Add batch")</button></div>
+        }
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Medicine / Batch", "Medicine / Batch")</th>
+                        <th class="num">@I18n.T("Before", "Before")</th>
+                        <th class="num">@I18n.T("Change", "Change")</th>
+                        <th class="num">@I18n.T("After", "After")</th>
+                        <th class="num">@I18n.T("Value", "Value")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if(lines.Count==0){<tr><td colspan="6"><div class="empty-state small">@I18n.T("No batch added.", "No batch added.")</div></td></tr>}
+                    @for(var i=0;i<lines.Count;i++){
+                        var index=i;var x=lines[i];
+                        <tr>
+                            <td>@MedicineName(x.ServiceID)<br/><small>@x.BatchNo · @x.ExpireDate?.ToString("dd MMM yyyy")</small></td>
+                            <td class="num">@x.BeforeQuantity</td>
+                            <td class="num">@x.ChangeQuantity.ToString("+0.##;-0.##;0")</td>
+                            <td class="num">@x.AfterQuantity</td>
+                            <td class="num">@I18n.FormatCurrency(Math.Abs(x.ChangeQuantity*x.UnitCost))</td>
+                            <td>@if(savedAdjustment==null){<button class="icon-btn" @onclick="()=>lines.RemoveAt(index)">@I18n.T("Remove", "Remove")</button>}</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="form-actions">
+            @if(savedAdjustment==null){
+                <button class="btn btn-primary" @onclick="PostAsync" disabled="@isSaving">@(isSaving ? I18n.T("Posting...", "Posting...") : I18n.T("Post stock adjustment", "Post stock adjustment"))</button>
+            }else{
+                <button class="btn btn-secondary" @onclick="PrintAdjustmentAsync">@I18n.T("Print adjustment", "Print adjustment")</button>
+            }
+        </div>
+    </div>
+    <div class="panel">
+        <div class="panel-heading">
+            <div><h2>@I18n.T("Adjustment history", "Adjustment history")</h2><p>@I18n.T("Latest posted stock movements", "Latest posted stock movements")</p></div>
+        </div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Adjustment", "Adjustment")</th>
+                        <th>@I18n.T("Store", "Store")</th>
+                        <th>@I18n.T("Type", "Type")</th>
+                        <th>@I18n.T("Date", "Date")</th>
+                        <th>@I18n.T("Reason", "Reason")</th>
+                        <th class="num">@I18n.T("Items", "Items")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var x in history){
+                        <tr>
+                            <td><b>#@x.ID</b></td>
+                            <td>@StoreName(x.StoreID)</td>
+                            <td><span class="pill">@I18n.T(x.AdjustmentType, x.AdjustmentType)</span></td>
+                            <td>@x.TransDate.ToString("dd MMM yy HH:mm")</td>
+                            <td>@x.Reason</td>
+                            <td class="num">@x.Items.Count</td>
+                            <td><button class="icon-btn" @onclick="()=>OpenAdjustment(x.ID)">@I18n.T("Open", "Open")</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="stock-audit-print" class="panel" style="margin-top:24px">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Stock audit & reconciliation", "Stock audit & reconciliation")</h2>
+            <p>@I18n.T("Opening snapshot + controlled movements versus live batch balance", "Opening snapshot + controlled movements versus live batch balance")</p>
+        </div>
+        <div style="display:flex;gap:8px">
+            <input style="max-width:260px" @bind="search" @bind:event="oninput" placeholder="@I18n.T("Search medicine/store", "Search medicine/store")"/>
+            <button class="btn btn-secondary no-print" @onclick="PrintAuditAsync">@I18n.T("Print audit", "Print audit")</button>
+        </div>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine / Store", "Medicine / Store")</th>
+                    <th class="num">@I18n.T("Opening", "Opening")</th>
+                    <th class="num">@I18n.T("Received", "Received")</th>
+                    <th class="num">@I18n.T("Sold", "Sold")</th>
+                    <th class="num">@I18n.T("Supplier return", "Supplier return")</th>
+                    <th class="num">@I18n.T("Customer restock", "Customer restock")</th>
+                    <th class="num">@I18n.T("Adjustments", "Adjustments")</th>
+                    <th class="num">@I18n.T("Expected", "Expected")</th>
+                    <th class="num">@I18n.T("Actual", "Actual")</th>
+                    <th class="num">@I18n.T("Variance", "Variance")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if(FilteredAudit.Count==0){<tr><td colspan="10"><div class="empty-state small">@I18n.T("No audit lines found.", "No audit lines found.")</div></td></tr>}
+                @foreach(var x in FilteredAudit){
+                    <tr>
+                        <td><b>@x.MedicineName</b><br/><small>@x.StoreName · baseline @x.CapturedAt.ToString("dd MMM yy HH:mm")</small></td>
+                        <td class="num">@x.Opening.ToString("N2")</td>
+                        <td class="num">@x.Received.ToString("N2")</td>
+                        <td class="num">@x.Sold.ToString("N2")</td>
+                        <td class="num">@x.SupplierReturn.ToString("N2")</td>
+                        <td class="num">@x.CustomerRestock.ToString("N2")</td>
+                        <td class="num">@x.Adjustments.ToString("+0.##;-0.##;0")</td>
+                        <td class="num">@x.Expected.ToString("N2")</td>
+                        <td class="num">@x.Actual.ToString("N2")</td>
+                        <td class="num"><span class="pill @(x.Variance==0?"pill-success":"pill-danger")">@x.Variance.ToString("+0.##;-0.##;0")</span></td>
+                    </tr>
+                }
+                <tr>
+                    <td><b>@I18n.T("Total", "Total")</b></td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.Opening).ToString("N2")</td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.Received).ToString("N2")</td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.Sold).ToString("N2")</td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.SupplierReturn).ToString("N2")</td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.CustomerRestock).ToString("N2")</td>
+                    <td class="num">@FilteredAudit.Sum(x=>x.Adjustments).ToString("N2")</td>
+                    <td class="num"><b>@FilteredAudit.Sum(x=>x.Expected).ToString("N2")</b></td>
+                    <td class="num"><b>@FilteredAudit.Sum(x=>x.Actual).ToString("N2")</b></td>
+                    <td class="num"><b>@FilteredAudit.Sum(x=>x.Variance).ToString("+0.##;-0.##;0")</b></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="batch-sale-trace-print" class="panel" style="margin-top:24px">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Sale batch trace & COGS", "Sale batch trace & COGS")</h2>
+            <p>@I18n.T("Exact source batch, expiry and purchase cost captured when each medicine was sold", "Exact source batch, expiry and purchase cost captured when each medicine was sold")</p>
+        </div>
+        <button class="btn btn-secondary no-print" @onclick="PrintBatchTraceAsync">@I18n.T("Print trace", "Print trace")</button>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Memo / Date", "Memo / Date")</th>
+                    <th>@I18n.T("Medicine", "Medicine")</th>
+                    <th>@I18n.T("Store / Batch", "Store / Batch")</th>
+                    <th>@I18n.T("Expiry", "Expiry")</th>
+                    <th class="num">@I18n.T("Qty", "Qty")</th>
+                    <th class="num">@I18n.T("Unit cost", "Unit cost")</th>
+                    <th class="num">@I18n.T("COGS", "COGS")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if(FilteredBatchSales.Count==0){<tr><td colspan="7"><div class="empty-state small">@I18n.T("No batch-traced sales found.", "No batch-traced sales found.")</div></td></tr>}
+                @foreach(var x in FilteredBatchSales){
+                    <tr>
+                        <td><b>#@x.MemoID</b><br/><small>@x.SoldAt.ToString("dd MMM yy HH:mm")</small></td>
+                        <td>@x.MedicineName</td>
+                        <td>@x.StoreName<br/><small>@(x.BatchNo ?? I18n.T("No batch", "No batch"))</small></td>
+                        <td>@x.ExpireDate?.ToString("dd MMM yyyy")</td>
+                        <td class="num">@x.Quantity.ToString("N2")</td>
+                        <td class="num">@I18n.FormatCurrency(x.BuyRate)</td>
+                        <td class="num"><b>@I18n.FormatCurrency(x.Cost)</b></td>
+                    </tr>
+                }
+                <tr>
+                    <td colspan="6"><b>@I18n.T("Total traced COGS", "Total traced COGS")</b></td>
+                    <td class="num"><b>@I18n.FormatCurrency(FilteredBatchSales.Sum(x=>x.Cost))</b></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if(savedAdjustment!=null)
+{
+    <div id="stock-adjustment-print" class="print-sheet panel">
+        <div class="print-brand">
+            <div><h1>@Branding.HospitalName</h1><p>@I18n.T("Stock Control", "Stock Control")</p></div>
+            <div><b>@I18n.T("Adjustment", "Adjustment") #@savedAdjustment.ID</b><br/><small>@savedAdjustment.TransDate.ToString("dd MMM yyyy HH:mm")</small></div>
+        </div>
+        <h2 class="print-title">@I18n.T(savedAdjustment.AdjustmentType, savedAdjustment.AdjustmentType)</h2>
+        <div class="print-grid">
+            <div><span>@I18n.T("Store:", "Store:")</span> <b>@StoreName(savedAdjustment.StoreID)</b></div>
+            <div><span>@I18n.T("Reason:", "Reason:")</span> <b>@savedAdjustment.Reason</b></div>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine / Batch", "Medicine / Batch")</th>
+                    <th class="num">@I18n.T("Before", "Before")</th>
+                    <th class="num">@I18n.T("Change", "Change")</th>
+                    <th class="num">@I18n.T("After", "After")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var x in lines){
+                    <tr>
+                        <td>@MedicineName(x.ServiceID)<br/><small>@x.BatchNo</small></td>
+                        <td class="num">@x.BeforeQuantity</td>
+                        <td class="num">@x.ChangeQuantity</td>
+                        <td class="num">@x.AfterQuantity</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-footer">
+            <span class="print-sign">@I18n.T("Counted By", "Counted By")</span>
+            <span class="print-sign">@I18n.T("Pharmacist", "Pharmacist")</span>
+            <span class="print-sign">@I18n.T("Authorized By", "Authorized By")</span>
+        </div>
+    </div>
+}
+
+@code{
+    private List<Service> medicines=[];private List<MedicineStore> stores=[];private List<MedicineStoreBalance> stocks=[];private List<MedicineStockAdjustment> history=[];private List<AdjustmentLine> lines=[];private List<AuditRow> audit=[];private List<BatchSaleRow> batchSales=[];private Dictionary<int,decimal> stockUnitCosts=[];private MedicineStockAdjustment? savedAdjustment;private int storeId=1,stockId;private string adjustmentType="Count Correction",reason="",search="",message="",messageClass="success";private decimal enteredQuantity,selectedBalance,disposedValue;private bool isSaving;
+    private IEnumerable<MedicineStoreBalance> AvailableStocks=>stocks.Where(x=>x.MedicineStoreID==storeId).OrderBy(x=>MedicineName(x.ServiceID)).ThenBy(x=>x.ExpireDate);
+    private string LocalizedInputLabel => adjustmentType=="Count Correction" ? I18n.T("Physical count", "Physical count") : I18n.T("Quantity to dispose", "Quantity to dispose");
+    private decimal CalculatedChange=>adjustmentType=="Count Correction"?enteredQuantity-selectedBalance:-enteredQuantity;
+    private List<AuditRow> FilteredAudit=>audit.Where(x=>string.IsNullOrWhiteSpace(search)||x.MedicineName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.StoreName.Contains(search,StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<BatchSaleRow> FilteredBatchSales=>batchSales.Where(x=>string.IsNullOrWhiteSpace(search)||x.MedicineName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.StoreName.Contains(search,StringComparison.OrdinalIgnoreCase)||(x.BatchNo?.Contains(search,StringComparison.OrdinalIgnoreCase)??false)||x.MemoID.ToString().Contains(search,StringComparison.OrdinalIgnoreCase)).ToList();
+    
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){await using var db=await DbFactory.CreateDbContextAsync();medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).OrderBy(x=>x.Name).ToListAsync();stores=await db.MedicineStores.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();stocks=await db.MedicineStoreBalances.AsNoTracking().ToListAsync();var challanIds=stocks.Where(x=>x.MedicineReceivingChallanSubID.HasValue).Select(x=>x.MedicineReceivingChallanSubID!.Value).Distinct().ToArray();var receivingCosts=challanIds.Length==0?[]:await db.MedicineReceivingChallanItems.AsNoTracking().Where(x=>challanIds.Contains(x.ID)).Select(x=>new{x.ID,x.BuyRate}).ToListAsync();var receivingCostMap=receivingCosts.ToDictionary(x=>x.ID,x=>x.BuyRate);stockUnitCosts=stocks.ToDictionary(x=>x.ID,x=>x.MedicineReceivingChallanSubID.HasValue&&receivingCostMap.TryGetValue(x.MedicineReceivingChallanSubID.Value,out var cost)?cost:medicines.FirstOrDefault(m=>m.ID==x.ServiceID)?.BuyRate??0);history=await db.MedicineStockAdjustments.AsNoTracking().Include(x=>x.Items).OrderByDescending(x=>x.ID).Take(150).ToListAsync();disposedValue=history.Where(x=>x.AdjustmentType.Contains("Disposal")).SelectMany(x=>x.Items).Sum(x=>Math.Abs(x.ChangeQuantity*x.UnitCost));await LoadAuditAsync(db);await LoadBatchTraceAsync(db);}
+    private void StockChanged(){var x=stocks.FirstOrDefault(x=>x.ID==stockId);selectedBalance=x?.Balance??0;enteredQuantity=adjustmentType=="Count Correction"?selectedBalance:0;}
+    private void SelectionContextChanged(){stockId=0;selectedBalance=0;enteredQuantity=0;lines=[];}
+    private void AddLine(){var stock=stocks.FirstOrDefault(x=>x.ID==stockId);if(stock==null){Fail(I18n.IsBangla ? "ঔষধ ব্যাচ নির্বাচন করুন।" : "Select a medicine batch.");return;}if(lines.Any(x=>x.StockBalanceID==stock.ID)){Fail(I18n.IsBangla ? "এই ব্যাচটি ইতিমধ্যে যোগ করা হয়েছে।" : "This batch is already added.");return;}var change=CalculatedChange;if(change==0){Fail(I18n.IsBangla ? "সমন্বয়ের পরিমাণ শূন্য হতে পারে না।" : "Adjustment change cannot be zero.");return;}if(stock.Balance+change<0){Fail(I18n.IsBangla ? "বাতিলের পরিমাণ বর্তমান স্টকের চেয়ে বেশি।" : "Disposal quantity exceeds current balance.");return;}if(adjustmentType=="Expired Disposal"&&stock.ExpireDate>=DateTime.Today){Fail(I18n.IsBangla ? "শুধুমাত্র মেয়াদোত্তীর্ণ ব্যাচ মেয়াদোত্তীর্ণ বাতিলে ব্যবহার করা যাবে।" : "Only an expired batch can use Expired Disposal.");return;}var cost=stockUnitCosts.TryGetValue(stock.ID,out var unitCost)?unitCost:0;lines.Add(new AdjustmentLine(stock.ID,stock.ServiceID,stock.BatchNo,stock.ExpireDate,stock.Balance,change,stock.Balance+change,cost));stockId=0;selectedBalance=0;enteredQuantity=0;message="";}
+    private async Task PostAsync(){if(storeId<=0||lines.Count==0||string.IsNullOrWhiteSpace(reason)){Fail(I18n.IsBangla ? "স্টোর, ব্যাচ সমন্বয় এবং কারণ আবশ্যক।" : "Store, batch adjustment and reason are required.");return;}isSaving=true;await using var db=await DbFactory.CreateDbContextAsync();await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);try{var uid=await CurrentUserIdAsync();var header=new MedicineStockAdjustment{StoreID=storeId,AdjustmentType=adjustmentType,Reason=reason.Trim(),IsPosted=true,EnteredBy=uid,TransDate=DateTime.Now};db.MedicineStockAdjustments.Add(header);await db.SaveChangesAsync();foreach(var line in lines){var stock=await db.MedicineStoreBalances.SingleAsync(x=>x.ID==line.StockBalanceID);if(stock.MedicineStoreID!=storeId||stock.Balance!=line.BeforeQuantity)throw new InvalidOperationException($"Stock changed for {MedicineName(line.ServiceID)}; reload before posting.");if(adjustmentType=="Expired Disposal"&&stock.ExpireDate>=DateTime.Today)throw new InvalidOperationException("A selected batch is not expired.");stock.Balance=line.AfterQuantity;db.MedicineStockAdjustmentItems.Add(new MedicineStockAdjustmentItem{AdjustmentID=header.ID,StockBalanceID=stock.ID,ServiceID=line.ServiceID,BatchNo=line.BatchNo,ExpireDate=line.ExpireDate,BeforeQuantity=line.BeforeQuantity,ChangeQuantity=line.ChangeQuantity,AfterQuantity=line.AfterQuantity,UnitCost=line.UnitCost});}await db.SaveChangesAsync();await tx.CommitAsync();savedAdjustment=header;Success(I18n.IsBangla ? $"স্টক সমন্বয় #{header.ID} পোস্ট হয়েছে।" : $"Stock adjustment #{header.ID} posted.");await LoadAsync();}catch(Exception ex){await tx.RollbackAsync();Fail(I18n.IsBangla ? $"সমন্বয় ব্যর্থ হয়েছে: {ex.Message}" : $"Adjustment failed: {ex.Message}");}finally{isSaving=false;}}
+    private async Task OpenAdjustment(long id){await using var db=await DbFactory.CreateDbContextAsync();savedAdjustment=await db.MedicineStockAdjustments.AsNoTracking().Include(x=>x.Items).SingleAsync(x=>x.ID==id);storeId=savedAdjustment.StoreID;adjustmentType=savedAdjustment.AdjustmentType;reason=savedAdjustment.Reason;lines=savedAdjustment.Items.Select(x=>new AdjustmentLine(x.StockBalanceID,x.ServiceID,x.BatchNo,x.ExpireDate,x.BeforeQuantity,x.ChangeQuantity,x.AfterQuantity,x.UnitCost)).ToList();}
+    private async Task LoadAuditAsync(HpmDbContext db){var openings=await db.MedicineStockOpenings.AsNoTracking().ToListAsync();var purchaseHeaders=await db.MedicineReceivingChallans.AsNoTracking().ToListAsync();var purchaseItems=await db.MedicineReceivingChallanItems.AsNoTracking().ToListAsync();var saleHeaders=await db.PharmacyCashMemos.AsNoTracking().ToListAsync();var saleItems=await db.PharmacyCashMemoItems.AsNoTracking().ToListAsync();var supplierHeaders=await db.MedicineReturns.AsNoTracking().ToListAsync();var supplierItems=await db.MedicineReturnItems.AsNoTracking().ToListAsync();var customerHeaders=await db.PharmacySalesReturns.AsNoTracking().Where(x=>x.IsPosted).ToListAsync();var customerItems=await db.PharmacySalesReturnItems.AsNoTracking().Where(x=>x.IsRestocked).ToListAsync();var adjustmentHeaders=await db.MedicineStockAdjustments.AsNoTracking().Where(x=>x.IsPosted).ToListAsync();var adjustmentItems=await db.MedicineStockAdjustmentItems.AsNoTracking().ToListAsync();var keys=stocks.Select(x=>(x.MedicineStoreID,x.ServiceID)).Concat(openings.Select(x=>(x.StoreID,x.ServiceID))).Distinct().ToList();audit=[];foreach(var key in keys){var opening=openings.FirstOrDefault(x=>x.StoreID==key.Item1&&x.ServiceID==key.Item2);var captured=opening?.CapturedAt??DateTime.MinValue;var purchaseIds=purchaseHeaders.Where(x=>x.StoreID==key.Item1&&x.IsPosted&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var received=purchaseItems.Where(x=>x.ServiceID==key.Item2&&purchaseIds.Contains(x.ChallanNo)).Sum(x=>x.Quantity);var saleIds=saleHeaders.Where(x=>x.BufferStore==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var sold=saleItems.Where(x=>x.ServiceID==key.Item2&&saleIds.Contains(x.BillNo)).Sum(x=>x.Quantity??0);var supplierIds=supplierHeaders.Where(x=>x.StoreID==key.Item1&&x.IsPosted&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var supplierReturn=supplierItems.Where(x=>x.ServiceID==key.Item2&&supplierIds.Contains(x.MedicineReturnID)).Sum(x=>x.Quantity);var customerIds=customerHeaders.Where(x=>x.StoreID==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var customerRestock=customerItems.Where(x=>x.ServiceID==key.Item2&&customerIds.Contains(x.SalesReturnID)).Sum(x=>x.Quantity);var adjustmentIds=adjustmentHeaders.Where(x=>x.StoreID==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var adjustments=adjustmentItems.Where(x=>x.ServiceID==key.Item2&&adjustmentIds.Contains(x.AdjustmentID)).Sum(x=>x.ChangeQuantity);var actual=stocks.Where(x=>x.MedicineStoreID==key.Item1&&x.ServiceID==key.Item2).Sum(x=>x.Balance);var expected=(opening?.OpeningBalance??0)+received-sold-supplierReturn+customerRestock+adjustments;audit.Add(new AuditRow(MedicineName(key.Item2),StoreName(key.Item1),opening?.OpeningBalance??0,received,sold,supplierReturn,customerRestock,adjustments,expected,actual,actual-expected,captured));}audit=audit.OrderBy(x=>x.MedicineName).ThenBy(x=>x.StoreName).ToList();}
+    private async Task LoadBatchTraceAsync(HpmDbContext db){batchSales=await(from allocation in db.PharmacySaleBatchAllocations.AsNoTracking() join item in db.PharmacyCashMemoItems.AsNoTracking() on allocation.CashMemoItemID equals item.ID join memo in db.PharmacyCashMemos.AsNoTracking() on item.BillNo equals memo.ID join medicine in db.Services.AsNoTracking() on item.ServiceID equals medicine.ID join stock in db.MedicineStoreBalances.AsNoTracking() on allocation.StockBalanceID equals stock.ID join store in db.MedicineStores.AsNoTracking() on stock.MedicineStoreID equals store.ID orderby memo.TransDate descending select new BatchSaleRow(memo.ID,memo.TransDate,medicine.Name??$"Medicine #{medicine.ID}",store.Name,allocation.BatchNo,allocation.ExpireDate,allocation.Quantity,allocation.BuyRate)).Take(1000).ToListAsync();}
+    private async Task PrintBatchTraceAsync()=>await JS.InvokeVoidAsync("hpm.printElement","batch-sale-trace-print");
+    private async Task<int> CurrentUserIdAsync(){var u=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
+    private async Task PrintAdjustmentAsync()=>await JS.InvokeVoidAsync("hpm.printElement","stock-adjustment-print");
+    private async Task PrintAuditAsync()=>await JS.InvokeVoidAsync("hpm.printElement","stock-audit-print");
+    private void Reset(){savedAdjustment=null;storeId=stores.FirstOrDefault(x=>x.IsActive)?.ID??1;stockId=0;adjustmentType="Count Correction";reason="";lines=[];enteredQuantity=0;selectedBalance=0;message="";}
+    private string MedicineName(int id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private string StoreName(int id)=>stores.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private void Success(string x){messageClass="success";message=x;}
+    private void Fail(string x){messageClass="danger";message=x;}
+    private sealed record AdjustmentLine(int StockBalanceID,int ServiceID,string? BatchNo,DateTime? ExpireDate,decimal BeforeQuantity,decimal ChangeQuantity,decimal AfterQuantity,decimal UnitCost);
+    private sealed record AuditRow(string MedicineName,string StoreName,decimal Opening,decimal Received,decimal Sold,decimal SupplierReturn,decimal CustomerRestock,decimal Adjustments,decimal Expected,decimal Actual,decimal Variance,DateTime CapturedAt);
+    private sealed record BatchSaleRow(long MemoID,DateTime SoldAt,string MedicineName,string StoreName,string? BatchNo,DateTime? ExpireDate,decimal Quantity,decimal BuyRate){public decimal Cost=>Quantity*BuyRate;}
+}

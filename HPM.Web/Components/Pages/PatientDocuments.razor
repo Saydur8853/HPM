@@ -1,0 +1,1553 @@
+@page "/patient-documents"
+@page "/patient-documents/{PatientId}"
+@page "/patients/documents"
+@page "/patients/documents/{PatientId}"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier + "," + RoleNames.Doctor + "," + RoleNames.LabTechnician + "," + RoleNames.Nurse + "," + RoleNames.EmergencyOperator + "," + RoleNames.OTOperator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IBarcodeQrService BarcodeQr
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IDisposable
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Localization
+@using HPM.Web.Services
+@using HPM.Web.Components.Common
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>@(selectedPatient != null ? $"{selectedPatient.Name} ({selectedPatient.PatientID})" : I18n.T("Patient 360° Documents Hub")) | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Patient 360° Records & Documents", "Patient 360° Records & Documents")</span>
+        <h1>@I18n.T("Unified Patient Reports, Receipts & Slips Hub", "Unified Patient Reports, Receipts & Slips Hub")</h1>
+        <p>@I18n.T("Centralized one-page repository of all diagnostic reports, money receipts, prescriptions, tickets and IPD bills for any patient.")</p>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+        @if (selectedPatient != null)
+        {
+            <button class="btn btn-secondary" @onclick="PrintPatientDossierAsync">
+                🖨️ @I18n.T("Print Patient Dossier", "Print Patient Dossier")
+            </button>
+        }
+        <button class="btn btn-ghost" @onclick="ResetSearch">
+            🔍 @I18n.T("New Search", "New Search")
+        </button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<!-- Patient Global Search / Barcode Scan Bar -->
+<div class="panel" style="margin-bottom: 20px;">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Find Patient Record", "Find Patient Record")</h2>
+            <p>@I18n.T("Search by Patient ID (e.g. P-10081), Invoice / Memo #, Mobile Number, or Barcode scan:")</p>
+        </div>
+    </div>
+    <div style="padding: 18px 20px;">
+        <div style="display:flex; gap:12px; align-items:center;">
+            <div class="scanner-search-group" style="flex:1;">
+                <span class="scanner-icon" title="Barcode & QR Scanner Active">📷</span>
+                <input type="text"
+                       class="scanner-input"
+                       placeholder="@I18n.T("Scan Patient QR/Barcode, or type Patient ID (P-10081), Invoice #, Mobile, or Name...", "Scan Patient QR/Barcode, or type Patient ID (P-10081), Invoice #, Mobile, or Name...")"
+                       @bind="searchQuery"
+                       @bind:event="oninput"
+                       @onkeydown="HandleSearchKeyDown" />
+                @if (!string.IsNullOrWhiteSpace(searchQuery))
+                {
+                    <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="() => searchQuery = string.Empty">✕</button>
+                }
+            </div>
+            <button class="btn btn-primary" type="button" @onclick="SearchPatientAsync" disabled="@isLoading">
+                @(isLoading ? I18n.T("Loading...", "Loading...") : I18n.T("Search Record ➔", "Search Record ➔"))
+            </button>
+        </div>
+
+        @if (recentPatients.Count > 0 && selectedPatient == null)
+        {
+            <div style="margin-top: 14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <small style="color:#64748b; font-weight:700;">@I18n.T("Recent Patients:", "Recent Patients:"):</small>
+                @foreach (var p in recentPatients.Take(6))
+                {
+                    <button type="button" class="fast-action-pill" @onclick="() => SelectPatientAsync(p.PatientID)">
+                        👤 @p.Name (@p.PatientID)
+                    </button>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="panel" style="text-align:center; padding: 48px 20px;">
+        <div class="portal-spinner"></div>
+        <h3 style="font-weight:700; color:#0f766e;">@I18n.T("Loading Patient Records & Documents...", "Loading Patient Records & Documents...")</h3>
+        <p style="color:#64748b; font-size:13px;">@I18n.T("Compiling diagnostic lab reports, money receipts, prescriptions and IPD history...")</p>
+    </div>
+}
+else if (selectedPatient == null)
+{
+    <div class="empty-state" style="background:#ffffff; border-radius:14px; border:1px solid var(--line); padding:60px 20px;">
+        <div style="font-size:48px; margin-bottom:12px;">📂</div>
+        <h3 style="font-size:18px; font-weight:800; color:#0f172a; margin-bottom:6px;">@I18n.T("No Patient Selected", "No Patient Selected")</h3>
+        <p style="max-width:500px; margin:0 auto 20px; font-size:13.5px; color:#64748b;">
+            @I18n.T("Enter a Patient ID (e.g. P-10081), Invoice #, or Scan Barcode/QR to open their full document portfolio and receipts.")
+        </p>
+    </div>
+}
+else
+{
+    <!-- ================= 1. PATIENT 360° MASTER HEADER & FINANCIAL SUMMARY ================= -->
+    <div class="patient-hub-profile-card">
+        <div class="patient-hub-top-row">
+            <div class="patient-hub-main-info">
+                <div class="patient-hub-avatar @(selectedPatient.Sex.ToLowerInvariant() == "female" ? "female" : "")">
+                    @(string.IsNullOrWhiteSpace(selectedPatient.Name) ? "PT" : selectedPatient.Name.Substring(0, Math.Min(2, selectedPatient.Name.Length)).ToUpperInvariant())
+                </div>
+                <div class="patient-hub-details">
+                    <h2>@selectedPatient.Name</h2>
+                    <div class="patient-hub-chips">
+                        <span class="hub-chip primary">🆔 @selectedPatient.PatientID</span>
+                        <span class="hub-chip">🎂 @FormatAge(selectedPatient.DateOfBirth) / @selectedPatient.Sex</span>
+                        @if (!string.IsNullOrWhiteSpace(selectedPatient.BloodGroup))
+                        {
+                            <span class="hub-chip blood">🩸 @selectedPatient.BloodGroup</span>
+                        }
+                    </div>
+                    <p class="patient-hub-meta-text">
+                        <span>📞 <b>@(selectedPatient.Contact ?? "—")</b></span>
+                        <span>🏠 <b>@(string.IsNullOrWhiteSpace(selectedPatient.PresentDistrict) ? "Present Address" : $"{selectedPatient.PresentVillage}, {selectedPatient.PresentDistrict}")</b></span>
+                        <span>📅 <b>@I18n.T("Registered"): @selectedPatient.TransDate.ToString("dd MMM yyyy")</b></span>
+                    </p>
+                </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+                <div style="background:#ffffff; padding:4px 8px; border:1px solid #e2e8f0; border-radius:8px;">
+                    <BarcodeQrView Code="@($"PAT-{selectedPatient.PatientID}")"
+                                   QrPayload="@BarcodeQr.GeneratePatientQrPayload(selectedPatient.ID, selectedPatient.PatientID, selectedPatient.Name, selectedPatient.Contact)"
+                                   Layout="stacked"
+                                   BarHeight="18"
+                                   QrPixelsPerModule="2"
+                                   Compact="true" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Financial Summary Ledger Cards -->
+        <div class="patient-hub-fin-grid">
+            <div class="hub-fin-card accent-blue">
+                <span>💳 @I18n.T("Total Billed Amount", "Total Billed Amount")</span>
+                <strong>@I18n.FormatCurrency(totalGrossBilled)</strong>
+                <small style="color:#64748b; font-size:11px;">@allDocs.Count @I18n.T("services & slips")</small>
+            </div>
+            <div class="hub-fin-card">
+                <span>🎁 @I18n.T("Total Discount Given", "Total Discount Given")</span>
+                <strong>@I18n.FormatCurrency(totalDiscount)</strong>
+                <small style="color:#64748b; font-size:11px;">@I18n.T("Waiver / Concession")</small>
+            </div>
+            <div class="hub-fin-card accent-green">
+                <span>💰 @I18n.T("Total Paid Amount", "Total Paid Amount")</span>
+                <strong>@I18n.FormatCurrency(totalPaid)</strong>
+                <small style="color:#15803d; font-size:11px;">@I18n.T("Collected via Cash/Card")</small>
+            </div>
+            <div class="hub-fin-card @(netDueBalance > 0 ? "accent-red" : "accent-green")">
+                <span>⚠️ @I18n.T("Net Due Balance", "Net Due Balance")</span>
+                <strong>@I18n.FormatCurrency(netDueBalance)</strong>
+                <small style="font-size:11px; font-weight:700; color:@(netDueBalance > 0 ? "#dc2626" : "#15803d");">
+                    @(netDueBalance > 0 ? I18n.T("Outstanding Balance", "Outstanding Balance") : I18n.T("All Clear / Fully Paid", "All Clear / Fully Paid"))
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Clinical Actions Bar -->
+    <div class="fast-actions-bar" style="margin-bottom: 24px;">
+        <span class="prompt">⚡ @I18n.T("Quick Clinical Actions for") <strong>@selectedPatient.Name</strong>:</span>
+        <div class="fast-actions-group">
+            <a class="fast-action-pill" href="tickets?patientId=@selectedPatient.PatientID"><span>🎫</span> @I18n.T("New Ticket")</a>
+            <a class="fast-action-pill" href="appointments?patientId=@selectedPatient.PatientID"><span>📅</span> @I18n.T("Appointment")</a>
+            <a class="fast-action-pill" href="diagnostic/billing?patientId=@selectedPatient.PatientID"><span>🔬</span> @I18n.T("Diagnostic Bill")</a>
+            <a class="fast-action-pill" href="emergency-services?patientId=@selectedPatient.PatientID"><span>⚡</span> @I18n.T("Emergency Memo")</a>
+            <a class="fast-action-pill" href="ipd/admissions?patientId=@selectedPatient.PatientID"><span>🏥</span> @I18n.T("IPD Admission")</a>
+            <a class="fast-action-pill" href="pharmacy/pos?patientId=@selectedPatient.PatientID"><span>💊</span> @I18n.T("Pharmacy Sale")</a>
+        </div>
+    </div>
+
+    <!-- ================= 2. ALL DOCUMENTS & REPORTS NAVIGATION TABS ================= -->
+    <div class="patient-docs-nav-tabs">
+        <button type="button" class="patient-tab-btn @(activeTab == "All" ? "active" : "")" @onclick="@(() => activeTab = "All")">
+            🌐 @I18n.T("All Records & Slips", "All Records & Slips")
+            <span class="patient-tab-count">@allDocs.Count</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "Diagnostic" ? "active" : "")" @onclick="@(() => activeTab = "Diagnostic")">
+            🔬 @I18n.T("Diagnostic & Lab Reports", "Diagnostic & Lab Reports")
+            <span class="patient-tab-count">@diagnosticMemos.Count</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "Receipts" ? "active" : "")" @onclick="@(() => activeTab = "Receipts")">
+            🧾 @I18n.T("Payment Receipts & Money Slips", "Payment Receipts & Money Slips")
+            <span class="patient-tab-count">@receiptDocs.Count</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "Tickets" ? "active" : "")" @onclick="@(() => activeTab = "Tickets")">
+            🎫 @I18n.T("OPD Tickets & Appts", "OPD Tickets & Appts")
+            <span class="patient-tab-count">@(opdTickets.Count + appointments.Count)</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "IPD" ? "active" : "")" @onclick="@(() => activeTab = "IPD")">
+            🏥 @I18n.T("IPD Admissions & Discharge", "IPD Admissions & Discharge")
+            <span class="patient-tab-count">@admissions.Count</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "Pharmacy" ? "active" : "")" @onclick="@(() => activeTab = "Pharmacy")">
+            💊 @I18n.T("Prescriptions & Pharmacy", "Prescriptions & Pharmacy")
+            <span class="patient-tab-count">@(prescriptions.Count + pharmacyMemos.Count)</span>
+        </button>
+        <button type="button" class="patient-tab-btn @(activeTab == "EmergencyOT" ? "active" : "")" @onclick="@(() => activeTab = "EmergencyOT")">
+            ⚡ @I18n.T("Emergency & OT Surgery", "Emergency & OT Surgery")
+            <span class="patient-tab-count">@(emergencyMemos.Count + otMemos.Count)</span>
+        </button>
+    </div>
+
+    <!-- ================= 3. DOCUMENT LIST STREAM ================= -->
+    <!-- ================= 3. UNIFIED 1-PAGE PATIENT PORTFOLIO & DOCUMENT STREAM ================= -->
+    @if (activeTab == "All")
+    {
+        <!-- Comprehensive 1-Page Master Patient Dossier & All Reports -->
+        <div class="patient-master-dossier" id="printable-patient-dossier">
+            <!-- 1. Diagnostic Reports & Lab Findings (Inline Detailed View) -->
+            <div class="dossier-card-block">
+                <div class="dossier-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="dossier-header-icon">🔬</span>
+                        <h3 style="font-size:15px; font-weight:800; color:#0f766e; margin:0;">
+                            @I18n.T("Diagnostic Investigations & Lab Findings", "Diagnostic Investigations & Lab Findings")
+                        </h3>
+                    </div>
+                    <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:800;">@diagnosticMemos.Count @I18n.T("Reports")</span>
+                </div>
+
+                @if (diagnosticMemos.Count == 0)
+                {
+                    <div style="padding:16px; color:#64748b; font-size:12.5px;">@I18n.T("No diagnostic orders recorded for this patient.")</div>
+                }
+                else
+                {
+                    @foreach (var memo in diagnosticMemos)
+                    {
+                        var memoResults = labResults.Where(x => x.MemoID == memo.ID).ToList();
+                        var netPayable = Math.Max(0, memo.Total - memo.Discount);
+                        var due = Math.Max(0, netPayable - memo.Paid);
+                        var isAuth = !string.IsNullOrWhiteSpace(memo.Remarks) && memo.Remarks.Contains("[AUTH_RELEASE]");
+                        var isPub = memoResults.Count > 0 && memoResults.Any(x => !string.IsNullOrWhiteSpace(x.ResultValue));
+
+                        <div class="dossier-report-sheet-item" style="border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin: 12px; background: #ffffff;">
+                            <!-- Report Mini Header with Both Barcode & QR Code -->
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px; flex-wrap:wrap; gap:10px;">
+                                <div>
+                                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                                        <b style="font-size:15px; color:#0f766e;">Invoice #@memo.ID</b>
+                                        <span class="doc-badge-pill @(isPub ? (due <= 0.01m ? "verified" : (isAuth ? "auth" : "due")) : "pending")">
+                                            @(isPub ? (due <= 0.01m ? "VERIFIED" : (isAuth ? "AUTH RELEASE" : "DUE LOCKED")) : "IN PROGRESS")
+                                        </span>
+                                    </div>
+                                    <small style="color:#64748b;">📅 @memo.TransDate.ToString("dd MMM yyyy — hh:mm tt") &bull; Ref. Doctor: <b>@DoctorName(memo.DoctorID)</b> &bull; Tube: <b>SMP-@memo.ID</b></small>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <BarcodeQrView Code="@($"LAB-{memo.ID}")"
+                                                   QrPayload="@BarcodeQr.GenerateLabQrPayload(memo.ID, memo.PatientID ?? "", memo.PatientName, $"SMP-{memo.ID}", Navigation.BaseUri)"
+                                                   Layout="side-by-side"
+                                                   BarHeight="24"
+                                                   QrPixelsPerModule="2"
+                                                   IncludeBarcodeText="true" />
+                                    <button type="button" class="btn btn-secondary btn-sm" @onclick="() => OpenDocumentPreview(allDocs.First(d => d.DocKey == memo.ID.ToString()))">
+                                        🖨️ @I18n.T("Print A4 Report")
+                                    </button>
+                                </div>
+                            </div>
+
+                            @if (memoResults.Count > 0)
+                            {
+                                <table class="report-parameter-table" style="font-size:12px; margin-bottom:10px;">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:35%;">@I18n.T("Investigation Parameter")</th>
+                                            <th class="text-center" style="width:20%;">@I18n.T("Observed Result")</th>
+                                            <th class="text-center" style="width:15%;">@I18n.T("Unit")</th>
+                                            <th style="width:20%;">@I18n.T("Reference Range")</th>
+                                            <th class="text-center" style="width:10%;">@I18n.T("Status")</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var r in memoResults)
+                                        {
+                                            var flagClass = (r.Flag ?? "Normal").ToLowerInvariant() switch
+                                            {
+                                                "high" => "flag-high",
+                                                "low" => "flag-low",
+                                                "critical" => "flag-critical",
+                                                "positive" => "flag-high",
+                                                _ => "flag-normal"
+                                            };
+                                            <tr>
+                                                <td class="param-name"><b>@r.ParameterName</b></td>
+                                                <td class="text-center"><span class="value-highlight @flagClass">@r.ResultValue</span></td>
+                                                <td class="text-center">@(r.Unit ?? "—")</td>
+                                                <td>@(r.ReferenceRange ?? "—")</td>
+                                                <td class="text-center"><span class="flag-pill @flagClass">@(r.Flag ?? "Normal")</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                            else
+                            {
+                                <div class="alert info" style="margin: 8px 0; font-size:12px; padding:8px 12px;">
+                                    ⏳ Specimen registered and undergoing pathology analysis. Result verification pending.
+                                </div>
+                            }
+
+                            <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; padding:8px 12px; border-radius:6px; font-size:12px; border:1px solid #f1f5f9;">
+                                <div>Total: <b>@I18n.FormatCurrency(netPayable)</b> &bull; Paid: <b style="color:#15803d;">@I18n.FormatCurrency(memo.Paid)</b></div>
+                                <div>Due: <b style="color:@(due > 0 ? "#dc2626" : "#15803d");">@(due > 0 ? I18n.FormatCurrency(due) : "CLEAR")</b></div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+
+            <!-- 2. Payment Receipts & Money Slips Ledger Table -->
+            <div class="dossier-card-block" style="margin-top:16px;">
+                <div class="dossier-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="dossier-header-icon">🧾</span>
+                        <h3 style="font-size:15px; font-weight:800; color:#0369a1; margin:0;">
+                            @I18n.T("Payment Receipts & Money Slips Ledger", "Payment Receipts & Money Slips Ledger")
+                        </h3>
+                    </div>
+                    <span class="badge" style="background:#f0fdf4; color:#15803d; font-weight:800;">@receiptDocs.Count @I18n.T("Receipts")</span>
+                </div>
+
+                @if (receiptDocs.Count == 0)
+                {
+                    <div style="padding:16px; color:#64748b; font-size:12.5px;">@I18n.T("No payment receipts recorded for this patient.")</div>
+                }
+                else
+                {
+                    <div class="data-table-wrap">
+                        <table class="data-table" style="font-size:12px;">
+                            <thead>
+                                <tr>
+                                    <th>Receipt / Slip #</th>
+                                    <th>Particulars</th>
+                                    <th>Date</th>
+                                    <th class="num">Billed Amount</th>
+                                    <th class="num">Discount</th>
+                                    <th class="num">Paid Amount</th>
+                                    <th class="num">Due Balance</th>
+                                    <th>Status</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var r in receiptDocs)
+                                {
+                                    <tr>
+                                        <td><b>#@r.DocKey</b></td>
+                                        <td>@r.Title</td>
+                                        <td>@r.Date.ToString("dd MMM yyyy, hh:mm tt")</td>
+                                        <td class="num">@I18n.FormatCurrency(r.GrossAmount)</td>
+                                        <td class="num">@I18n.FormatCurrency(r.Discount)</td>
+                                        <td class="num" style="color:#15803d; font-weight:700;">@I18n.FormatCurrency(r.PaidAmount)</td>
+                                        <td class="num" style="color:@(r.DueAmount > 0 ? "#dc2626" : "#15803d"); font-weight:700;">@I18n.FormatCurrency(r.DueAmount)</td>
+                                        <td><span class="doc-badge-pill @r.BadgeClass">@r.Status</span></td>
+                                        <td>
+                                            <button type="button" class="icon-btn" @onclick="() => OpenDocumentPreview(r)">👁️</button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+
+            <!-- 3. Prescriptions & Clinical Medication Charts -->
+            @{
+                var allRxDocs = allDocs.Where(x => x.DocType == "Prescription").ToList();
+            }
+            @if (allRxDocs.Count > 0)
+            {
+                <div class="dossier-card-block" style="margin-top:16px;">
+                    <div class="dossier-card-header">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="dossier-header-icon">💊</span>
+                            <h3 style="font-size:15px; font-weight:800; color:#b45309; margin:0;">
+                                @I18n.T("Doctor Prescriptions & Clinical Medication Charts", "Doctor Prescriptions & Clinical Medication Charts")
+                            </h3>
+                        </div>
+                        <span class="badge" style="background:#fef3c7; color:#92400e; font-weight:800;">@allRxDocs.Count @I18n.T("Prescriptions")</span>
+                    </div>
+                    <div style="padding:14px;">
+                        @foreach (var doc in allRxDocs)
+                        {
+                            <div style="border-bottom:1px solid #f1f5f9; padding:12px 0; display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+                                <div style="flex:1;">
+                                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+                                        <strong style="font-size:14px; color:#0f172a;">@doc.Title</strong>
+                                        <span class="doc-badge-pill verified">PRESCRIBED</span>
+                                    </div>
+                                    <p style="margin:0 0 6px 0; font-size:12px; color:#475569;">@doc.Subtitle &bull; 📅 @doc.Date.ToString("dd MMM yyyy, hh:mm tt")</p>
+
+                                    @if (doc.RawEntity is IpdPrescriptionViewModel ipdRx)
+                                    {
+                                        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                                            @foreach (var m in ipdRx.Medications.Take(8))
+                                            {
+                                                <span style="background:#f0fdfa; border:1px solid #ccfbf1; border-radius:6px; padding:2px 8px; font-size:11px; color:#0f766e; font-weight:600;">
+                                                    💊 @m.MedicineName (Qty: @m.Quantity)
+                                                </span>
+                                            }
+                                            @if (ipdRx.Medications.Count > 8)
+                                            {
+                                                <span style="background:#f1f5f9; border-radius:6px; padding:2px 6px; font-size:11px; color:#64748b;">
+                                                    +@(ipdRx.Medications.Count - 8) more
+                                                </span>
+                                            }
+                                        </div>
+                                    }
+                                    else if (doc.RawEntity is Prescription p)
+                                    {
+                                        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                                            @if (p.Medicines != null && p.Medicines.Count > 0)
+                                            {
+                                                @foreach (var m in p.Medicines)
+                                                {
+                                                    <span style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:2px 8px; font-size:11px; color:#334155; font-weight:600;">
+                                                        💊 @ServiceName(m.ServiceID) (Qty: @m.Quantity)
+                                                    </span>
+                                                }
+                                            }
+                                            else if (!string.IsNullOrWhiteSpace(p.Medicine))
+                                            {
+                                                <span style="font-size:11.5px; color:#334155;">💊 @p.Medicine</span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <button type="button" class="btn btn-primary" style="padding:6px 14px; font-size:12px; font-weight:700;" @onclick="() => OpenDocumentPreview(doc)">
+                                        🖨️ @I18n.T("Print A4 Prescription", "Print A4 Prescription")
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            <!-- 4. OPD Tickets & IPD Admissions -->
+            <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:16px; margin-top:16px;">
+                <div class="dossier-card-block">
+                    <div class="dossier-card-header">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="dossier-header-icon">🎫</span>
+                            <h3 style="font-size:14px; font-weight:800; color:#0284c7; margin:0;">OPD Tickets</h3>
+                        </div>
+                        <span class="badge">@opdTickets.Count</span>
+                    </div>
+                    <div style="padding:12px;">
+                        @if (opdTickets.Count == 0)
+                        {
+                            <small style="color:#94a3b8;">No OPD tickets found.</small>
+                        }
+                        else
+                        {
+                            @foreach (var t in opdTickets)
+                            {
+                                <div style="display:flex; justify-content:space-between; font-size:12px; padding:6px 0; border-bottom:1px solid #f1f5f9;">
+                                    <span><b>Ticket #@t.ID</b> &bull; @DoctorName(t.DoctorID)</span>
+                                    <b style="color:#059669;">@I18n.FormatCurrency(t.Total) (PAID)</b>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <div class="dossier-card-block">
+                    <div class="dossier-card-header">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="dossier-header-icon">🏥</span>
+                            <h3 style="font-size:14px; font-weight:800; color:#7e22ce; margin:0;">IPD Admissions</h3>
+                        </div>
+                        <span class="badge">@admissions.Count</span>
+                    </div>
+                    <div style="padding:12px;">
+                        @if (admissions.Count == 0)
+                        {
+                            <small style="color:#94a3b8;">No inpatient admissions.</small>
+                        }
+                        else
+                        {
+                            @foreach (var adm in admissions)
+                            {
+                                <div style="font-size:12px; padding:6px 0; border-bottom:1px solid #f1f5f9;">
+                                    <div><b>Admission Reg #@adm.RegNo</b> &bull; Date: @(adm.AdmissionDate?.ToString("dd MMM yyyy") ?? "—")</div>
+                                    <small style="color:#64748b;">Bed: @(adm.BedCabinID.HasValue && adm.BedCabinID > 0 ? $"Bed #{adm.BedCabinID}" : "Assigned") &bull; Status: @(adm.ReleaseDate.HasValue ? "Discharged" : "Active Inpatient")</small>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <!-- Categorized Filtered Stream -->
+        <div class="patient-docs-list">
+            @if (FilteredDocs.Count == 0)
+            {
+                <div class="empty-state small" style="background:#ffffff; border-radius:12px; border:1px solid var(--line);">
+                    @I18n.T("No records found in this category for this patient.")
+                </div>
+            }
+            @foreach (var doc in FilteredDocs)
+            {
+                <div class="patient-doc-item">
+                    <div class="doc-item-left">
+                        <div class="doc-type-icon @doc.DocType.ToLowerInvariant()">
+                            @GetDocIcon(doc.DocType)
+                        </div>
+                        <div class="doc-item-content">
+                            <div class="doc-item-title">
+                                <strong>@doc.Title</strong>
+                                <span class="doc-badge-pill @doc.BadgeClass">@doc.Status</span>
+                                @if (doc.IsAuthorizedRelease)
+                                {
+                                    <span class="doc-badge-pill auth">🛡️ @I18n.T("AUTH RELEASE")</span>
+                                }
+                            </div>
+                            <div class="doc-item-sub">
+                                <span>📄 @doc.Subtitle</span>
+                                <span>📅 @doc.Date.ToString("dd MMM yyyy — hh:mm tt")</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="doc-item-right">
+                        @if (doc.GrossAmount > 0)
+                        {
+                            <div class="doc-item-financials">
+                                <strong>@I18n.FormatCurrency(doc.GrossAmount - doc.Discount)</strong>
+                                <small style="color:@(doc.DueAmount > 0 ? "#dc2626" : "#059669"); font-weight:700;">
+                                    @(doc.DueAmount > 0 ? $"Due: {I18n.FormatCurrency(doc.DueAmount)}" : "PAID")
+                                </small>
+                            </div>
+                        }
+
+                        <div class="doc-action-btns">
+                            <button type="button" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px;" @onclick="() => OpenDocumentPreview(doc)">
+                                👁️ @I18n.T("View")
+                            </button>
+                            @if (doc.DocType == "Diagnostic")
+                            {
+                                <a class="btn btn-ghost" style="padding: 6px 10px; font-size: 12px; border:1px solid #cbd5e1;" href="@($"/portal/report/{doc.DocKey}")" target="_blank" title="Open Public Patient Verification QR Portal">
+                                    🔗 @I18n.T("Portal")
+                                </a>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+<!-- ================= 4. DOCUMENT PREVIEW & INSTANT PRINT MODAL ================= -->
+@if (activeModalDoc != null)
+{
+    <div class="modal-backdrop" @onclick="CloseDocumentPreview">
+        <div class="doc-preview-modal" @onclick:stopPropagation="true">
+            <div class="doc-preview-modal-header">
+                <div>
+                    <h3 style="font-size:16px; font-weight:800; margin:0; color:#0f172a;">@activeModalDoc.Title</h3>
+                    <small style="color:#64748b;">@activeModalDoc.Subtitle &bull; @activeModalDoc.Date.ToString("dd MMM yyyy hh:mm tt")</small>
+                </div>
+                <button type="button" class="icon-btn" @onclick="CloseDocumentPreview">✕</button>
+            </div>
+
+            <div class="doc-preview-modal-body" id="doc-modal-printable-content">
+                @if (activeModalDoc.DocType == "Diagnostic")
+                {
+                    var memo = activeModalDoc.RawEntity as CashMemoDInvestigation;
+                    if (memo != null)
+                    {
+                        var memoResults = labResults.Where(x => x.MemoID == memo.ID).ToList();
+                        var netPayable = Math.Max(0, memo.Total - memo.Discount);
+                        var due = Math.Max(0, netPayable - memo.Paid);
+                        var isAuth = !string.IsNullOrWhiteSpace(memo.Remarks) && memo.Remarks.Contains("[AUTH_RELEASE]");
+
+                        <div class="clinical-report-sheet a4-page-sheet" style="padding:20px; border:1px solid #e2e8f0; border-radius:10px;">
+                            <PrintDocumentHeader Title="@I18n.T("OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT", "OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT")"
+                                                 SubTitle="@Branding.LabHeaderDept"
+                                                 DocumentNo="@($"# {memo.ID}")"
+                                                 BarcodeCode="@($"LAB-{memo.ID}")"
+                                                 QrPayload="@BarcodeQr.GenerateLabQrPayload(memo.ID, memo.PatientID ?? "", memo.PatientName, $"SMP-{memo.ID}", Navigation.BaseUri)" />
+
+                            <!-- Patient Demographics Info Grid -->
+                            <div class="report-patient-grid">
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Patient Name"):</span>
+                                    <strong class="grid-value">@memo.PatientName</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Patient ID (PID)"):</span>
+                                    <strong class="grid-value">@(memo.PatientID ?? I18n.T("Walk-in"))</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Age / Gender"):</span>
+                                    <strong class="grid-value">@memo.Age / @memo.Sex</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Contact No"):</span>
+                                    <strong class="grid-value">@(memo.Contact ?? "—")</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Invoice / Memo #"):</span>
+                                    <strong class="grid-value">#@memo.ID</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Specimen / Tube ID"):</span>
+                                    <strong class="grid-value">SMP-@memo.ID</strong>
+                                </div>
+                                <div class="patient-grid-item span-2">
+                                    <span class="grid-label">@I18n.T("Referred By Doctor"):</span>
+                                    <strong class="grid-value">@DoctorName(memo.DoctorID)</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Date of Order"):</span>
+                                    <strong class="grid-value">@memo.TransDate.ToString("dd MMM yyyy, hh:mm tt")</strong>
+                                </div>
+                                <div class="patient-grid-item">
+                                    <span class="grid-label">@I18n.T("Report Released"):</span>
+                                    <strong class="grid-value">@DateTime.Now.ToString("dd MMM yyyy, hh:mm tt")</strong>
+                                </div>
+                            </div>
+
+                            @if (memoResults.Count > 0)
+                            {
+                                <table class="report-parameter-table" style="font-size:12.5px;">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 32%;">@I18n.T("Investigation Parameter", "Investigation Parameter")</th>
+                                            <th class="text-center" style="width: 20%;">@I18n.T("Observed Result", "Observed Result")</th>
+                                            <th class="text-center" style="width: 14%;">@I18n.T("Unit", "Unit")</th>
+                                            <th style="width: 22%;">@I18n.T("Reference Range", "Reference Range")</th>
+                                            <th class="text-center" style="width: 12%;">@I18n.T("Status", "Status")</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var r in memoResults)
+                                        {
+                                            var flagClass = (r.Flag ?? "Normal").ToLowerInvariant() switch
+                                            {
+                                                "high" => "flag-high",
+                                                "low" => "flag-low",
+                                                "critical" => "flag-critical",
+                                                "positive" => "flag-high",
+                                                _ => "flag-normal"
+                                            };
+                                            <tr>
+                                                <td class="param-name"><b>@r.ParameterName</b></td>
+                                                <td class="text-center"><span class="value-highlight @flagClass">@r.ResultValue</span></td>
+                                                <td class="text-center">@(r.Unit ?? "—")</td>
+                                                <td>@(r.ReferenceRange ?? "—")</td>
+                                                <td class="text-center"><span class="flag-pill @flagClass">@(r.Flag ?? "Normal")</span></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            }
+                            else
+                            {
+                                <div class="alert info" style="margin:16px 0;">
+                                    ⏳ Test sample received and processing in laboratory. Results pending verification.
+                                </div>
+                            }
+
+                            <!-- Financial Breakdown Summary Strip -->
+                            <div style="background:#f8fafc; padding:12px 16px; border-radius:8px; border:1px solid #e2e8f0; display:flex; justify-content:space-between; margin-top:14px; align-items:center;">
+                                <div>
+                                    <small style="color:#64748b; text-transform:uppercase; font-size:10px; font-weight:700;">Billing & Payment Breakdown:</small>
+                                    <div style="font-size:13px; font-weight:700;">Total Billed: <b>@I18n.FormatCurrency(netPayable)</b> &bull; Paid: <b style="color:#15803d;">@I18n.FormatCurrency(memo.Paid)</b></div>
+                                </div>
+                                <div style="text-align:right;">
+                                    <small style="color:#64748b; text-transform:uppercase; font-size:10px; font-weight:700;">Due Clearance Status:</small>
+                                    <div>
+                                        <b style="color:@(due > 0 ? "#dc2626" : "#15803d"); font-size:14px;">@(due > 0 ? $"Due: {I18n.FormatCurrency(due)}" : "PAID IN FULL")</b>
+                                        @if (isAuth) { <span class="doc-badge-pill auth" style="margin-left:6px;">AUTH RELEASE</span> }
+                                    </div>
+                                </div>
+                            </div>
+
+                            <PrintDocumentFooter Signatures='new string[] { I18n.T("Medical Technologist (Lab)", "Medical Technologist (Lab)"), DoctorName(memo.DoctorID) }' />
+                        </div>
+                    }
+                }
+                else if (activeModalDoc.DocType == "Receipt")
+                {
+                    <div class="clinical-report-sheet a4-page-sheet" style="padding:20px; border:1px solid #e2e8f0; border-radius:10px;">
+                        <PrintDocumentHeader Title="@I18n.T("OFFICIAL PATIENT PAYMENT RECEIPT", "OFFICIAL PATIENT PAYMENT RECEIPT")"
+                                             SubTitle="@I18n.T("Hospital Money Receipt & Bill Voucher", "Hospital Money Receipt & Bill Voucher")"
+                                             DocumentNo="@activeModalDoc.DocKey"
+                                             BarcodeCode="@activeModalDoc.DocKey" />
+
+                        <div class="report-patient-grid" style="margin-bottom:16px;">
+                            <div class="patient-grid-item">
+                                <span class="grid-label">Patient Name:</span>
+                                <strong class="grid-value">@(selectedPatient?.Name ?? "Walk-in")</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">Patient ID:</span>
+                                <strong class="grid-value">@(selectedPatient?.PatientID ?? "—")</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">Receipt Date:</span>
+                                <strong class="grid-value">@activeModalDoc.Date.ToString("dd MMM yyyy hh:mm tt")</strong>
+                            </div>
+                            <div class="patient-grid-item span-2">
+                                <span class="grid-label">Particulars:</span>
+                                <strong class="grid-value">@activeModalDoc.Title (@activeModalDoc.Subtitle)</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">Payment Status:</span>
+                                <strong class="grid-value" style="color:@(activeModalDoc.DueAmount > 0 ? "#dc2626" : "#15803d");">@activeModalDoc.Status</strong>
+                            </div>
+                        </div>
+
+                        <div style="background:#f8fafc; border:1.5px solid #e2e8f0; border-radius:10px; padding:16px 20px; margin-bottom:20px;">
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                                <span>Gross Bill Amount:</span>
+                                <strong>@I18n.FormatCurrency(activeModalDoc.GrossAmount)</strong>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                                <span>Discount / Concession:</span>
+                                <strong>@I18n.FormatCurrency(activeModalDoc.Discount)</strong>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px; color:#15803d; font-size:15px; font-weight:800; border-top:1px solid #e2e8f0; padding-top:8px;">
+                                <span>Amount Received (Paid):</span>
+                                <span>@I18n.FormatCurrency(activeModalDoc.PaidAmount)</span>
+                            </div>
+                            @if (activeModalDoc.DueAmount > 0)
+                            {
+                                <div style="display:flex; justify-content:space-between; color:#dc2626; font-size:15px; font-weight:800; border-top:1px dashed #fca5a5; padding-top:8px; margin-top:4px;">
+                                    <span>Remaining Due Balance:</span>
+                                    <span>@I18n.FormatCurrency(activeModalDoc.DueAmount)</span>
+                                </div>
+                            }
+                        </div>
+
+                        <PrintDocumentFooter Signatures='new string[] { I18n.T("Customer / Patient Signature", "Customer / Patient Signature"), I18n.T("Authorized Accounts Officer", "Authorized Accounts Officer") }' />
+                    </div>
+                }
+                else if (activeModalDoc.DocType == "Ticket")
+                {
+                    var t = activeModalDoc.RawEntity as OPDTicket;
+                    if (t != null)
+                    {
+                        <div class="clinical-report-sheet a4-page-sheet" style="padding:20px; border:1px solid #e2e8f0; border-radius:10px;">
+                            <PrintDocumentHeader Title="@I18n.T("DOCTOR CONSULTATION TOKEN", "DOCTOR CONSULTATION TOKEN")"
+                                                 SubTitle="@I18n.T("OPD Consultation Token & Appointment Slip", "OPD Consultation Token & Appointment Slip")"
+                                                 DocumentNo="@($"TKT-{t.ID}")"
+                                                 BarcodeCode="@($"TKT-{t.ID}")"
+                                                 QrPayload="@BarcodeQr.GenerateTicketQrPayload(t.ID, t.ID, t.Name ?? "", DoctorName(t.DoctorID), t.Total)" />
+
+                            <div class="report-patient-grid">
+                                <div><span class="grid-label">Patient Name:</span> <strong>@t.Name</strong></div>
+                                <div><span class="grid-label">Age / Sex:</span> <strong>@t.Age / @t.Sex</strong></div>
+                                <div><span class="grid-label">Date:</span> <strong>@t.TransDate.ToString("dd MMM yyyy")</strong></div>
+                                <div><span class="grid-label">Consultant:</span> <strong>@DoctorName(t.DoctorID)</strong></div>
+                                <div><span class="grid-label">Room / Chamber:</span> <strong>@(t.Room ?? "Consultation Room")</strong></div>
+                                <div><span class="grid-label">Fee (Paid):</span> <strong style="color:#059669;">@I18n.FormatCurrency(t.Total)</strong></div>
+                            </div>
+
+                            <PrintDocumentFooter Signatures='new string[] { I18n.T("Patient Signature", "Patient Signature"), I18n.T("Duty Receptionist", "Duty Receptionist") }' />
+                        </div>
+                    }
+                }
+                else if (activeModalDoc.DocType == "Prescription")
+                {
+                    if (activeModalDoc.RawEntity is IpdPrescriptionViewModel ipdRx)
+                    {
+                        <PrescriptionA4PrintSheet
+                            Title="@I18n.T("INPATIENT CLINICAL MEDICATION & TREATMENT CHART", "INPATIENT CLINICAL MEDICATION & TREATMENT CHART")"
+                            DocNo="@($"RX-IPD-{ipdRx.Admission.RegNo}")"
+                            BarcodeCode="@($"IPD-{ipdRx.Admission.RegNo}")"
+                            PatientName="@selectedPatient?.Name"
+                            PatientId="@selectedPatient?.PatientID"
+                            RegNo="@ipdRx.Admission.RegNo"
+                            BedName="@ipdRx.BedName"
+                            Age="@(ipdRx.Admission.Age ?? FormatAge(selectedPatient?.DateOfBirth ?? DateTime.Today))"
+                            Sex="@(selectedPatient?.Sex ?? "—")"
+                            BloodGroup="@selectedPatient?.BloodGroup"
+                            ContactNo="@selectedPatient?.Contact"
+                            PrescriptionDate="@(ipdRx.Admission.AdmissionDate ?? ipdRx.Admission.TransDate)"
+                            DoctorName="@ipdRx.DoctorName"
+                            DoctorQualification="@DoctorQualification(ipdRx.Admission.Consultant)"
+                            DoctorDesignation="@DoctorDesignation(ipdRx.Admission.Consultant)"
+                            DepartmentName="@DepartmentName(ipdRx.Admission.Department)"
+                            Diagnosis="@ipdRx.Admission.Diagnosis"
+                            ChiefComplaints="@ipdRx.Admission.Comments"
+                            AdvisedTests="@ipdRx.AdvisedTests"
+                            MedicationItems="@ipdRx.Medications" />
+                    }
+                    else if (activeModalDoc.RawEntity is Prescription p)
+                    {
+                        <PrescriptionA4PrintSheet
+                            Title="@I18n.T("PRESCRIPTION", "PRESCRIPTION")"
+                            DocNo="@($"RX-{p.ID}")"
+                            BarcodeCode="@($"RX-{p.ID}")"
+                            PatientName="@selectedPatient?.Name"
+                            PatientId="@selectedPatient?.PatientID"
+                            Age="@FormatAge(selectedPatient?.DateOfBirth ?? DateTime.Today)"
+                            Sex="@(selectedPatient?.Sex ?? "—")"
+                            BloodGroup="@selectedPatient?.BloodGroup"
+                            ContactNo="@selectedPatient?.Contact"
+                            PrescriptionDate="@(p.VisitDate ?? DateTime.Now)"
+                            DoctorName="@DoctorName(p.ReferredBy)"
+                            DoctorQualification="@DoctorQualification(p.ReferredBy)"
+                            DoctorDesignation="@DoctorDesignation(p.ReferredBy)"
+                            DepartmentName="@DoctorDeptName(p.ReferredBy)"
+                            Diagnosis="@p.Diagnosis"
+                            ChiefComplaints="@p.Complain"
+                            AdvisedTests="@(SplitAdvisedTests(p.Investigation))"
+                            SpecialAdvice="@p.Remark"
+                            MedicationItems="@(p.Medicines?.Select(m => new PrescriptionA4PrintSheet.PrescriptionMedItem {
+                                MedicineName = ServiceName(m.ServiceID),
+                                Quantity = m.Quantity,
+                                Dosage = m.Dose != null && m.Dose > 0 ? $"{m.Dose} Dose" : "1 + 0 + 1",
+                                Duration = m.Days != null && m.Days > 0 ? $"{m.Days} Days" : "5 Days",
+                                Instruction = "As directed"
+                            }).ToList() ?? [])" />
+                    }
+                }
+                else
+                {
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:24px; text-align:left;">
+                        <h4 style="margin:0 0 10px 0; color:#0f172a;">@activeModalDoc.Title</h4>
+                        <p style="font-size:13.5px; color:#475569; line-height:1.6;">@activeModalDoc.Subtitle</p>
+                        <div style="margin-top:16px; display:flex; gap:20px;">
+                            <div><span>Total Amount:</span> <b>@I18n.FormatCurrency(activeModalDoc.GrossAmount)</b></div>
+                            <div><span>Paid:</span> <b style="color:#15803d;">@I18n.FormatCurrency(activeModalDoc.PaidAmount)</b></div>
+                            <div><span>Due:</span> <b style="color:@(activeModalDoc.DueAmount > 0 ? "#dc2626" : "#15803d");">@I18n.FormatCurrency(activeModalDoc.DueAmount)</b></div>
+                        </div>
+                        <PrintDocumentFooter />
+                    </div>
+                }
+            </div>
+
+            <div class="doc-preview-modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseDocumentPreview">
+                    @I18n.T("Close")
+                </button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn btn-primary" @onclick="PrintModalDocumentAsync">
+                        🖨️ @I18n.T("Print This Document", "Print This Document")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string? PatientId { get; set; }
+    [SupplyParameterFromQuery(Name = "patientId")] public string? QueryPatientId { get; set; }
+
+    private Registration? selectedPatient;
+    private List<Registration> recentPatients = [];
+    private List<CashMemoDInvestigation> diagnosticMemos = [];
+    private List<CashMemoDInvestigation> emergencyMemos = [];
+    private List<OPDTicket> opdTickets = [];
+    private List<DoctorAppointment> appointments = [];
+    private List<PatientAdmission> admissions = [];
+    private List<IpdMoneyReceipt> ipdReceipts = [];
+    private List<IpdFinalBill> ipdFinalBills = [];
+    private List<PatientTransaction> ipdTransactions = [];
+    private List<Prescription> prescriptions = [];
+    private List<PharmacyCashMemo> pharmacyMemos = [];
+    private List<CashMemoOT> otMemos = [];
+    private List<LabTestResult> labResults = [];
+    private List<LabSampleCollection> labSamples = [];
+    private List<Service> services = [];
+    private List<DoctorsProfile> doctors = [];
+    private List<Department> departments = [];
+    private List<BedCabin> bedCabins = [];
+
+    private List<UnifiedPatientDoc> allDocs = [];
+    private List<UnifiedPatientDoc> receiptDocs = [];
+
+    private string activeTab = "All";
+    private string searchQuery = "";
+    private bool isLoading = false;
+    private string message = "";
+    private string messageClass = "info";
+
+    private decimal totalGrossBilled = 0;
+    private decimal totalDiscount = 0;
+    private decimal totalPaid = 0;
+    private decimal netDueBalance = 0;
+
+    private UnifiedPatientDoc? activeModalDoc;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRecentPatientsAsync();
+        var target = PatientId ?? QueryPatientId;
+        if (!string.IsNullOrWhiteSpace(target))
+        {
+            searchQuery = target;
+            await SearchPatientAsync();
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var target = PatientId ?? QueryPatientId;
+        if (!string.IsNullOrWhiteSpace(target) && (selectedPatient == null || selectedPatient.PatientID != target))
+        {
+            searchQuery = target;
+            await SearchPatientAsync();
+        }
+    }
+
+    private async Task LoadRecentPatientsAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            recentPatients = await db.Registrations.AsNoTracking()
+                .OrderByDescending(x => x.TransDate)
+                .Take(10)
+                .ToListAsync();
+            doctors = await db.Doctors.AsNoTracking().ToListAsync();
+            services = await db.Services.AsNoTracking().ToListAsync();
+            departments = await db.Departments.AsNoTracking().ToListAsync();
+            bedCabins = await db.BedCabins.AsNoTracking().ToListAsync();
+        }
+        catch { }
+    }
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchPatientAsync();
+        }
+    }
+
+    private async Task SelectPatientAsync(string patientId)
+    {
+        searchQuery = patientId;
+        await SearchPatientAsync();
+    }
+
+    private async Task SearchPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery)) return;
+
+        isLoading = true;
+        message = "";
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = searchQuery.Trim();
+
+            // Extract clean string from barcode scanner e.g. PAT-10081, LAB-9
+            if (q.StartsWith("PAT-", StringComparison.OrdinalIgnoreCase)) q = q.Substring(4);
+            if (q.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase)) q = q.Substring(4);
+
+            var pPrefixed = q.StartsWith("P-", StringComparison.OrdinalIgnoreCase) ? q : $"P-{q}";
+            var pStripped = q.StartsWith("P-", StringComparison.OrdinalIgnoreCase) ? q.Substring(2) : q;
+
+            // 1. Search in master Registrations
+            selectedPatient = await db.Registrations.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.PatientID == q || x.PatientID == pPrefixed || x.PatientID == pStripped ||
+                                          x.Contact == q || (x.Contact != null && x.Contact.EndsWith(q)) ||
+                                          (q.Length >= 3 && x.Name.ToLower().Contains(q.ToLower())) ||
+                                          x.ID.ToString() == q);
+
+            // 2. If not found in registration, check if it's a diagnostic memo # or ticket
+            if (selectedPatient == null && long.TryParse(pStripped, out var numericId))
+            {
+                var memo = await db.EmergencyMemos.AsNoTracking().FirstOrDefaultAsync(x => x.ID == numericId);
+                if (memo != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(memo.PatientID))
+                    {
+                        var mPid = memo.PatientID;
+                        selectedPatient = await db.Registrations.AsNoTracking()
+                            .FirstOrDefaultAsync(x => x.PatientID == mPid || x.PatientID == $"P-{mPid}");
+                    }
+
+                    if (selectedPatient == null)
+                    {
+                        // Create virtual patient card from memo demographics
+                        selectedPatient = new Registration
+                        {
+                            ID = 0,
+                            PatientID = memo.PatientID ?? $"MEMO-{memo.ID}",
+                            Name = memo.PatientName,
+                            Sex = memo.Sex ?? "Male",
+                            Contact = memo.Contact,
+                            TransDate = memo.TransDate
+                        };
+                    }
+                }
+            }
+
+            if (selectedPatient == null)
+            {
+                message = I18n.IsBangla
+                    ? $"'{searchQuery}' দিয়ে কোনো রোগীর ফাইল বা রেকর্ড পাওয়া যায়নি।"
+                    : $"No patient record found matching '{searchQuery}'.";
+                messageClass = "danger";
+                isLoading = false;
+                return;
+            }
+
+            // Load All Patient Documents Across Hospital
+            await LoadAllPatientDocumentsAsync(selectedPatient, db);
+        }
+        catch (Exception ex)
+        {
+            message = $"Error loading records: {ex.Message}";
+            messageClass = "danger";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task LoadAllPatientDocumentsAsync(Registration pat, HpmDbContext db)
+    {
+        var pid = pat.PatientID;
+        var pName = pat.Name;
+        var contact = pat.Contact;
+
+        // 1. Diagnostic Invoices & Lab Memos (ModuleID 2 or 11)
+        diagnosticMemos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
+            .Where(x => (x.ModuleID == 2 || x.ModuleID == 11) &&
+                        ((pid != null && x.PatientID == pid) || x.PatientName == pName || (contact != null && x.Contact == contact)))
+            .OrderByDescending(x => x.TransDate)
+            .ToListAsync();
+
+        var memoIds = diagnosticMemos.Select(x => x.ID).ToList();
+
+        // 2. Lab Results & Sample status
+        labResults = await db.LabTestResults.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToListAsync();
+        labSamples = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToListAsync();
+
+        // 3. Emergency Memos (ModuleID 1 or others)
+        emergencyMemos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
+            .Where(x => (x.ModuleID == 1 || (x.ModuleID != 2 && x.ModuleID != 11)) &&
+                        ((pid != null && x.PatientID == pid) || x.PatientName == pName || (contact != null && x.Contact == contact)))
+            .OrderByDescending(x => x.TransDate)
+            .ToListAsync();
+
+        // 4. OPD Consultation Tickets
+        opdTickets = await db.OPDTickets.AsNoTracking()
+            .Where(x => x.Name == pName)
+            .OrderByDescending(x => x.TransDate)
+            .ToListAsync();
+
+        // 5. Appointments
+        appointments = await db.DoctorAppointments.AsNoTracking()
+            .Where(x => (pid != null && x.PatientID == pid) || x.Name == pName || (contact != null && x.ContactNo == contact))
+            .OrderByDescending(x => x.ApptDate)
+            .ToListAsync();
+
+        // 6. IPD Inpatient Admissions
+        admissions = await db.PatientAdmissions.AsNoTracking()
+            .Where(x => pid != null && x.PatientID == pid)
+            .OrderByDescending(x => x.AdmissionDate)
+            .ToListAsync();
+
+        var regNos = admissions.Select(x => x.RegNo).ToList();
+        ipdReceipts = await db.IpdMoneyReceipts.AsNoTracking().Where(x => regNos.Contains(x.RegNo)).ToListAsync();
+        ipdFinalBills = await db.IpdFinalBills.AsNoTracking().Where(x => regNos.Contains(x.RegNo)).ToListAsync();
+        ipdTransactions = await db.PatientTransactions.AsNoTracking()
+            .Where(x => regNos.Contains(x.RegNo))
+            .OrderBy(x => x.TransDate)
+            .ToListAsync();
+
+        // 7. Pharmacy Prescriptions & Sales
+        prescriptions = await db.Prescriptions.Include(x => x.Medicines).AsNoTracking()
+            .Where(x => x.Name == pName)
+            .OrderByDescending(x => x.VisitDate)
+            .ToListAsync();
+
+        pharmacyMemos = await db.PharmacyCashMemos.Include(x => x.Items).AsNoTracking()
+            .Where(x => x.Name == pName || (contact != null && x.Contact == contact))
+            .OrderByDescending(x => x.TransDate)
+            .ToListAsync();
+
+        // 8. OT Surgery Cash Memos
+        otMemos = await db.OTCashMemos.Include(x => x.Items).AsNoTracking()
+            .Where(x => (pid != null && x.PatientID == pid) || x.PatientName == pName || (contact != null && x.Contact == contact))
+            .OrderByDescending(x => x.TransDate)
+            .ToListAsync();
+
+        // Compile Unified Document Stream
+        CompileUnifiedDocuments();
+    }
+
+    private void CompileUnifiedDocuments()
+    {
+        allDocs.Clear();
+        receiptDocs.Clear();
+        totalGrossBilled = 0;
+        totalDiscount = 0;
+        totalPaid = 0;
+
+        // 1. Diagnostic Documents
+        foreach (var m in diagnosticMemos)
+        {
+            var net = Math.Max(0, m.Total - m.Discount);
+            var due = Math.Max(0, net - m.Paid);
+            var isAuth = !string.IsNullOrWhiteSpace(m.Remarks) && m.Remarks.Contains("[AUTH_RELEASE]");
+            var mResults = labResults.Where(x => x.MemoID == m.ID).ToList();
+            var isPub = mResults.Count > 0 && mResults.Any(x => !string.IsNullOrWhiteSpace(x.ResultValue));
+
+            totalGrossBilled += m.Total;
+            totalDiscount += m.Discount;
+            totalPaid += m.Paid;
+
+            var testNames = string.Join(", ", m.Items.Select(i => ServiceName(i.TestID)));
+            if (string.IsNullOrWhiteSpace(testNames)) testNames = "Diagnostic Investigation";
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = m.ID.ToString(),
+                DocType = "Diagnostic",
+                Title = $"Diagnostic Report #{m.ID} — {testNames}",
+                Subtitle = $"Tests: {m.Items.Count} item(s) &bull; Ref Doctor: {DoctorName(m.DoctorID)}",
+                Date = m.TransDate,
+                GrossAmount = m.Total,
+                Discount = m.Discount,
+                PaidAmount = m.Paid,
+                DueAmount = due,
+                Status = isPub ? (due <= 0.01m ? "Report Verified" : (isAuth ? "Auth Released" : "Due Locked")) : "In Progress",
+                BadgeClass = isPub ? (due <= 0.01m ? "verified" : (isAuth ? "auth" : "due")) : "pending",
+                IsVerified = isPub,
+                IsPublished = isPub,
+                IsAuthorizedRelease = isAuth,
+                RawEntity = m
+            };
+            allDocs.Add(doc);
+
+            // Also add to Receipts list
+            receiptDocs.Add(new UnifiedPatientDoc
+            {
+                DocKey = $"REC-DX-{m.ID}",
+                DocType = "Receipt",
+                Title = $"Diagnostic Money Receipt #{m.ID}",
+                Subtitle = $"Test Invoice &bull; Paid: {I18n.FormatCurrency(m.Paid)} &bull; Due: {I18n.FormatCurrency(due)}",
+                Date = m.TransDate,
+                GrossAmount = m.Total,
+                Discount = m.Discount,
+                PaidAmount = m.Paid,
+                DueAmount = due,
+                Status = due <= 0.01m ? "PAID" : "DUE",
+                BadgeClass = due <= 0.01m ? "paid" : "due",
+                RawEntity = m
+            });
+        }
+
+        // 2. OPD Tickets
+        foreach (var t in opdTickets)
+        {
+            totalGrossBilled += t.Total;
+            totalPaid += t.Total;
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = t.ID.ToString(),
+                DocType = "Ticket",
+                Title = $"Consultation Ticket #{t.ID} — {DoctorName(t.DoctorID)}",
+                Subtitle = $"Room: {t.Room ?? "OPD"} &bull; Dept: {DepartmentName(t.DeptID)}",
+                Date = t.TransDate,
+                GrossAmount = t.Total,
+                Discount = 0,
+                PaidAmount = t.Total,
+                DueAmount = 0,
+                Status = "Issued / Paid",
+                BadgeClass = "paid",
+                RawEntity = t
+            };
+            allDocs.Add(doc);
+            receiptDocs.Add(doc);
+        }
+
+        // 3. Doctor Appointments
+        foreach (var a in appointments)
+        {
+            allDocs.Add(new UnifiedPatientDoc
+            {
+                DocKey = $"APT-{a.ID}",
+                DocType = "Ticket",
+                Title = $"Doctor Appointment Serial #{a.ApptSLNO} — {DoctorName(a.DoctorID)}",
+                Subtitle = $"Appointment Date: {a.ApptDate:dd MMM yyyy} &bull; Contact: {a.ContactNo}",
+                Date = a.ApptDate,
+                GrossAmount = 0,
+                PaidAmount = 0,
+                DueAmount = 0,
+                Status = "Scheduled",
+                BadgeClass = "pending",
+                RawEntity = a
+            });
+        }
+
+        // 4. IPD Inpatient Admissions & Bills
+        foreach (var adm in admissions)
+        {
+            var finalBill = ipdFinalBills.FirstOrDefault(x => x.RegNo == adm.RegNo);
+            var gross = finalBill?.GrossAmount ?? (adm.AdmissionFee ?? 0);
+            var disc = finalBill?.DiscountAmount ?? 0;
+            var paid = finalBill?.AppliedAdvanceAmount ?? (adm.AdmissionFee ?? 0);
+            var due = finalBill?.BalanceDue ?? 0;
+
+            totalGrossBilled += gross;
+            totalDiscount += disc;
+            totalPaid += paid;
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = $"IPD-{adm.ID}",
+                DocType = "IPD",
+                Title = $"Inpatient Admission #{adm.ID} (Reg: {adm.RegNo})",
+                Subtitle = $"Diagnosis: {adm.Diagnosis ?? "Clinical observation"} &bull; Bed: {BedName(adm.BedCabinID)} &bull; Discharged: {(adm.ReleaseDate.HasValue ? adm.ReleaseDate.Value.ToString("dd MMM yyyy") : "Admitted Active")}",
+                Date = adm.AdmissionDate ?? adm.TransDate ?? DateTime.Now,
+                GrossAmount = gross,
+                Discount = disc,
+                PaidAmount = paid,
+                DueAmount = due,
+                Status = adm.ReleaseDate.HasValue ? "Discharged" : "Admitted Active",
+                BadgeClass = adm.ReleaseDate.HasValue ? "verified" : "paid",
+                RawEntity = adm
+            };
+            allDocs.Add(doc);
+
+            // Add IPD Money Receipts
+            foreach (var r in ipdReceipts.Where(x => x.RegNo == adm.RegNo))
+            {
+                receiptDocs.Add(new UnifiedPatientDoc
+                {
+                    DocKey = $"IPD-REC-{r.ID}",
+                    DocType = "Receipt",
+                    Title = $"IPD Inpatient Receipt #{r.ID} ({r.Against})",
+                    Subtitle = $"Reg #{adm.RegNo} &bull; Amount: {I18n.FormatCurrency(r.Amount)}",
+                    Date = r.TransDate,
+                    GrossAmount = r.Amount,
+                    PaidAmount = r.Amount,
+                    DueAmount = 0,
+                    Status = "PAID",
+                    BadgeClass = "paid",
+                    RawEntity = r
+                });
+            }
+
+            // Build IPD Prescription & Medication Chart for this admission
+            var admTx = ipdTransactions.Where(x => x.RegNo == adm.RegNo).ToList();
+            var admMeds = new List<PrescriptionA4PrintSheet.PrescriptionMedItem>();
+            var admTests = new List<string>();
+
+            foreach (var tx in admTx)
+            {
+                var s = services.FirstOrDefault(x => x.ID == tx.ServiceID);
+                if (IsMedicationService(s))
+                {
+                    admMeds.Add(new PrescriptionA4PrintSheet.PrescriptionMedItem
+                    {
+                        MedicineName = s?.Name ?? $"Medicine #{tx.ServiceID}",
+                        Quantity = tx.Quantity,
+                        Dosage = "Daily IV / Routine Dose",
+                        Duration = "Bed Stay",
+                        Instruction = "Administered by Nursing Staff"
+                    });
+                }
+                else if (s?.InvestigationModuleID != null || (s?.CategoryID != null && s.CategoryID == 2))
+                {
+                    if (s?.Name != null && !admTests.Contains(s.Name))
+                    {
+                        admTests.Add(s.Name);
+                    }
+                }
+            }
+
+            allDocs.Add(new UnifiedPatientDoc
+            {
+                DocKey = $"RX-IPD-{adm.RegNo}",
+                DocType = "Prescription",
+                Title = $"Inpatient Clinical Medication & Treatment Chart — {DoctorName(adm.Consultant)}",
+                Subtitle = $"Reg #{adm.RegNo} &bull; Bed: {BedName(adm.BedCabinID)} &bull; {admMeds.Count} medication(s) prescribed",
+                Date = adm.AdmissionDate ?? adm.TransDate ?? DateTime.Now,
+                GrossAmount = 0,
+                PaidAmount = 0,
+                DueAmount = 0,
+                Status = "Prescribed",
+                BadgeClass = "verified",
+                RawEntity = new IpdPrescriptionViewModel
+                {
+                    Admission = adm,
+                    DoctorName = DoctorName(adm.Consultant),
+                    BedName = BedName(adm.BedCabinID),
+                    Medications = admMeds,
+                    AdvisedTests = admTests
+                }
+            });
+        }
+
+        // 5. Prescriptions & Pharmacy Cash Memos
+        foreach (var p in prescriptions)
+        {
+            var medCount = p.Medicines?.Count ?? 0;
+            allDocs.Add(new UnifiedPatientDoc
+            {
+                DocKey = $"RX-{p.ID}",
+                DocType = "Prescription",
+                Title = $"Clinical Prescription #{p.ID} — {DoctorName(p.ReferredBy)}",
+                Subtitle = $"{medCount} medicine(s) prescribed &bull; Diagnosis: {p.Diagnosis ?? "Consultation"}",
+                Date = p.VisitDate ?? DateTime.Now,
+                GrossAmount = 0,
+                PaidAmount = 0,
+                DueAmount = 0,
+                Status = "Prescribed",
+                BadgeClass = "verified",
+                RawEntity = p
+            });
+        }
+
+        foreach (var ph in pharmacyMemos)
+        {
+            var gross = ph.Total ?? 0;
+            var disc = ph.Discount ?? 0;
+            var net = Math.Max(0, gross - disc);
+            var paid = (ph.IsCredit == true) ? 0 : net;
+            var due = Math.Max(0, net - paid);
+            totalGrossBilled += gross;
+            totalDiscount += disc;
+            totalPaid += paid;
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = $"PH-MEMO-{ph.ID}",
+                DocType = "Pharmacy",
+                Title = $"Pharmacy Cash Memo #{ph.ID}",
+                Subtitle = $"Medicines: {ph.Items.Count} item(s) &bull; Reg: {ph.RegNo ?? "Walk-in"}",
+                Date = ph.TransDate,
+                GrossAmount = gross,
+                Discount = disc,
+                PaidAmount = paid,
+                DueAmount = due,
+                Status = due <= 0.01m ? "PAID" : "DUE",
+                BadgeClass = due <= 0.01m ? "paid" : "due",
+                RawEntity = ph
+            };
+            allDocs.Add(doc);
+            receiptDocs.Add(doc);
+        }
+
+        // 6. Emergency & OT Memos
+        foreach (var em in emergencyMemos)
+        {
+            var net = Math.Max(0, em.Total - em.Discount);
+            var due = Math.Max(0, net - em.Paid);
+            totalGrossBilled += em.Total;
+            totalDiscount += em.Discount;
+            totalPaid += em.Paid;
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = $"EM-{em.ID}",
+                DocType = "Emergency",
+                Title = $"Emergency Care Memo #{em.ID}",
+                Subtitle = $"Procedures: {em.Items.Count} item(s) &bull; Doctor: {DoctorName(em.DoctorID)}",
+                Date = em.TransDate,
+                GrossAmount = em.Total,
+                Discount = em.Discount,
+                PaidAmount = em.Paid,
+                DueAmount = due,
+                Status = due <= 0.01m ? "PAID" : "DUE",
+                BadgeClass = due <= 0.01m ? "paid" : "due",
+                RawEntity = em
+            };
+            allDocs.Add(doc);
+            receiptDocs.Add(doc);
+        }
+
+        foreach (var ot in otMemos)
+        {
+            var net = Math.Max(0, ot.Total - ot.Discount);
+            var paid = net;
+            var due = 0m;
+            totalGrossBilled += ot.Total;
+            totalDiscount += ot.Discount;
+            totalPaid += paid;
+
+            var doc = new UnifiedPatientDoc
+            {
+                DocKey = $"OT-{ot.ID}",
+                DocType = "OT",
+                Title = $"OT Surgery Cash Memo #{ot.ID}",
+                Subtitle = $"Surgeon: {DoctorName(ot.DoctorID)} &bull; Items: {ot.Items.Count}",
+                Date = ot.TransDate,
+                GrossAmount = ot.Total,
+                Discount = ot.Discount,
+                PaidAmount = paid,
+                DueAmount = due,
+                Status = "PAID",
+                BadgeClass = "paid",
+                RawEntity = ot
+            };
+            allDocs.Add(doc);
+            receiptDocs.Add(doc);
+        }
+
+        // Sort all by Date Descending
+        allDocs = allDocs.OrderByDescending(x => x.Date).ToList();
+        receiptDocs = receiptDocs.OrderByDescending(x => x.Date).ToList();
+        netDueBalance = Math.Max(0, (totalGrossBilled - totalDiscount) - totalPaid);
+    }
+
+    private List<UnifiedPatientDoc> FilteredDocs => activeTab switch
+    {
+        "Diagnostic" => allDocs.Where(x => x.DocType == "Diagnostic").ToList(),
+        "Receipts" => receiptDocs,
+        "Tickets" => allDocs.Where(x => x.DocType == "Ticket").ToList(),
+        "IPD" => allDocs.Where(x => x.DocType == "IPD" || (x.DocType == "Prescription" && x.DocKey.StartsWith("RX-IPD"))).ToList(),
+        "Pharmacy" => allDocs.Where(x => x.DocType == "Pharmacy" || x.DocType == "Prescription").ToList(),
+        "EmergencyOT" => allDocs.Where(x => x.DocType == "Emergency" || x.DocType == "OT").ToList(),
+        _ => allDocs
+    };
+
+    private string GetDocIcon(string docType) => docType switch
+    {
+        "Diagnostic" => "🔬",
+        "Ticket" => "🎫",
+        "IPD" => "🏥",
+        "Pharmacy" => "💊",
+        "Prescription" => "💊",
+        "Emergency" => "⚡",
+        "OT" => "🔪",
+        "Receipt" => "🧾",
+        _ => "📄"
+    };
+
+    private string FormatAge(DateTime dob)
+    {
+        var age = DateTime.Today.Year - dob.Year;
+        if (dob.Date > DateTime.Today.AddYears(-age)) age--;
+        return $"{Math.Max(1, age)} Y";
+    }
+
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Test #{id}";
+    private string DoctorName(int? id) => doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Duty Doctor";
+    private string? DoctorQualification(int? id) => doctors.FirstOrDefault(x => x.ID == id)?.Degree ?? "MBBS, Specialist Consultant";
+    private string? DoctorDesignation(int? id) => doctors.FirstOrDefault(x => x.ID == id)?.Title ?? "Consultant";
+    private string? DoctorDeptName(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        if (d?.Department != null) return DepartmentName(d.Department);
+        return "Clinical Medicine";
+    }
+    private string DepartmentName(int? id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "General OPD";
+    private string BedName(int? id) => bedCabins.FirstOrDefault(x => x.ID == id)?.Name ?? (id.HasValue && id.Value > 0 ? $"Bed #{id}" : "Assigned Bed");
+
+    private bool IsMedicationService(Service? s)
+    {
+        if (s == null) return false;
+        if (s.TypeID != null || s.GenericID != null || s.SupplierID != null) return true;
+        var name = s.Name?.ToLowerInvariant() ?? "";
+        return name.Contains("inj") || name.Contains("inf") || name.Contains("tab") || name.Contains("cap") || name.Contains("syp") || name.Contains("drop") || name.Contains("mg") || name.Contains("ml") || name.Contains("saline") || name.Contains("napa") || name.Contains("maxpro") || name.Contains("ceftizone") || name.Contains("amibac") || name.Contains("levoxin") || name.Contains("solution") || name.Contains("cannula") || name.Contains("set");
+    }
+
+    private void OpenDocumentPreview(UnifiedPatientDoc doc)
+    {
+        activeModalDoc = doc;
+    }
+
+    private void CloseDocumentPreview()
+    {
+        activeModalDoc = null;
+    }
+
+    private async Task PrintModalDocumentAsync()
+    {
+        await JS.InvokeVoidAsync("window.hpm.printElement", "doc-modal-printable-content", activeModalDoc?.Title ?? "Document");
+    }
+
+    private async Task PrintPatientDossierAsync()
+    {
+        await JS.InvokeVoidAsync("window.hpm.printElement", "printable-patient-dossier", $"{selectedPatient?.Name} Dossier");
+    }
+
+    private void ResetSearch()
+    {
+        selectedPatient = null;
+        allDocs.Clear();
+        receiptDocs.Clear();
+        searchQuery = "";
+        totalGrossBilled = 0;
+        totalDiscount = 0;
+        totalPaid = 0;
+        netDueBalance = 0;
+    }
+
+    private static List<string> SplitAdvisedTests(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return [];
+        return raw.Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                  .Select(x => x.Trim().TrimStart('0','1','2','3','4','5','6','7','8','9','.','-','*',' '))
+                  .Where(x => !string.IsNullOrWhiteSpace(x))
+                  .Distinct()
+                  .ToList();
+    }
+
+    public void Dispose() { }
+
+    public class UnifiedPatientDoc
+    {
+        public string DocKey { get; set; } = "";
+        public string DocType { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Subtitle { get; set; } = "";
+        public DateTime Date { get; set; }
+        public decimal GrossAmount { get; set; }
+        public decimal Discount { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal DueAmount { get; set; }
+        public string Status { get; set; } = "";
+        public string BadgeClass { get; set; } = "";
+        public bool IsVerified { get; set; }
+        public bool IsPublished { get; set; }
+        public bool IsAuthorizedRelease { get; set; }
+        public object? RawEntity { get; set; }
+    }
+
+    public class IpdPrescriptionViewModel
+    {
+        public PatientAdmission Admission { get; set; } = new();
+        public string DoctorName { get; set; } = "";
+        public string BedName { get; set; } = "";
+        public List<PrescriptionA4PrintSheet.PrescriptionMedItem> Medications { get; set; } = [];
+        public List<string> AdvisedTests { get; set; } = [];
+    }
+}

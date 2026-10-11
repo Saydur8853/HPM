@@ -1,0 +1,505 @@
+@page "/pharmacy/returns-payments"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.PharmacyOperator + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@implements IDisposable
+@using System.Data
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Returns & Payables") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Pharmacy & Stock")</span>
+        <h1>@I18n.T("Supplier Returns & Payments", "Purchase Return & Supplier Payment")</h1>
+        <p>@I18n.T("Manage supplier credit balances, make ledger payments and process damaged stock returns.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="ResetAll">+ @I18n.T("+ New Counter Sale", "+ New transaction")</button>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(savedReturn is null ? I18n.T("Returns & Payables", "Purchase return") : $"{I18n.T("Returns & Payables")} #{savedReturn.ID}")</h2>
+                <p>@I18n.T("Return damaged or expired stock to suppliers.", "Return damaged or expired stock to suppliers.")</p>
+            </div>
+            @if(savedReturn is not null){<span class="badge">@I18n.T("POSTED")</span>}
+        </div>
+        <div class="form-grid">
+            <label>
+                <span>@I18n.T("Supplier Name", "Supplier *")</span>
+                <select @bind="returnSupplierId">
+                    <option value="0">@I18n.T("Select")</option>
+                    @foreach(var x in suppliers){<option value="@x.ID">@x.Name</option>}
+                </select>
+            </label>
+            <label>
+                <span>@I18n.T("Pharmacy & Stock", "Store *")</span>
+                <select @bind="returnStoreId">
+                    <option value="0">@I18n.T("Select")</option>
+                    @foreach(var x in stores.Where(x=>x.IsActive)){<option value="@x.ID">@x.Name</option>}
+                </select>
+            </label>
+        </div>
+        @if(savedReturn is null)
+        {
+            <div class="form-section-title">@I18n.T("Stock", "Return item from available batch")</div>
+            <div class="form-grid three">
+                <label class="span-2">
+                    <span>@I18n.T("Medicine / Product Name", "Medicine / batch *")</span>
+                    <select @bind="selectedStockId" @bind:after="StockChanged">
+                        <option value="0">@I18n.T("Select")</option>
+                        @foreach(var x in AvailableStocks){
+                            <option value="@x.ID">@MedicineName(x.ServiceID) · @x.BatchNo · exp @x.ExpireDate?.ToString("MMM yy") · qty @x.Balance</option>
+                        }
+                    </select>
+                </label>
+                <label><span>@I18n.T("Quantity *")</span><InputNumber @bind-Value="returnQuantity" /></label>
+                <label><span>@I18n.T("Trade Price (TP)", "Buy rate *")</span><InputNumber @bind-Value="returnBuyRate" /></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-secondary" @onclick="AddReturnLine">+ @I18n.T("Add")</button></div>
+        }
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>@I18n.T("Medicine / Product Name", "Medicine / batch")</th>
+                        <th class="num">@I18n.T("Qty")</th>
+                        <th class="num">@I18n.T("Rate")</th>
+                        <th class="num">@I18n.T("Total")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if(returnLines.Count==0){
+                        <tr><td colspan="6"><div class="empty-state small">@I18n.T("No records found.", "No return item added.")</div></td></tr>
+                    }
+                    @for(var i=0;i<returnLines.Count;i++){
+                        var index=i;
+                        var x=returnLines[i];
+                        <tr>
+                            <td>@(i+1)</td>
+                            <td><b>@MedicineName(x.ServiceID)</b><br/><small>@x.BatchNo</small></td>
+                            <td class="num">@x.Quantity</td>
+                            <td class="num">@I18n.FormatCurrency(x.BuyRate)</td>
+                            <td class="num">@I18n.FormatCurrency(x.Total)</td>
+                            <td>
+                                @if(savedReturn is null){
+                                    <button class="icon-btn" @onclick="()=>returnLines.RemoveAt(index)">✕</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="form-actions">
+            <b>@I18n.T("Total"): @I18n.FormatCurrency(ReturnTotal)</b>
+            @if(savedReturn is null){
+                <button class="btn btn-primary" @onclick="PostReturnAsync" disabled="@isSaving">
+                    @(isSaving?I18n.T("Saving…"):I18n.T("Post Supplier Payment", "Post return"))
+                </button>
+            }
+            else{
+                <button class="btn btn-secondary" @onclick="PrintReturnAsync">@I18n.T("Print")</button>
+            }
+        </div>
+    </div>
+
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(savedPayment is null ? I18n.T("Supplier Returns & Payments", "Supplier payment") : $"{I18n.T("Supplier Returns & Payments")} #{savedPayment.ID}")</h2>
+                <p>@I18n.T("Supplier invoice settlement and payment ledger.", "Supplier invoice settlement and payment ledger.")</p>
+            </div>
+            @if(savedPayment is not null){<span class="badge">@I18n.T("POSTED")</span>}
+        </div>
+        <div class="form-grid">
+            <label>
+                <span>@I18n.T("Supplier Name", "Supplier *")</span>
+                <select @bind="paymentSupplierId" @bind:after="PaymentSupplierChanged">
+                    <option value="0">@I18n.T("Select")</option>
+                    @foreach(var x in suppliers){<option value="@x.ID">@x.Name</option>}
+                </select>
+            </label>
+            <label><span>@I18n.T("Outstanding Balance", "Current payable")</span><input value="@I18n.FormatCurrency(paymentPayable)" disabled /></label>
+            <label><span>@I18n.T("Payment Amount", "Amount *")</span><InputNumber @bind-Value="paymentAmount" /></label>
+            <label>
+                <span>@I18n.T("Payment Method", "Payment mode *")</span>
+                <select @bind="paymentMode">
+                    <option value="Cash">@I18n.T("Cash")</option>
+                    <option value="Bank">@I18n.T("Bank", "Bank")</option>
+                    <option value="Mobile Banking">@I18n.T("Mobile Banking")</option>
+                    <option value="Cheque">@I18n.T("Cheque")</option>
+                </select>
+            </label>
+        </div>
+        <div class="form-actions">
+            @if(savedPayment is null){
+                <button class="btn btn-primary" @onclick="PostPaymentAsync" disabled="@isSaving">
+                    @(isSaving?I18n.T("Saving…"):I18n.T("Post Supplier Payment"))
+                </button>
+            }
+            else{
+                <button class="btn btn-secondary" @onclick="PrintPaymentAsync">@I18n.T("Print")</button>
+            }
+        </div>
+        <div class="form-section-title">@I18n.T("Recent Clinical Activity", "Recent payments")</div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Bill No", "Payment")</th>
+                        <th>@I18n.T("Supplier Name", "Supplier")</th>
+                        <th>@I18n.T("Payment Method", "Mode")</th>
+                        <th class="num">@I18n.T("Amount")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var x in recentPayments){
+                        <tr>
+                            <td>#@x.ID<br/><small>@x.TransDate.ToString("dd MMM yy")</small></td>
+                            <td>@SupplierName(x.SupplierID)</td>
+                            <td>@I18n.T(x.PaymentMode)</td>
+                            <td class="num">@I18n.FormatCurrency(x.Amount)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="panel" style="margin-top:24px">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Accounts & Ledger", "Supplier ledger")</h2>
+            <p>@I18n.T("Purchases, returns, payments and running balance")</p>
+        </div>
+        <div style="display:flex;gap:8px">
+            <select @bind="ledgerSupplierId">
+                <option value="0">@I18n.T("All suppliers", "All suppliers")</option>
+                @foreach(var x in suppliers){<option value="@x.ID">@x.Name</option>}
+            </select>
+            <InputDate @bind-Value="fromDate"/>
+            <InputDate @bind-Value="toDate"/>
+            <button class="btn btn-secondary" @onclick="LoadLedgerAsync">@I18n.T("Filter")</button>
+        </div>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Date")</th>
+                    <th>@I18n.T("Supplier Name", "Supplier")</th>
+                    <th>@I18n.T("Particulars / Narration", "Particulars")</th>
+                    <th class="num">@I18n.T("Debit", "Debit")</th>
+                    <th class="num">@I18n.T("Credit", "Credit")</th>
+                    <th class="num">@I18n.T("Balance Due", "Balance")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if(ledger.Count==0){<tr><td colspan="6"><div class="empty-state small">@I18n.T("No records found.")</div></td></tr>}
+                @foreach(var x in ledger){
+                    <tr>
+                        <td>@x.TransDate.ToString("dd MMM yyyy")</td>
+                        <td>@SupplierName(x.SupplierID)</td>
+                        <td>@LedgerParticulars(x)</td>
+                        <td class="num">@I18n.FormatCurrency(x.Debit??0)</td>
+                        <td class="num">@I18n.FormatCurrency(x.Credit??0)</td>
+                        <td class="num"><b>@I18n.FormatCurrency(x.Balance)</b></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@if(savedReturn is not null)
+{
+    <div id="medicine-return-print" class="print-sheet panel">
+        <div class="print-brand">
+            <div>
+                <h1>@Branding.HospitalName</h1>
+                <p>@I18n.T("Pharmacy & Stock")</p>
+            </div>
+            <div>
+                <b>@I18n.T("Returns & Payables"): #@savedReturn.ID</b>
+                <br/><small>@savedReturn.TransDate.ToString("dd MMM yyyy hh:mm tt")</small>
+            </div>
+        </div>
+        <h2 class="print-title">@I18n.T("Supplier Returns & Payments", "Medicine Purchase Return")</h2>
+        <div class="print-grid">
+            <div><span>@I18n.T("Supplier Name"):</span> <b>@SupplierName(savedReturn.SupplierID)</b></div>
+            <div><span>@I18n.T("Pharmacy & Stock"):</span> <b>@StoreName(savedReturn.StoreID)</b></div>
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
+                    <th>@I18n.T("Batch")</th>
+                    <th class="num">@I18n.T("Qty")</th>
+                    <th class="num">@I18n.T("Rate")</th>
+                    <th class="num">@I18n.T("Amount")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var x in returnLines){
+                    <tr>
+                        <td>@MedicineName(x.ServiceID)</td>
+                        <td>@x.BatchNo</td>
+                        <td class="num">@x.Quantity</td>
+                        <td class="num">@I18n.FormatCurrency(x.BuyRate)</td>
+                        <td class="num">@I18n.FormatCurrency(x.Total)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-total">
+            <div class="grand">
+                <span>@I18n.T("Total")</span>
+                <b>@I18n.FormatCurrency(ReturnTotal)</b>
+            </div>
+        </div>
+        <div class="print-footer">
+            <span class="print-sign">@I18n.T("Admission Officer", "Prepared By")</span>
+            <span class="print-sign">@I18n.T("Discharge Authority", "Authorized By")</span>
+        </div>
+    </div>
+}
+
+@if(savedPayment is not null)
+{
+    <div id="supplier-payment-print" class="print-sheet panel">
+        <div class="print-brand">
+            <div>
+                <h1>@Branding.HospitalName</h1>
+                <p>@I18n.T("Accounts & Ledger")</p>
+            </div>
+            <div>
+                <b>@I18n.T("Supplier Returns & Payments"): #@savedPayment.ID</b>
+                <br/><small>@savedPayment.TransDate.ToString("dd MMM yyyy hh:mm tt")</small>
+            </div>
+        </div>
+        <h2 class="print-title">@I18n.T("Supplier Returns & Payments", "Supplier Payment Voucher")</h2>
+        <div class="print-grid">
+            <div><span>@I18n.T("Supplier Name"):</span> <b>@SupplierName(savedPayment.SupplierID)</b></div>
+            <div><span>@I18n.T("Payment Method"):</span> <b>@I18n.T(savedPayment.PaymentMode)</b></div>
+            <div><span>@I18n.T("Amount"):</span> <b>@I18n.FormatCurrency(savedPayment.Amount)</b></div>
+        </div>
+        <div class="print-footer">
+            <span class="print-sign">@I18n.T("Patient / Attendant", "Receiver")</span>
+            <span class="print-sign">@I18n.T("Cashier")</span>
+            <span class="print-sign">@I18n.T("Discharge Authority", "Authorized By")</span>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Service> medicines=[];
+    private List<SupplierPharmacy> suppliers=[];
+    private List<MedicineStore> stores=[];
+    private List<MedicineStoreBalance> stocks=[];
+    private List<MedicineReturn> recentReturns=[];
+    private List<SupplierPayment> recentPayments=[];
+    private List<SupplierLedger> ledger=[];
+    private List<ReturnLine> returnLines=[];
+    private MedicineReturn? savedReturn;
+    private SupplierPayment? savedPayment;
+    private int returnSupplierId,returnStoreId=1,selectedStockId,paymentSupplierId,ledgerSupplierId;
+    private decimal returnQuantity=1,returnBuyRate,paymentAmount,paymentPayable;
+    private string paymentMode="Cash",message="",messageClass="success";
+    private DateTime fromDate=DateTime.Today.AddDays(-30),toDate=DateTime.Today;
+    private bool isSaving;
+
+    private IEnumerable<MedicineStoreBalance> AvailableStocks=>stocks.Where(x=>x.MedicineStoreID==returnStoreId&&x.Balance>0).OrderBy(x=>MedicineName(x.ServiceID)).ThenBy(x=>x.ExpireDate);
+    private decimal ReturnTotal=>returnLines.Sum(x=>x.Total);
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).OrderBy(x=>x.Name).ToListAsync();
+        suppliers=await db.PharmacySuppliers.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+        stores=await db.MedicineStores.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+        stocks=await db.MedicineStoreBalances.AsNoTracking().Where(x=>x.Balance>0).ToListAsync();
+        recentReturns=await db.MedicineReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(50).ToListAsync();
+        recentPayments=await db.SupplierPayments.AsNoTracking().OrderByDescending(x=>x.ID).Take(50).ToListAsync();
+        await LoadLedgerAsync();
+    }
+
+    private void StockChanged()
+    {
+        var stock=stocks.FirstOrDefault(x=>x.ID==selectedStockId);
+        returnBuyRate=medicines.FirstOrDefault(x=>x.ID==stock?.ServiceID)?.BuyRate??0;
+    }
+
+    private void AddReturnLine()
+    {
+        var stock=stocks.FirstOrDefault(x=>x.ID==selectedStockId);
+        if(stock is null||returnQuantity<=0||returnBuyRate<0){
+            Fail(I18n.IsBangla ? "স্টক ব্যাচ নির্বাচন করুন এবং সঠিক পরিমাণ/দর লিখুন।" : "Select a stock batch and enter valid quantity/rate.");
+            return;
+        }
+        if(returnLines.Any(x=>x.StockID==stock.ID)){
+            Fail(I18n.IsBangla ? "এই ব্যাচটি ইতিমধ্যে তালিকায় রয়েছে।" : "This batch is already in the return list.");
+            return;
+        }
+        if(returnQuantity>stock.Balance){
+            Fail(I18n.IsBangla ? "ফেরতের পরিমাণ উপলব্ধ স্টকের চেয়ে বেশি।" : "Return quantity exceeds available batch stock.");
+            return;
+        }
+        returnLines.Add(new ReturnLine(stock.ID,stock.ServiceID,stock.BatchNo??"",returnQuantity,returnBuyRate));
+        selectedStockId=0;
+        returnQuantity=1;
+        returnBuyRate=0;
+        message="";
+    }
+
+    private async Task PostReturnAsync()
+    {
+        if(returnSupplierId<=0||returnStoreId<=0||returnLines.Count==0){
+            Fail(I18n.IsBangla ? "সরবরাহকারী, স্টোর এবং অন্তত একটি আইটেম আবশ্যক।" : "Supplier, store and at least one return item are required.");
+            return;
+        }
+        isSaving=true;
+        await using var db=await DbFactory.CreateDbContextAsync();
+        await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        try
+        {
+            var uid=await CurrentUserIdAsync();
+            var now=DateTime.Now;
+            var h=new MedicineReturn{SupplierID=returnSupplierId,StoreID=returnStoreId,IsPosted=true,EnteredBy=uid,TransDate=now};
+            db.MedicineReturns.Add(h);
+            await db.SaveChangesAsync();
+            var sl=1;
+            foreach(var line in returnLines)
+            {
+                var stock=await db.MedicineStoreBalances.FirstOrDefaultAsync(x=>x.ID==line.StockID&&x.MedicineStoreID==returnStoreId);
+                if(stock is null||stock.Balance<line.Quantity)throw new InvalidOperationException($"Insufficient stock for {MedicineName(line.ServiceID)} batch {line.BatchNo}.");
+                stock.Balance-=line.Quantity;
+                db.MedicineReturnItems.Add(new MedicineReturnItem{MedicineReturnID=h.ID,ServiceID=line.ServiceID,SLNO=sl++,Quantity=line.Quantity,BuyRate=line.BuyRate});
+            }
+            var previous=await db.SupplierLedgers.Where(x=>x.SupplierID==returnSupplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
+            db.SupplierLedgers.Add(new SupplierLedger{SupplierID=returnSupplierId,ChallanNo=-h.ID,Debit=ReturnTotal,Credit=0,Balance=previous-ReturnTotal,TransDate=now});
+            AccountingPosting.AddPostedVoucher(db,"Purchase Return",now,$"Medicine return to {SupplierName(returnSupplierId)}",$"PHARMACY-RETURN:{h.ID}",uid,(AccountingPosting.SupplierPayable,ReturnTotal,0),(AccountingPosting.MedicinePurchase,0,ReturnTotal));
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            savedReturn=h;
+            Success(I18n.IsBangla ? $"ক্রয় ফেরত #{h.ID} পোস্ট করা হয়েছে; স্টক ও লেজার আপডেট হয়েছে।" : $"Purchase return #{h.ID} posted; stock, supplier ledger and accounts updated.");
+            await RefreshAfterPostAsync();
+        }
+        catch(Exception ex){
+            await tx.RollbackAsync();
+            Fail(I18n.IsBangla ? $"ফেরত প্রক্রিয়া ব্যর্থ: {ex.Message}" : $"Return failed: {ex.Message}");
+        }
+        finally{isSaving=false;}
+    }
+
+    private async Task PaymentSupplierChanged()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        paymentPayable=paymentSupplierId<=0?0:await db.SupplierLedgers.Where(x=>x.SupplierID==paymentSupplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
+    }
+
+    private async Task PostPaymentAsync()
+    {
+        if(paymentSupplierId<=0||paymentAmount<=0||string.IsNullOrWhiteSpace(paymentMode)){
+            Fail(I18n.IsBangla ? "সরবরাহকারী, পরিমাণ এবং পেমেন্ট মাধ্যম আবশ্যক।" : "Supplier, amount and payment mode are required.");
+            return;
+        }
+        isSaving=true;
+        await using var db=await DbFactory.CreateDbContextAsync();
+        await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        try
+        {
+            var payable=await db.SupplierLedgers.Where(x=>x.SupplierID==paymentSupplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
+            if(paymentAmount>payable)throw new InvalidOperationException(I18n.IsBangla ? $"পেমেন্টের পরিমাণ বর্তমান দেনা {I18n.FormatCurrency(payable)}-এর বেশি।" : $"Payment exceeds current payable of ৳{payable:N2}.");
+            var uid=await CurrentUserIdAsync();
+            var now=DateTime.Now;
+            var p=new SupplierPayment{SupplierID=paymentSupplierId,Amount=paymentAmount,PaymentMode=paymentMode,EnteredBy=uid,TransDate=now};
+            db.SupplierPayments.Add(p);
+            await db.SaveChangesAsync();
+            db.SupplierLedgers.Add(new SupplierLedger{SupplierID=paymentSupplierId,SupplierPaymentID=p.ID,Debit=paymentAmount,Credit=0,Balance=payable-paymentAmount,TransDate=now});
+            AccountingPosting.AddPostedVoucher(db,"Payment",now,$"Supplier payment to {SupplierName(paymentSupplierId)}",$"SUPPLIER-PAYMENT:{p.ID}",uid,(AccountingPosting.SupplierPayable,paymentAmount,0),(AccountingPosting.Cash,0,paymentAmount));
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            savedPayment=p;
+            paymentPayable=payable-paymentAmount;
+            Success(I18n.IsBangla ? $"সরবরাহকারী পেমেন্ট #{p.ID} লেজার ও অ্যাকাউন্টে পোস্ট করা হয়েছে।" : $"Supplier payment #{p.ID} posted to ledger and accounts.");
+            await RefreshAfterPostAsync();
+        }
+        catch(Exception ex){
+            await tx.RollbackAsync();
+            Fail(I18n.IsBangla ? $"পেমেন্ট ব্যর্থ: {ex.Message}" : $"Payment failed: {ex.Message}");
+        }
+        finally{isSaving=false;}
+    }
+
+    private async Task RefreshAfterPostAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        stocks=await db.MedicineStoreBalances.AsNoTracking().Where(x=>x.Balance>0).ToListAsync();
+        recentReturns=await db.MedicineReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(50).ToListAsync();
+        recentPayments=await db.SupplierPayments.AsNoTracking().OrderByDescending(x=>x.ID).Take(50).ToListAsync();
+        await LoadLedgerAsync();
+    }
+
+    private async Task LoadLedgerAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        var end=toDate.Date.AddDays(1);
+        ledger=await db.SupplierLedgers.AsNoTracking().Where(x=>(ledgerSupplierId==0||x.SupplierID==ledgerSupplierId)&&x.TransDate>=fromDate.Date&&x.TransDate<end).OrderBy(x=>x.SupplierID).ThenBy(x=>x.ID).ToListAsync();
+    }
+
+    private string LedgerParticulars(SupplierLedger x)=>x.SupplierPaymentID.HasValue?$"Payment #{x.SupplierPaymentID}":x.ChallanNo<0?$"Purchase return #{-x.ChallanNo}":x.ChallanNo.HasValue?$"Purchase challan #{x.ChallanNo}":"Opening balance";
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var u=(await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;
+    }
+
+    private async Task PrintReturnAsync()=>await JS.InvokeVoidAsync("hpm.printElement","medicine-return-print"); 
+    private async Task PrintPaymentAsync()=>await JS.InvokeVoidAsync("hpm.printElement","supplier-payment-print");
+
+    private void ResetAll()
+    {
+        savedReturn=null;
+        savedPayment=null;
+        returnSupplierId=0;
+        returnStoreId=stores.FirstOrDefault(x=>x.IsActive)?.ID??1;
+        selectedStockId=0;
+        returnLines=[];
+        paymentSupplierId=0;
+        paymentAmount=0;
+        paymentPayable=0;
+        paymentMode="Cash";
+        message="";
+    }
+
+    private string MedicineName(int id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—"; 
+    private string SupplierName(int id)=>suppliers.FirstOrDefault(x=>x.ID==id)?.Name??"—"; 
+    private string StoreName(int id)=>stores.FirstOrDefault(x=>x.ID==id)?.Name??"—"; 
+    private void Success(string x){messageClass="success";message=x;} 
+    private void Fail(string x){messageClass="danger";message=x;}
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    private sealed record ReturnLine(int StockID,int ServiceID,string BatchNo,decimal Quantity,decimal BuyRate){public decimal Total=>Quantity*BuyRate;}
+}

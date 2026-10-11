@@ -1,0 +1,121 @@
+@page "/admin/users"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject UserManager<AppUser> UserManager
+@inject UserAdministrationService UserAdministration
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<HpmDbContext> DbFactory
+
+<PageTitle>@I18n.T("Users & Roles", "Users & Roles") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Security Administration", "Security administration")</span>
+        <h1>@I18n.T("Users & roles", "Users & roles")</h1>
+        <p>@I18n.T("Create staff accounts, assign one operational role and manage access.", "Create staff accounts, assign one operational role and manage access.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New user", "New user")</button>
+</div>
+@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
+
+<div class="master-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID==0 ? I18n.T("Create staff account", "Create staff account") : $"{I18n.T("Edit", "Edit")} {editor.UserName}")</h2>
+                <p>@I18n.T("Password must contain upper/lowercase, number and symbol.", "Password must contain upper/lowercase, number and symbol.")</p>
+            </div>
+            <span class="badge">@(editor.ID==0 ? I18n.T("NEW", "NEW") : I18n.T("EDIT", "EDIT"))</span>
+        </div>
+        <EditForm Model="editor" OnSubmit="SaveAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Display name *", "Display name *")</span><InputText @bind-Value="editor.DisplayName" /></label>
+                <label><span>@I18n.T("Username *", "Username *")</span><InputText @bind-Value="editor.UserName" disabled="@(editor.ID>0)" /></label>
+                <label><span>@I18n.T("Email", "Email")</span><InputText @bind-Value="editor.Email" /></label>
+                <label class="span-2"><span>@I18n.T("Role *", "Role *")</span><InputSelect @bind-Value="editor.Role"><option value="">@I18n.T("Select role", "Select role")</option>@foreach(var role in RoleNames.All){<option value="@role">@role</option>}</InputSelect></label>
+                @if(editor.Role == RoleNames.Doctor)
+                {
+                    <label class="span-2"><span>@I18n.T("Doctors Profile *")</span><InputSelect @bind-Value="editor.DoctorProfileID"><option value="">@I18n.T("Select doctor profile")</option>@foreach(var doctor in doctors){<option value="@doctor.ID">@doctor.Title @doctor.Name (@doctor.Degree)</option>}</InputSelect></label>
+                }
+                <label class="span-2"><span>@(editor.ID==0 ? I18n.T("Temporary password *", "Temporary password *") : I18n.T("New password (leave blank to keep current)", "New password (leave blank to keep current)"))</span><InputText type="password" @bind-Value="editor.Password" /></label>
+                @if(editor.ID>0){<label class="span-2 inline-check"><InputCheckbox @bind-Value="editor.IsActive" /><span>@I18n.T("Account active", "Account active")</span></label>}
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(editor.ID==0 ? I18n.T("Create user", "Create user") : I18n.T("Update user", "Update user"))</button>
+                @if(editor.ID>0){<button class="btn btn-secondary" type="button" @onclick="UnlockAsync">@I18n.T("Unlock", "Unlock")</button>}
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear", "Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Staff accounts", "Staff accounts")</h2><p>@users.Count @I18n.T("account(s)", "account(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("User", "User")</th>
+                        <th>@I18n.T("Role", "Role")</th>
+                        <th>@I18n.T("Status", "Status")</th>
+                        <th>@I18n.T("Created", "Created")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var user in users){
+                        <tr>
+                            <td><b>@user.DisplayName</b><br/><small>@($"@{user.UserName} · {user.Email}")</small></td>
+                            <td><span class="pill">@RoleOf(user.Id)</span></td>
+                            <td>@(user.IsActive ? I18n.T("Active", "Active") : I18n.T("Inactive", "Inactive"))</td>
+                            <td>@user.CreatedAt.ToLocalTime().ToString("dd MMM yyyy")</td>
+                            <td><button class="icon-btn" @onclick="()=>SelectAsync(user)">@I18n.T("Edit", "Edit")</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code{
+    private UserEditor editor=new(){IsActive=true};private List<AppUser> users=[];private List<DoctorsProfile> doctors=[];private Dictionary<int,string> userRoles=[];private string message=string.Empty;private string messageClass="success";
+    
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using(var db=await DbFactory.CreateDbContextAsync()){doctors=await db.Doctors.AsNoTracking().Where(x=>x.Name!=null).OrderBy(x=>x.Name).ToListAsync();}
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){users=await UserManager.Users.AsNoTracking().OrderBy(x=>x.DisplayName).ToListAsync();userRoles=new();foreach(var user in users){userRoles[user.Id]=(await UserManager.GetRolesAsync(user)).FirstOrDefault()??"No role";}}
+    private async Task SaveAsync()
+    {
+        if(string.IsNullOrWhiteSpace(editor.DisplayName)||string.IsNullOrWhiteSpace(editor.UserName)||string.IsNullOrWhiteSpace(editor.Role)){Fail(I18n.IsBangla ? "নাম, ইউজারনেম এবং রোল আবশ্যক।" : "Display name, username and role are required.");return;}
+        if(!RoleNames.All.Contains(editor.Role)){Fail(I18n.IsBangla ? "সঠিক রোল নির্বাচন করুন।" : "Select a valid role.");return;}
+        if(editor.ID==0)
+        {
+            if(string.IsNullOrWhiteSpace(editor.Password)){Fail(I18n.IsBangla ? "অস্থায়ী পাসওয়ার্ড আবশ্যক।" : "A temporary password is required.");return;}
+            var actor=await CurrentActorAsync();
+            var result=await UserAdministration.CreateAsync(ToCommand(),actor.Id,actor.Name);
+            if(!result.Succeeded){Fail(result.Error);return;}
+            Success(I18n.IsBangla ? "ইউজার তৈরি হয়েছে। প্রথমবার লগইনে পাসওয়ার্ড পরিবর্তন করতে হবে।" : "Staff account created. The user must change the temporary password at first sign-in.");
+        }
+        else
+        {
+            var actor=await CurrentActorAsync();
+            var result=await UserAdministration.UpdateAsync(ToCommand(),actor.Id,actor.Name);
+            if(!result.Succeeded){Fail(result.Error);return;}
+            Success(string.IsNullOrWhiteSpace(editor.Password)? (I18n.IsBangla ? "ইউজার আপডেট হয়েছে।" : "Staff account updated.") : (I18n.IsBangla ? "ইউজার আপডেট হয়েছে। পরবর্তী লগইনে পাসওয়ার্ড পরিবর্তন করতে হবে।" : "Staff account updated. The reset password must be changed at next sign-in."));
+        }
+        ResetEditor();await LoadAsync();
+    }
+    private async Task SelectAsync(AppUser user){editor=new UserEditor{ID=user.Id,DisplayName=user.DisplayName,UserName=user.UserName??"",Email=user.Email,Role=RoleOf(user.Id),IsActive=user.IsActive,DoctorProfileID=user.DoctorProfileID};message=string.Empty;await Task.CompletedTask;}
+    private async Task UnlockAsync(){var actor=await CurrentActorAsync();var result=await UserAdministration.UnlockAsync(editor.ID,actor.Id,actor.Name);if(!result.Succeeded){Fail(result.Error);return;}Success(I18n.IsBangla ? "অ্যাকাউন্ট আনলক করা হয়েছে।" : "Account unlocked.");await LoadAsync();}
+    private async Task<(int? Id,string Name)> CurrentActorAsync(){var state=await AuthStateProvider.GetAuthenticationStateAsync();int? id=int.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,out var value)?value:null;return(id,state.User.Identity?.Name??"system");}
+    private UserAdminCommand ToCommand()=>new(editor.ID,editor.DisplayName,editor.UserName,editor.Email,editor.Role,editor.Password,editor.IsActive,editor.Role==RoleNames.Doctor?editor.DoctorProfileID:null);
+    private string RoleOf(int id)=>userRoles.TryGetValue(id,out var role)?role:"No role";private void Reset(){ResetEditor();message=string.Empty;}private void ResetEditor()=>editor=new(){IsActive=true};private void Success(string t){messageClass="success";message=t;}private void Fail(string t){messageClass="danger";message=t;}
+    private sealed class UserEditor{public int ID{get;set;}public string DisplayName{get;set;}="";public string UserName{get;set;}="";public string? Email{get;set;}public string Role{get;set;}="";public string Password{get;set;}="";public bool IsActive{get;set;}=true;public int? DoctorProfileID{get;set;}}
+}

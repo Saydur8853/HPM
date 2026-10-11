@@ -1,0 +1,696 @@
+@page "/ot-cash-memos"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier + "," + RoleNames.OTOperator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("OT Cash Memo") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Module 05", "Module 05")</span>
+        <h1>@I18n.T("OT Cash Memo")</h1>
+        <p>@I18n.T("Operation theatre billing, surgical team charges and anesthesia memo.", "Operation theatre billing, surgical team charges and anesthesia memo.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New OT memo")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="billing-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID == 0 ? I18n.T("Operation theatre billing") : $"{I18n.T("Edit OT memo")} #{editor.ID}")</h2>
+                <p>@I18n.T("Patient, theatre and consultant information.")</p>
+            </div>
+            <span class="badge teal-badge">@(editor.ID == 0 ? I18n.T("OPERATION THEATRE") : I18n.T("EDIT", "EDIT"))</span>
+        </div>
+        <EditForm Model="editor" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="form-grid three">
+                <label>
+                    <span>@I18n.T("Patient ID")</span>
+                    <span class="input-action">
+                        <InputText @bind-Value="editor.PatientID" />
+                        <button type="button" @onclick="FindPatientAsync">@I18n.T("Find")</button>
+                    </span>
+                </label>
+                <label>
+                    <span>@I18n.T("Patient name *")</span>
+                    <InputText @bind-Value="editor.PatientName" />
+                </label>
+                <label>
+                    <span>@I18n.T("Contact Mobile", "Contact")</span>
+                    <InputText @bind-Value="editor.Contact" />
+                </label>
+                <label>
+                    <span>@I18n.T("Age")</span>
+                    <InputText @bind-Value="editor.Age" />
+                </label>
+                <label>
+                    <span>@I18n.T("Sex")</span>
+                    <InputSelect @bind-Value="editor.Sex">
+                        <option value="">@I18n.T("Select")</option>
+                        <option value="Male">@I18n.T("Male")</option>
+                        <option value="Female">@I18n.T("Female")</option>
+                        <option value="Other">@I18n.T("Other")</option>
+                    </InputSelect>
+                </label>
+                <label>
+                    <span>@I18n.T("OT room")</span>
+                    <InputSelect @bind-Value="editor.OT">
+                        <option value="1">@I18n.T("Main OT")</option>
+                        <option value="2">@I18n.T("Emergency OT")</option>
+                        <option value="3">@I18n.T("Day-care OT")</option>
+                    </InputSelect>
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Referred by")</span>
+                    <InputSelect @bind-Value="editor.DoctorID">
+                        <option value="">@I18n.T("Walk-in / None", "None")</option>
+                        @foreach (var doctor in doctors)
+                        {
+                            <option value="@doctor.ID">@DoctorLabel(doctor)</option>
+                        }
+                    </InputSelect>
+                </label>
+            </div>
+
+            <h3 class="form-section-title">@I18n.T("OT services")</h3>
+            <div class="line-editor ot-lines">
+                <label class="service-field">
+                    <span>@I18n.T("Service Item", "Service")</span>
+                    <select value="@selectedServiceId" @onchange="ServiceChanged">
+                        @foreach (var service in services)
+                        {
+                            <option value="@service.ID">@service.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Assigned doctor")</span>
+                    <select value="@lineDoctorId" @onchange="e => int.TryParse(e.Value?.ToString(), out lineDoctorId)">
+                        <option value="0">@I18n.T("Not assigned")</option>
+                        @foreach (var doctor in doctors)
+                        {
+                            <option value="@doctor.ID">@doctor.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Rate")</span>
+                    <InputNumber @bind-Value="lineRate" />
+                </label>
+                <label>
+                    <span>@I18n.T("Qty")</span>
+                    <InputNumber @bind-Value="lineQuantity" />
+                </label>
+                <button class="btn btn-dark" type="button" @onclick="AddLine">@I18n.T("Add")</button>
+            </div>
+
+            <div class="line-table">
+                <div class="line-head ot">
+                    <span>#</span>
+                    <span>@I18n.T("Service Item", "Service")</span>
+                    <span>@I18n.T("Doctor")</span>
+                    <span>@I18n.T("Rate × Qty")</span>
+                    <span>@I18n.T("Amount")</span>
+                    <span></span>
+                </div>
+                @if (editor.Items.Count == 0)
+                {
+                    <div class="empty-state small">@I18n.T("Add at least one OT service.")</div>
+                }
+                @foreach (var item in editor.Items)
+                {
+                    <div class="line-row ot">
+                        <span>@item.SLNO</span>
+                        <span>@ServiceName(item.ServiceID)</span>
+                        <span>@DoctorName(item.DoctorID)</span>
+                        <span>@I18n.FormatCurrency(item.Rate) × @item.Quantity</span>
+                        <strong>@I18n.FormatCurrency(item.Rate * item.Quantity)</strong>
+                        <button type="button" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">×</button>
+                    </div>
+                }
+            </div>
+
+            <div class="billing-footer align-end">
+                <div></div>
+                <div class="totals">
+                    <div>
+                        <span>@I18n.T("Sub Total", "Subtotal")</span>
+                        <strong>@I18n.FormatCurrency(editor.Total)</strong>
+                    </div>
+                    <label>
+                        <span>@I18n.T("Discount")</span>
+                        <InputNumber @bind-Value="editor.Discount" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Discount Authorized By")</span>
+                        <InputText @bind-Value="editor.DiscountBy" placeholder="@I18n.T("Required for discount")" />
+                    </label>
+                    <div class="grand-total">
+                        <span>@I18n.T("Net Payable", "Net payable")</span>
+                        <strong>@I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount))</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit" disabled="@saving">@(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Save OT memo") : I18n.T("Update OT memo"))</button>
+                @if (editor.ID > 0)
+                {
+                    <button class="btn btn-secondary" type="button" @onclick="PrintMemoAsync">@I18n.T("Print memo")</button>
+                    <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync">@I18n.T("Delete")</button>
+                }
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+
+    <div class="panel recent-bills">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Recent OT memos")</h2>
+                <p>@I18n.T("Latest theatre transactions")</p>
+            </div>
+        </div>
+
+        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan OT Memo Barcode / QR or Patient ID...", "Scan OT Memo Barcode / QR or Patient ID...")"
+                   @bind="memoScanQuery"
+                   @bind:event="oninput"
+                   @onkeydown="HandleMemoScanKeyDown" />
+            @if (!string.IsNullOrWhiteSpace(memoScanQuery))
+            {
+                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearMemoScan">✕</button>
+            }
+        </div>
+
+        <div class="record-list">
+            @if (!FilteredMemos.Any())
+            {
+                <div class="empty-state">@I18n.T("No matching OT cash memos found.")</div>
+            }
+            @foreach (var memo in FilteredMemos)
+            {
+                <div class="bill-card">
+                    <span class="ticket-no">#@memo.ID</span>
+                    <span class="record-main">
+                        <strong>@memo.PatientName</strong>
+                        <small>@memo.TransDate.ToString("dd MMM · hh:mm tt") · @memo.Items.Count @I18n.T("item(s)")</small>
+                    </span>
+                    <strong class="amount">@I18n.FormatCurrency(memo.Total)</strong>
+                    <span class="record-actions">
+                        <button class="icon-btn" @onclick="() => Select(memo)">@I18n.T("Edit")</button>
+                        <button class="icon-btn" @onclick="() => Print(memo)">@I18n.T("Print")</button>
+                        <button class="icon-btn danger" @onclick="() => DeleteAsync(memo)">×</button>
+                    </span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div id="ot-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Operation Theatre Cash Memo"
+                             DocNo="@($"#{editor.ID}")"
+                             DocNoLabel="OT Memo #"
+                             BarcodeCode="@($"OT-{editor.ID:00000}")"
+                             QrPayload="@BarcodeQr.GenerateOtQrPayload(editor.ID, int.TryParse(editor.PatientID, out var pid) ? pid : 0, editor.PatientName ?? "", DoctorName(editor.DoctorID), editor.Total)" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Patient Name")</span><b>@editor.PatientName</b></div>
+            <div><span>@I18n.T("Patient ID")</span>@editor.PatientID</div>
+            <div><span>@I18n.T("Age / Sex")</span>@editor.Age / @editor.Sex</div>
+            <div><span>@I18n.T("Contact Mobile", "Contact")</span>@editor.Contact</div>
+            <div><span>@I18n.T("Referred by")</span>@DoctorName(editor.DoctorID)</div>
+            <div><span>@I18n.T("OT room")</span>@OtName(editor.OT)</div>
+            <div><span>@I18n.T("Date")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
+        </div>
+        <table class="data-table" style="margin-top: 14px;">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>@I18n.T("Service Item", "Service")</th>
+                    <th>@I18n.T("Doctor")</th>
+                    <th class="num">@I18n.T("Rate")</th>
+                    <th class="num">@I18n.T("Qty")</th>
+                    <th class="num">@I18n.T("Amount")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in editor.Items)
+                {
+                    <tr>
+                        <td>@item.SLNO</td>
+                        <td>@ServiceName(item.ServiceID)</td>
+                        <td>@DoctorName(item.DoctorID)</td>
+                        <td class="num">@I18n.FormatCurrency(item.Rate)</td>
+                        <td class="num">@item.Quantity</td>
+                        <td class="num">@I18n.FormatCurrency(item.Rate * item.Quantity)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-total">
+            <div><span>@I18n.T("Total")</span><strong>@I18n.FormatCurrency(editor.Total)</strong></div>
+            <div><span>@I18n.T("Discount")</span><strong>@I18n.FormatCurrency(editor.Discount)</strong></div>
+            <div class="grand"><span>@I18n.T("Net Payable", "Net payable")</span><strong>@I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount))</strong></div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                             SignTitle3="OT In-Charge / Cashier"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+@code {
+    private CashMemoOT editor = NewMemo();
+    private List<DoctorsProfile> doctors = [];
+    private List<Service> services = [];
+    private List<CashMemoOT> memos = [];
+    private string memoScanQuery = string.Empty;
+    private int selectedServiceId;
+    private int lineDoctorId;
+    private decimal lineRate;
+    private int lineQuantity = 1;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+
+    private IEnumerable<CashMemoOT> FilteredMemos => string.IsNullOrWhiteSpace(memoScanQuery)
+        ? memos
+        : memos.Where(m => m.ID.ToString().Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                        || (m.PatientName?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (m.PatientID?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (m.Contact?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        var categoryIds = await db.ServiceCategories.AsNoTracking().Where(x => x.ID == 1 || x.SubID == 1).Select(x => x.ID).ToListAsync();
+        services = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && categoryIds.Contains(x.CategoryID.Value)).OrderBy(x => x.Name).ToListAsync();
+        SelectFirstService();
+        await LoadMemosAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadMemosAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        memos = await db.OTCashMemos.AsNoTracking().Include(x => x.Items).OrderByDescending(x => x.ID).Take(30).ToListAsync();
+    }
+
+    private async Task FindPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.PatientID.Trim());
+        if (patient is null)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "পেশেন্ট আইডি পাওয়া যায়নি। আপনি ম্যানুয়ালি রোগীর নাম লিখে কাজ করতে পারেন।" : "Patient ID was not found. You can still enter a walk-in patient.";
+            return;
+        }
+        editor.PatientName = patient.Name;
+        editor.Age = Age(patient.DateOfBirth);
+        editor.Sex = patient.Sex;
+        editor.Contact = patient.Contact;
+        editor.RegNo = patient.PatientID;
+        editor.PatientType = "2";
+        message = string.Empty;
+    }
+
+    private void ServiceChanged(ChangeEventArgs e)
+    {
+        int.TryParse(e.Value?.ToString(), out selectedServiceId);
+        lineRate = services.FirstOrDefault(x => x.ID == selectedServiceId)?.SaleRate ?? 0;
+    }
+
+    private void SelectFirstService()
+    {
+        selectedServiceId = services.FirstOrDefault()?.ID ?? 0;
+        lineRate = services.FirstOrDefault(x => x.ID == selectedServiceId)?.SaleRate ?? 0;
+        lineQuantity = 1;
+        lineDoctorId = 0;
+    }
+
+    private void AddLine()
+    {
+        if (selectedServiceId == 0 || lineQuantity < 1 || lineRate < 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "একটি সেবা নির্বাচন করুন এবং সঠিক রেট ও পরিমাণ লিখুন।" : "Select a service and enter a valid rate and quantity.";
+            return;
+        }
+        editor.Items.Add(new CashMemoSubOT
+        {
+            SLNO = editor.Items.Count + 1,
+            ServiceID = selectedServiceId,
+            DoctorID = lineDoctorId == 0 ? null : lineDoctorId,
+            Rate = lineRate,
+            Quantity = lineQuantity
+        });
+        Recalculate();
+        message = string.Empty;
+    }
+
+    private void RemoveLine(CashMemoSubOT item)
+    {
+        editor.Items.Remove(item);
+        for (var i = 0; i < editor.Items.Count; i++) editor.Items[i].SLNO = i + 1;
+        Recalculate();
+    }
+
+    private void Recalculate() => editor.Total = editor.Items.Sum(x => x.Rate * x.Quantity);
+
+    private async Task SaveAsync()
+    {
+        if (editor.Items.Count == 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "সংরক্ষণ করার আগে অন্তত একটি ওটি সেবা যোগ করুন।" : "Add at least one OT service before saving.";
+            return;
+        }
+        var calculatedTotal = editor.Items.Sum(x => x.Rate * x.Quantity);
+        if (editor.Items.Any(x => x.Rate < 0 || x.Quantity <= 0))
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "সেবার দর ঋণাত্মক হতে পারে না এবং পরিমাণ ১ বা তার বেশি হতে হবে।" : "Service rate cannot be negative and quantity must be greater than zero.";
+            return;
+        }
+        if (editor.Discount < 0 || editor.Discount > calculatedTotal)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "ছাড় ০ থেকে মোট টাকার মধ্যে হতে হবে।" : "Discount must be between zero and the gross total.";
+            return;
+        }
+        if (editor.Discount > 0 && string.IsNullOrWhiteSpace(editor.DiscountBy))
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "ছাড়ের জন্য অনুমোদনকারী ব্যক্তির নাম আবশ্যক।" : "Discount authorization is required.";
+            return;
+        }
+        if ((editor.DiscountBy?.Trim().Length ?? 0) > 50)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "অনুমোদনকারীর নাম ৫০ অক্ষরের বেশি হতে পারবে না।" : "Discount authorization cannot exceed 50 characters.";
+            return;
+        }
+
+        saving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            editor.Total = calculatedTotal;
+            editor.DiscountBy = string.IsNullOrWhiteSpace(editor.DiscountBy) ? null : editor.DiscountBy.Trim();
+            if (editor.ID == 0)
+            {
+                editor.TransDate = DateTime.Now;
+                editor.EnteredBy = userId;
+                db.OTCashMemos.Add(editor);
+            }
+            else
+            {
+                var existing = await db.OTCashMemos.Include(x => x.Items).SingleAsync(x => x.ID == editor.ID);
+                db.OTCashMemoItems.RemoveRange(existing.Items);
+                db.Entry(existing).CurrentValues.SetValues(editor);
+                existing.Items = editor.Items.Select(x => new CashMemoSubOT
+                {
+                    SLNO = x.SLNO,
+                    ServiceID = x.ServiceID,
+                    DoctorID = x.DoctorID,
+                    Rate = x.Rate,
+                    Quantity = x.Quantity
+                }).ToList();
+            }
+            await db.SaveChangesAsync();
+
+            var net = Math.Max(0, editor.Total - editor.Discount);
+            var debitAccount = editor.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+            await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{editor.ID}", editor.ID,
+                net, editor.TransDate, userId, $"OT cash memo #{editor.ID}",
+                debitAccount, editor.PatientType == "1" ? 13 : null);
+
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            var number = editor.ID;
+            messageClass = "success";
+            message = I18n.IsBangla ? $"ওটি ক্যাশ মেমো #{number} সফলভাবে সংরক্ষিত হয়েছে।" : $"OT cash memo #{number} saved successfully.";
+            ResetEditor();
+            await LoadMemosAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            messageClass = "danger";
+            message = I18n.IsBangla ? $"ওটি মেমো সংরক্ষণ করা যায়নি: {ex.GetBaseException().Message}" : $"Could not save OT memo: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Reset()
+    {
+        ResetEditor();
+        message = string.Empty;
+    }
+
+    private void ResetEditor()
+    {
+        editor = NewMemo();
+        SelectFirstService();
+    }
+
+    private void Select(CashMemoOT m)
+    {
+        editor = new CashMemoOT
+        {
+            ID = m.ID,
+            PatientName = m.PatientName,
+            PatientType = m.PatientType,
+            Bed = m.Bed,
+            Age = m.Age,
+            Sex = m.Sex,
+            Contact = m.Contact,
+            PatientID = m.PatientID,
+            RegNo = m.RegNo,
+            DoctorID = m.DoctorID,
+            OT = m.OT,
+            Total = m.Total,
+            Discount = m.Discount,
+            DiscountBy = m.DiscountBy,
+            EnteredBy = m.EnteredBy,
+            TransDate = m.TransDate,
+            Items = m.Items.OrderBy(x => x.SLNO).Select(x => new CashMemoSubOT
+            {
+                ID = x.ID,
+                MemoID = x.MemoID,
+                SLNO = x.SLNO,
+                ServiceID = x.ServiceID,
+                Rate = x.Rate,
+                Quantity = x.Quantity,
+                DoctorID = x.DoctorID
+            }).ToList()
+        };
+        message = string.Empty;
+    }
+
+    private async Task DeleteAsync(CashMemoOT m)
+    {
+        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে ওটি মেমো #{m.ID} ({m.PatientName}) মুছে ফেলতে চান?" : $"Delete OT memo #{m.ID} for {m.PatientName}?";
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
+
+        var promptMsg = I18n.IsBangla ? "এই ওটি মেমোটি বাতিল করার কারণ:" : "Reason for reversing this OT memo:";
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", promptMsg);
+        if (string.IsNullOrWhiteSpace(reason)) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        var entity = await db.OTCashMemos.FindAsync(m.ID);
+        if (entity is not null)
+        {
+            var userId = await CurrentUserIdAsync();
+            var debitAccount = entity.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+            await OperationalAccounting.ReverseRevenueAsync(db, "OT Memo", $"OT-MEMO:{entity.ID}", entity.ID,
+                Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason,
+                debitAccount, entity.PatientType == "1" ? 13 : null);
+            db.Remove(entity);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+        }
+        if (editor.ID == m.ID) ResetEditor();
+        messageClass = "success";
+        message = I18n.IsBangla ? "ওটি মেমো সফলভাবে বাতিল ও মুছে ফেলা হয়েছে।" : "OT memo reversed and deleted.";
+        await LoadMemosAsync();
+    }
+
+    private async Task HandleMemoScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(memoScanQuery))
+        {
+            await ProcessMemoScanAsync(memoScanQuery.Trim());
+        }
+    }
+
+    private async Task ProcessMemoScanAsync(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        // 1. Check if it is an OT QR payload: HPM:OT|ID:123...
+        if (raw.StartsWith("HPM:OT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var idPart = parts.FirstOrDefault(p => p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase));
+            if (idPart != null && long.TryParse(idPart.Substring(3), out var memoId))
+            {
+                await LoadMemoByIdAsync(memoId);
+                return;
+            }
+        }
+
+        // 2. Check if it is a Patient QR payload: HPM:PAT|ID:12|REG:202600001...
+        if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                var regNo = regPart.Substring(4).Trim();
+                editor.PatientID = regNo;
+                await FindPatientAsync();
+                return;
+            }
+        }
+
+        // 3. Check for OT-XXXXX format
+        if (raw.StartsWith("OT-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(3), out var scannedId))
+        {
+            await LoadMemoByIdAsync(scannedId);
+            return;
+        }
+
+        // 4. If numeric, check if it matches an existing OT memo ID first
+        if (long.TryParse(raw, out var numericId))
+        {
+            var matched = memos.FirstOrDefault(m => m.ID == numericId);
+            if (matched != null)
+            {
+                Select(matched);
+                messageClass = "success";
+                message = I18n.IsBangla ? $"স্ক্যান থেকে ওটি মেমো #{numericId} নির্বাচন করা হয়েছে।" : $"OT memo #{numericId} selected from scan.";
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dbMemo = await db.OTCashMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(m => m.ID == numericId);
+            if (dbMemo != null)
+            {
+                Select(dbMemo);
+                messageClass = "success";
+                message = I18n.IsBangla ? $"ডাটাবেজ থেকে ওটি মেমো #{numericId} লোড করা হয়েছে।" : $"OT memo #{numericId} loaded from database.";
+                return;
+            }
+
+            // Otherwise treat as Patient ID
+            editor.PatientID = raw;
+            await FindPatientAsync();
+            return;
+        }
+
+        // 5. Try patient search with raw text
+        editor.PatientID = raw;
+        await FindPatientAsync();
+    }
+
+    private async Task LoadMemoByIdAsync(long id)
+    {
+        var matched = memos.FirstOrDefault(m => m.ID == id);
+        if (matched != null)
+        {
+            Select(matched);
+            messageClass = "success";
+            message = I18n.IsBangla ? $"স্ক্যান থেকে ওটি মেমো #{id} নির্বাচন করা হয়েছে।" : $"OT memo #{id} selected from scan.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var dbMemo = await db.OTCashMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(m => m.ID == id);
+        if (dbMemo != null)
+        {
+            Select(dbMemo);
+            messageClass = "success";
+            message = I18n.IsBangla ? $"ডাটাবেজ থেকে ওটি মেমো #{id} লোড করা হয়েছে।" : $"OT memo #{id} loaded from database.";
+        }
+        else
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? $"ওটি মেমো #{id} পাওয়া যায়নি।" : $"OT memo #{id} not found.";
+        }
+    }
+
+    private void ClearMemoScan()
+    {
+        memoScanQuery = string.Empty;
+    }
+
+    private Task DeleteSelectedAsync() => DeleteAsync(editor);
+
+    private async Task Print(CashMemoOT m)
+    {
+        Select(m);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("hpm.printElement", "ot-print", $"OT memo {m.ID}");
+    }
+
+    private Task PrintMemoAsync() => JS.InvokeVoidAsync("hpm.printElement", "ot-print", $"OT memo {editor.ID}").AsTask();
+
+    private static CashMemoOT NewMemo() => new() { PatientType = "1", OT = 1, TransDate = DateTime.Now, EnteredBy = 1 };
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Service {id}";
+    private string DoctorName(int? id) => id is null ? "—" : doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
+    private string OtName(int? id) => id switch
+    {
+        1 => I18n.T("Main OT"),
+        2 => I18n.T("Emergency OT"),
+        3 => I18n.T("Day-care OT"),
+        _ => "—"
+    };
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private static string Age(DateTime birth)
+    {
+        var years = DateTime.Today.Year - birth.Year;
+        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        return $"{Math.Max(0, years)}Y";
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

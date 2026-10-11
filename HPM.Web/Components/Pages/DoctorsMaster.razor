@@ -1,0 +1,74 @@
+@page "/masters/doctors"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>@I18n.T("Doctors Directory", "Doctors Master") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading"><div><a class="back-link" href="masters">← @I18n.T("Master setup", "Master setup")</a><h1>@I18n.T("Doctors profile", "Doctors profile")</h1><p>@I18n.T("Consultant directory, qualification and consultation fee schedule.", "Consultant directory, qualification and consultation fee schedule.")</p></div><button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New doctor", "New doctor")</button></div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="master-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading"><div><h2>@(editor.ID == 0 ? I18n.T("Add doctor", "Add doctor") : $"{I18n.T("Edit doctor", "Edit doctor")} #{editor.ID}")</h2><p>@I18n.T("Consultant identity and chamber details", "Consultant identity and chamber details")</p></div></div>
+        <EditForm Model="editor" OnSubmit="SaveAsync">
+            <div class="form-grid">
+                <label><span>@I18n.T("Title", "Title")</span><InputText @bind-Value="editor.Title" placeholder="Dr." /></label>
+                <label><span>@I18n.T("Doctor name *", "Doctor name *")</span><InputText @bind-Value="editor.Name" /></label>
+                <label class="span-2"><span>@I18n.T("Degree", "Degree")</span><InputText @bind-Value="editor.Degree" /></label>
+                <label><span>@I18n.T("Department", "Department")</span><InputSelect @bind-Value="editor.Department"><option value="">@I18n.T("Select", "Select")</option>@foreach (var d in departments) { <option value="@d.ID">@d.Name</option> }</InputSelect></label>
+                <label><span>@I18n.T("Room", "Room")</span><InputText @bind-Value="editor.Room" /></label>
+                <label><span>@I18n.T("Contact", "Contact")</span><InputText @bind-Value="editor.Contact" /></label>
+                <label><span>@I18n.T("Email", "Email")</span><InputText @bind-Value="editor.Email" /></label>
+                <label class="span-2"><span>@I18n.T("Address", "Address")</span><InputTextArea @bind-Value="editor.Address" /></label>
+            </div>
+            <div class="form-actions"><button class="btn btn-primary" type="submit">@(editor.ID == 0 ? I18n.T("Save doctor", "Save doctor") : I18n.T("Update doctor", "Update doctor"))</button>@if (editor.ID > 0) { <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync">@I18n.T("Delete", "Delete")</button> }<button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear", "Clear")</button></div>
+        </EditForm>
+    </div>
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Doctors", "Doctors")</h2><p>@doctors.Count @I18n.T("profile(s)", "profile(s)")</p></div></div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Doctor", "Doctor")</th><th>@I18n.T("Department", "Department")</th><th>@I18n.T("Room", "Room")</th><th>@I18n.T("Contact", "Contact")</th><th></th></tr></thead><tbody>
+            @foreach (var doctor in doctors) { <tr><td><b>@doctor.Title @doctor.Name</b><br /><small>@doctor.Degree</small></td><td>@DepartmentName(doctor.Department)</td><td>@doctor.Room</td><td>@doctor.Contact</td><td><button class="icon-btn" @onclick="() => Select(doctor)">@I18n.T("Edit", "Edit")</button></td></tr> }
+        </tbody></table></div>
+    </div>
+</div>
+
+@code {
+    private DoctorsProfile editor = NewDoctor();
+    private List<DoctorsProfile> doctors = [];
+    private List<Department> departments = [];
+    private string message = string.Empty;
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync() { await using var db = await DbFactory.CreateDbContextAsync(); doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync(); departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync(); }
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.Name)) { messageClass = "danger"; message = I18n.IsBangla ? "ডাক্তারের নাম আবশ্যক।" : "Doctor name is required."; return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (editor.ID == 0) { editor.TransDate = DateTime.Now; editor.EnteredBy = 1; db.Doctors.Add(editor); } else db.Doctors.Update(editor);
+        await db.SaveChangesAsync(); messageClass = "success"; message = I18n.IsBangla ? "ডাক্তার প্রোফাইল সংরক্ষিত হয়েছে।" : "Doctor profile saved."; ResetEditor(); await LoadAsync();
+    }
+    private void Select(DoctorsProfile d) { editor = new DoctorsProfile { ID=d.ID,Name=d.Name,Title=d.Title,Degree=d.Degree,Attachment=d.Attachment,POSerial=d.POSerial,AreaCode=d.AreaCode,Balance=d.Balance,OpeningBalance=d.OpeningBalance,Contact=d.Contact,Email=d.Email,Room=d.Room,Department=d.Department,EnteredBy=d.EnteredBy,TransDate=d.TransDate,Address=d.Address,ReferralCategoryID=d.ReferralCategoryID }; message=string.Empty; }
+    private async Task DeleteSelectedAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ডাক্তার {editor.Name} মুছে ফেলতে চান?" : $"Delete doctor {editor.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync(); var id=editor.ID;
+        var inUse = await db.DoctorAppointments.AnyAsync(x=>x.DoctorID==id) || await db.OPDTickets.AnyAsync(x=>x.DoctorID==id) || await db.EmergencyMemos.AnyAsync(x=>x.DoctorID==id) || await db.OTCashMemos.AnyAsync(x=>x.DoctorID==id) || await db.OTCashMemoItems.AnyAsync(x=>x.ServiceID==id) || await db.PatientAdmissions.AnyAsync(x=>x.Consultant==id||x.AdmittedBy==id||x.ReferredBy==id);
+        if (inUse) { messageClass="danger"; message=I18n.IsBangla ? "এই ডাক্তারের রেফারেন্সে লেনদেনের রেকর্ড রয়েছে এবং মুছে ফেলা যাবে না।" : "This doctor is referenced by transactions and cannot be deleted."; return; }
+        var entity=await db.Doctors.FindAsync(id); if(entity is not null){db.Remove(entity);await db.SaveChangesAsync();} messageClass="success";message=I18n.IsBangla ? "ডাক্তার মুছে ফেলা হয়েছে।" : "Doctor deleted.";ResetEditor();await LoadAsync();
+    }
+    private void Reset(){ResetEditor();message=string.Empty;} private void ResetEditor()=>editor=NewDoctor();
+    private static DoctorsProfile NewDoctor()=>new(){Title="Dr.",Attachment="Temporary",EnteredBy=1,TransDate=DateTime.Now};
+    private string DepartmentName(int? id)=>departments.FirstOrDefault(x=>x.ID==id)?.Name ?? "—";
+}

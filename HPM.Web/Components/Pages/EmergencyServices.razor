@@ -1,0 +1,693 @@
+@page "/emergency-services"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier + "," + RoleNames.EmergencyOperator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Emergency Services") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Module 04", "Module 04")</span>
+        <h1>@I18n.T("OPD & Emergency Service Billing")</h1>
+        <p>@I18n.T("Emergency medical procedures, doctor charges, discounts and cash memo.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New Emergency Memo")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="billing-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID == 0 ? I18n.T("New Emergency Cash Memo") : $"{I18n.T("Edit Emergency Memo")} #{editor.ID}")</h2>
+                <p>@I18n.T("Patient demographics & emergency service line items.")</p>
+            </div>
+            <span class="badge red-badge">@(editor.ID == 0 ? "⚡ " + I18n.T("EMERGENCY", "EMERGENCY") : "MEMO #" + editor.ID)</span>
+        </div>
+        <EditForm Model="editor" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="form-grid three">
+                <label>
+                    <span>@I18n.T("Patient ID (Optional)")</span>
+                    <span class="input-action">
+                        <InputText @bind-Value="editor.PatientID" placeholder="e.g. 202600001" />
+                        <button type="button" @onclick="FindPatientAsync">@I18n.T("Find")</button>
+                    </span>
+                </label>
+                <label>
+                    <span>@I18n.T("Patient Name *")</span>
+                    <InputText @bind-Value="editor.PatientName" placeholder="Full name" />
+                </label>
+                <label>
+                    <span>@I18n.T("Contact Mobile")</span>
+                    <InputText @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
+                </label>
+                <label>
+                    <span>@I18n.T("Age")</span>
+                    <InputText @bind-Value="editor.Age" placeholder="e.g. 40Y" />
+                </label>
+                <label>
+                    <span>@I18n.T("Sex")</span>
+                    <InputSelect @bind-Value="editor.Sex">
+                        <option value="">@I18n.T("Select")</option>
+                        <option value="Male">@I18n.T("Male")</option>
+                        <option value="Female">@I18n.T("Female")</option>
+                        <option value="Other">@I18n.T("Other")</option>
+                    </InputSelect>
+                </label>
+                <label>
+                    <span>@I18n.T("Attending / Ref. Doctor")</span>
+                    <InputSelect @bind-Value="editor.DoctorID">
+                        <option value="">@I18n.T("Walk-in / None")</option>
+                        @foreach (var doctor in doctors)
+                        {
+                            <option value="@doctor.ID">@DoctorLabel(doctor)</option>
+                        }
+                    </InputSelect>
+                </label>
+            </div>
+
+            <h3 class="form-section-title">@I18n.T("Emergency Services & Procedures")</h3>
+            <div class="line-editor">
+                <label>
+                    <span>@I18n.T("Category")</span>
+                    <select value="@selectedCategoryId" @onchange="CategoryChanged">
+                        @foreach (var category in categories)
+                        {
+                            <option value="@category.ID">@category.Name</option>
+                        }
+                    </select>
+                </label>
+                <label class="service-field">
+                    <span>@I18n.T("Service Item")</span>
+                    <select value="@selectedServiceId" @onchange="ServiceChanged">
+                        @foreach (var service in FilteredServices)
+                        {
+                            <option value="@service.ID">@service.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Rate")</span>
+                    <InputNumber @bind-Value="lineRate" />
+                </label>
+                <label>
+                    <span>@I18n.T("Qty")</span>
+                    <InputNumber @bind-Value="lineQuantity" />
+                </label>
+                <button class="btn btn-dark" type="button" @onclick="AddLine">@I18n.T("+ Add Item")</button>
+            </div>
+
+            <div class="line-table">
+                <div class="line-head">
+                    <span>#</span>
+                    <span>@I18n.T("Emergency Service Description")</span>
+                    <span>@I18n.T("Rate")</span>
+                    <span>@I18n.T("Qty")</span>
+                    <span>@I18n.T("Amount")</span>
+                    <span></span>
+                </div>
+                @if (editor.Items.Count == 0)
+                {
+                    <div class="empty-state small">@I18n.T("Add at least one emergency service to this memo.")</div>
+                }
+                @foreach (var item in editor.Items)
+                {
+                    <div class="line-row">
+                        <span>@item.SLNo</span>
+                        <span>@ServiceName(item.TestID)</span>
+                        <span>@(I18n.FormatCurrency(item.Rate))</span>
+                        <span>@item.Quantity</span>
+                        <strong>@(I18n.FormatCurrency(item.Rate * item.Quantity))</strong>
+                        <button type="button" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">×</button>
+                    </div>
+                }
+            </div>
+
+            <div class="billing-footer">
+                <label class="remarks">
+                    <span>@I18n.T("Clinical Remarks / Instructions")</span>
+                    <InputTextArea @bind-Value="editor.Remarks" placeholder="Optional remarks..." />
+                </label>
+                <div class="totals">
+                    <div>
+                        <span>@I18n.T("Gross Subtotal")</span>
+                        <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                    </div>
+                    <label>
+                        <span>@I18n.T("Discount")</span>
+                        <InputNumber @bind-Value="editor.Discount" @bind-Value:after="RecalculatePayable" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Paid Amount")</span>
+                        <InputNumber @bind-Value="editor.Paid" @bind-Value:after="PaidChanged" />
+                    </label>
+                    <div class="grand-total">
+                        <span>@I18n.T("Net Due")</span>
+                        <strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount - editor.Paid)))</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit" disabled="@saving">@(saving ? I18n.T("Saving Memo…") : editor.ID == 0 ? I18n.T("Save Emergency Memo") : I18n.T("Update Memo"))</button>
+                @if (editor.ID > 0)
+                {
+                    <button class="btn btn-secondary" type="button" @onclick="PrintMemoAsync">🖨️ @I18n.T("Print Cash Memo")</button>
+                    <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync" style="color: #dc2626;">@I18n.T("Delete")</button>
+                }
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+
+    <div class="panel recent-bills">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Recent Emergency Memos")</h2>
+                <p>@I18n.T("Latest") @memos.Count @I18n.T("transaction(s)")</p>
+            </div>
+        </div>
+
+        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan Emergency Memo Barcode / QR or Patient ID...", "Scan Emergency Memo Barcode / QR or Patient ID...")"
+                   @bind="memoScanQuery"
+                   @bind:event="oninput"
+                   @onkeydown="HandleMemoScanKeyDown" />
+            @if (!string.IsNullOrWhiteSpace(memoScanQuery))
+            {
+                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearMemoScan">✕</button>
+            }
+        </div>
+
+        <div class="record-list">
+            @if (!FilteredMemos.Any())
+            {
+                <div class="empty-state">@I18n.T("No matching emergency memos found.")</div>
+            }
+            @foreach (var memo in FilteredMemos)
+            {
+                <div class="bill-card">
+                    <span class="ticket-no">#@memo.ID</span>
+                    <span class="record-main">
+                        <strong>@memo.PatientName</strong>
+                        <small>@memo.TransDate.ToString("dd MMM · hh:mm tt") &bull; @memo.Items.Count @I18n.T("item(s)")</small>
+                    </span>
+                    <strong class="amount">@(I18n.FormatCurrency(memo.Total))</strong>
+                    <span class="record-actions">
+                        <button class="icon-btn" @onclick="() => Select(memo)" title="@I18n.T("Edit")">@I18n.T("Edit")</button>
+                        <button class="icon-btn" @onclick="() => Print(memo)" title="@I18n.T("Print")">🖨️</button>
+                        <button class="icon-btn danger" @onclick="() => DeleteAsync(memo)" title="@I18n.T("Delete")">×</button>
+                    </span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div id="emergency-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Emergency Service Cash Memo"
+                             DocNo="@($"#{editor.ID}")"
+                             DocNoLabel="Memo #"
+                             BarcodeCode="@($"EMG-{editor.ID:00000}")"
+                             QrPayload="@BarcodeQr.GenerateEmergencyQrPayload(editor.ID, int.TryParse(editor.PatientID, out var pid) ? pid : 0, editor.PatientName ?? "", editor.Total, Math.Max(0, editor.Total - editor.Discount - editor.Paid))" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Patient Name")</span><b>@editor.PatientName</b></div>
+            <div><span>@I18n.T("Patient ID")</span>@(string.IsNullOrWhiteSpace(editor.PatientID) ? I18n.T("Walk-in") : editor.PatientID)</div>
+            <div><span>@I18n.T("Age / Sex")</span>@editor.Age / @editor.Sex</div>
+            <div><span>@I18n.T("Contact")</span>@editor.Contact</div>
+            <div><span>@I18n.T("Attending Doctor")</span>@DoctorName(editor.DoctorID)</div>
+            <div><span>@I18n.T("DateTime")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
+        </div>
+        <table class="data-table" style="margin-top: 14px;">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>@I18n.T("Emergency Service Description")</th>
+                    <th class="num">@I18n.T("Rate")</th>
+                    <th class="num">@I18n.T("Qty")</th>
+                    <th class="num">@I18n.T("Amount")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in editor.Items)
+                {
+                    <tr>
+                        <td>@item.SLNo</td>
+                        <td>@ServiceName(item.TestID)</td>
+                        <td class="num">@(I18n.FormatCurrency(item.Rate))</td>
+                        <td class="num">@item.Quantity</td>
+                        <td class="num">@(I18n.FormatCurrency(item.Rate * item.Quantity))</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-total">
+            <div><span>@I18n.T("Sub Total"):</span><strong>@(I18n.FormatCurrency(editor.Total))</strong></div>
+            <div><span>@I18n.T("Discount"):</span><strong>@(I18n.FormatCurrency(editor.Discount))</strong></div>
+            <div><span>@I18n.T("Paid Amount"):</span><strong>@(I18n.FormatCurrency(editor.Paid))</strong></div>
+            <div class="grand"><span>@I18n.T("Due Amount"):</span><strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount - editor.Paid)))</strong></div>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(editor.Remarks))
+        {
+            <p style="margin-top: 14px; font-size: 11.5px;"><b>@I18n.T("Remarks"):</b> @editor.Remarks</p>
+        }
+
+        <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                             SignTitle3="Emergency Cashier"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "patientId")]
+    public string? QueryPatientId { get; set; }
+
+    private CashMemoDInvestigation editor = NewMemo();
+    private List<DoctorsProfile> doctors = [];
+    private List<ServiceCategory> categories = [];
+    private List<Service> services = [];
+    private List<CashMemoDInvestigation> memos = [];
+    private string memoScanQuery = string.Empty;
+    private int selectedCategoryId;
+    private int selectedServiceId;
+    private decimal lineRate;
+    private int lineQuantity = 1;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+    private bool paidManuallyEdited;
+    private IEnumerable<Service> FilteredServices => services.Where(x => x.CategoryID == selectedCategoryId);
+
+    private IEnumerable<CashMemoDInvestigation> FilteredMemos => string.IsNullOrWhiteSpace(memoScanQuery)
+        ? memos
+        : memos.Where(m => m.ID.ToString().Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                        || (m.PatientName?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (m.PatientID?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (m.Contact?.Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        categories = await db.ServiceCategories.AsNoTracking().Where(x => x.SubID == 0 && x.ID != 3 && x.ID != 7).OrderBy(x => x.Name).ToListAsync();
+        var ids = categories.Select(x => x.ID).ToList();
+        services = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && ids.Contains(x.CategoryID.Value)).OrderBy(x => x.Name).ToListAsync();
+        selectedCategoryId = categories.FirstOrDefault(x => services.Any(s => s.CategoryID == x.ID))?.ID ?? 0;
+        SelectFirstService();
+        await LoadMemosAsync();
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryPatientId) && editor.ID == 0)
+        {
+            editor.PatientID = QueryPatientId.Trim();
+            await FindPatientAsync();
+        }
+    }
+
+    private async Task LoadMemosAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        memos = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items)
+            .Where(x => x.ModuleID == 11)
+            .OrderByDescending(x => x.ID).Take(30).ToListAsync();
+    }
+
+    private async Task FindPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.PatientID.Trim());
+        if (patient is null)
+        {
+            messageClass = "danger";
+            message = "Patient ID was not found. You can still enter details as a walk-in patient.";
+            return;
+        }
+        editor.PatientName = patient.Name;
+        editor.Age = Age(patient.DateOfBirth);
+        editor.Sex = patient.Sex;
+        editor.Contact = patient.Contact;
+        messageClass = "success";
+        message = $"Loaded profile for patient {patient.Name} ({patient.PatientID}).";
+    }
+
+    private void CategoryChanged(ChangeEventArgs e)
+    {
+        int.TryParse(e.Value?.ToString(), out selectedCategoryId);
+        SelectFirstService();
+    }
+
+    private void ServiceChanged(ChangeEventArgs e)
+    {
+        int.TryParse(e.Value?.ToString(), out selectedServiceId);
+        lineRate = services.FirstOrDefault(x => x.ID == selectedServiceId)?.SaleRate ?? 0;
+    }
+
+    private void SelectFirstService()
+    {
+        selectedServiceId = FilteredServices.FirstOrDefault()?.ID ?? 0;
+        lineRate = services.FirstOrDefault(x => x.ID == selectedServiceId)?.SaleRate ?? 0;
+        lineQuantity = 1;
+    }
+
+    private void AddLine()
+    {
+        if (selectedServiceId == 0 || lineQuantity < 1 || lineRate < 0)
+        {
+            messageClass = "danger";
+            message = "Select a service and enter a valid rate and quantity.";
+            return;
+        }
+        editor.Items.Add(new CashMemoSubDInvestigation
+        {
+            SLNo = editor.Items.Count + 1,
+            TestID = selectedServiceId,
+            Rate = lineRate,
+            Quantity = lineQuantity
+        });
+        Recalculate();
+        message = string.Empty;
+    }
+
+    private void RemoveLine(CashMemoSubDInvestigation item)
+    {
+        editor.Items.Remove(item);
+        for (var i = 0; i < editor.Items.Count; i++) editor.Items[i].SLNo = i + 1;
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        editor.Total = editor.Items.Sum(x => x.Rate * x.Quantity);
+        SetSuggestedPayment();
+    }
+
+    private void RecalculatePayable() => SetSuggestedPayment();
+    private void PaidChanged() => paidManuallyEdited = true;
+    private void SetSuggestedPayment()
+    {
+        var net = Math.Max(0, editor.Total - editor.Discount);
+        editor.Paid = paidManuallyEdited ? Math.Min(Math.Max(0, editor.Paid), net) : net;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (editor.Items.Count == 0)
+        {
+            messageClass = "danger";
+            message = "Add at least one emergency service before saving.";
+            return;
+        }
+        var calculatedTotal = editor.Items.Sum(x => x.Rate * x.Quantity);
+        if (editor.Items.Any(x => x.Rate < 0 || x.Quantity <= 0)) { messageClass = "danger"; message = "Service rate cannot be negative and quantity must be greater than zero."; return; }
+        if (editor.Discount < 0 || editor.Discount > calculatedTotal) { messageClass = "danger"; message = "Discount must be between zero and the gross total."; return; }
+        if (editor.Discount > 0 && string.IsNullOrWhiteSpace(editor.DiscountBy)) { messageClass = "danger"; message = "Discount authorization is required."; return; }
+        if ((editor.DiscountBy?.Trim().Length ?? 0) > 50) { messageClass = "danger"; message = "Discount authorization cannot exceed 50 characters."; return; }
+        var netAmount = calculatedTotal - editor.Discount;
+        if (editor.Paid < 0 || editor.Paid > netAmount) { messageClass = "danger"; message = "Paid amount must be between zero and the net bill amount."; return; }
+        saving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            editor.ModuleID = 11;
+            editor.PatientType = "1";
+            editor.Total = calculatedTotal;
+            editor.DiscountBy = string.IsNullOrWhiteSpace(editor.DiscountBy) ? null : editor.DiscountBy.Trim();
+            if (editor.ID == 0)
+            {
+                editor.TransDate = DateTime.Now;
+                editor.EnteredBy = userId;
+                db.EmergencyMemos.Add(editor);
+            }
+            else
+            {
+                var existing = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == editor.ID);
+                db.EmergencyMemoItems.RemoveRange(existing.Items);
+                db.Entry(existing).CurrentValues.SetValues(editor);
+                existing.Items = editor.Items.Select(x => new CashMemoSubDInvestigation
+                {
+                    SLNo = x.SLNo,
+                    TestID = x.TestID,
+                    Rate = x.Rate,
+                    Quantity = x.Quantity
+                }).ToList();
+            }
+            await db.SaveChangesAsync();
+            await OperationalAccounting.SyncSplitRevenueAsync(db, $"EMERGENCY:{editor.ID}", editor.ID,
+                netAmount, editor.Paid, editor.TransDate, userId, $"Emergency service memo #{editor.ID}", 11);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            var number = editor.ID;
+            messageClass = "success";
+            message = $"Emergency cash memo #{number} saved successfully.";
+            await LoadMemosAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            messageClass = "danger";
+            message = $"Could not save cash memo: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Reset()
+    {
+        ResetEditor();
+        message = string.Empty;
+    }
+
+    private void ResetEditor()
+    {
+        editor = NewMemo();
+        paidManuallyEdited = false;
+        SelectFirstService();
+    }
+
+    private void Select(CashMemoDInvestigation m)
+    {
+        editor = new CashMemoDInvestigation
+        {
+            ID = m.ID,
+            PatientName = m.PatientName,
+            PatientType = m.PatientType,
+            Bed = m.Bed,
+            Age = m.Age,
+            Sex = m.Sex,
+            Contact = m.Contact,
+            Total = m.Total,
+            Discount = m.Discount,
+            DiscountBy = m.DiscountBy,
+            Paid = m.Paid,
+            RegNo = m.RegNo,
+            TransDate = m.TransDate,
+            PatientID = m.PatientID,
+            DoctorID = m.DoctorID,
+            ModuleID = m.ModuleID,
+            EnteredBy = m.EnteredBy,
+            Remarks = m.Remarks,
+            Items = m.Items.OrderBy(x => x.SLNo).Select(x => new CashMemoSubDInvestigation
+            {
+                ID = x.ID,
+                MemoID = x.MemoID,
+                SLNo = x.SLNo,
+                TestID = x.TestID,
+                Rate = x.Rate,
+                Quantity = x.Quantity
+            }).ToList()
+        };
+        paidManuallyEdited = true;
+        message = string.Empty;
+    }
+
+    private async Task DeleteAsync(CashMemoDInvestigation m)
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", $"Delete emergency memo #{m.ID} for {m.PatientName}?")) return;
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", "Reason for reversing this emergency memo:");
+        if (string.IsNullOrWhiteSpace(reason)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        var entity = await db.EmergencyMemos.FindAsync(m.ID);
+        if (entity is not null)
+        {
+            var userId = await CurrentUserIdAsync();
+            await OperationalAccounting.ReverseRevenueAsync(db, "Emergency Memo", $"EMERGENCY:{entity.ID}", entity.ID,
+                Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason, AccountingPosting.Cash, 11);
+            db.Remove(entity);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+        }
+        if (editor.ID == m.ID) ResetEditor();
+        messageClass = "success";
+        message = "Emergency memo deleted.";
+        await LoadMemosAsync();
+    }
+    private async Task HandleMemoScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(memoScanQuery))
+        {
+            await ProcessMemoScanAsync(memoScanQuery.Trim());
+        }
+    }
+
+    private async Task ProcessMemoScanAsync(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        // 1. Check if it is an Emergency QR payload: HPM:EMG|ID:123...
+        if (raw.StartsWith("HPM:EMG|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var idPart = parts.FirstOrDefault(p => p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase));
+            if (idPart != null && long.TryParse(idPart.Substring(3), out var memoId))
+            {
+                await LoadMemoByIdAsync(memoId);
+                return;
+            }
+        }
+
+        // 2. Check if it is a Patient QR payload: HPM:PAT|ID:12|REG:202600001...
+        if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                var regNo = regPart.Substring(4).Trim();
+                editor.PatientID = regNo;
+                await FindPatientAsync();
+                return;
+            }
+        }
+
+        // 3. Check for EMG-XXXXX format
+        if (raw.StartsWith("EMG-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(4), out var scannedId))
+        {
+            await LoadMemoByIdAsync(scannedId);
+            return;
+        }
+
+        // 4. If numeric, check if it matches an existing emergency memo ID first
+        if (long.TryParse(raw, out var numericId))
+        {
+            var matched = memos.FirstOrDefault(m => m.ID == numericId);
+            if (matched != null)
+            {
+                Select(matched);
+                messageClass = "success";
+                message = $"Emergency memo #{numericId} selected from scan.";
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dbMemo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(m => m.ID == numericId);
+            if (dbMemo != null)
+            {
+                Select(dbMemo);
+                messageClass = "success";
+                message = $"Emergency memo #{numericId} loaded from database.";
+                return;
+            }
+
+            // Otherwise treat as Patient ID
+            editor.PatientID = raw;
+            await FindPatientAsync();
+            return;
+        }
+
+        // 5. Try patient search with raw text
+        editor.PatientID = raw;
+        await FindPatientAsync();
+    }
+
+    private async Task LoadMemoByIdAsync(long id)
+    {
+        var matched = memos.FirstOrDefault(m => m.ID == id);
+        if (matched != null)
+        {
+            Select(matched);
+            messageClass = "success";
+            message = $"Emergency memo #{id} selected from scan.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var dbMemo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(m => m.ID == id);
+        if (dbMemo != null)
+        {
+            Select(dbMemo);
+            messageClass = "success";
+            message = $"Emergency memo #{id} loaded from database.";
+        }
+        else
+        {
+            messageClass = "danger";
+            message = $"Emergency memo #{id} not found.";
+        }
+    }
+
+    private void ClearMemoScan()
+    {
+        memoScanQuery = string.Empty;
+    }
+
+    private Task DeleteSelectedAsync() => DeleteAsync(editor);
+    private async Task Print(CashMemoDInvestigation m)
+    {
+        Select(m);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("hpm.printElement", "emergency-print", $"Emergency memo {m.ID}");
+    }
+    private Task PrintMemoAsync() => JS.InvokeVoidAsync("hpm.printElement", "emergency-print", $"Emergency memo {editor.ID}").AsTask();
+
+    private static CashMemoDInvestigation NewMemo() => new() { PatientType = "1", TransDate = DateTime.Now, EnteredBy = 1 };
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Service {id}";
+    private string DoctorName(int? id) => id is null ? "Walk-in / none" : doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private static string Age(DateTime birth)
+    {
+        var years = DateTime.Today.Year - birth.Year;
+        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        return $"{Math.Max(0, years)}Y";
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

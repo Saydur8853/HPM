@@ -1,0 +1,537 @@
+@page "/appointments"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+
+<PageTitle>@I18n.T("Doctor Appointments") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Module 02", "Module 02")</span>
+        <h1>@I18n.T("Doctor Appointments & Serial Queue")</h1>
+        <p>@I18n.T("Consultant schedules and daily patient booking.")</p>
+    </div>
+    <div class="record-actions">
+        <button class="btn btn-secondary" @onclick="PrintScheduleAsync">🖨️ @I18n.T("Print Daily Schedule")</button>
+        <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New Appointment")</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="workspace-grid compact">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(editor.ID == 0 ? I18n.T("Book Doctor Appointment") : $"{I18n.T("Edit Appointment")} #{editor.ID}")</h2>
+                <p>@I18n.T("Serial numbers are sequentially assigned per doctor and date.")</p>
+            </div>
+            <span class="badge @(editor.ID == 0 ? "emerald-badge" : "violet-badge")">@(editor.ID == 0 ? I18n.T("AUTO SERIAL") : $"{I18n.T("SERIAL #")}{editor.ApptSLNO:00}")</span>
+        </div>
+        <EditForm Model="editor" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="form-grid">
+                <label class="span-2">
+                    <span>@I18n.T("Consultant Doctor *")</span>
+                    <InputSelect @bind-Value="editor.DoctorID">
+                        @foreach (var doctor in doctors)
+                        {
+                            <option value="@doctor.ID">@DoctorLabel(doctor)</option>
+                        }
+                    </InputSelect>
+                </label>
+                <label>
+                    <span>@I18n.T("Appointment Date *")</span>
+                    <InputDate @bind-Value="editor.ApptDate" />
+                </label>
+                <label>
+                    <span>@I18n.T("Patient ID (Optional)")</span>
+                    <span class="input-action">
+                        <InputText @bind-Value="editor.PatientID" placeholder="e.g. 202600001" />
+                        <button type="button" @onclick="FindPatientAsync">@I18n.T("Find")</button>
+                    </span>
+                </label>
+                <label class="span-2">
+                    <span>@I18n.T("Patient Name *")</span>
+                    <InputText @bind-Value="editor.Name" placeholder="Patient's full name" />
+                </label>
+                <label>
+                    <span>@I18n.T("Age")</span>
+                    <InputText @bind-Value="editor.Age" placeholder="e.g. 28Y" />
+                </label>
+                <label>
+                    <span>@I18n.T("Contact Mobile")</span>
+                    <InputText @bind-Value="editor.ContactNo" placeholder="017xxxxxxxx" />
+                </label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit" disabled="@saving">@(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Book Appointment & Generate Serial") : I18n.T("Update Appointment"))</button>
+                @if (editor.ID > 0)
+                {
+                    <button class="btn btn-secondary" type="button" @onclick="PrintAppointmentAsync">🖨️ @I18n.T("Print Slip")</button>
+                    <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync" style="color: #dc2626;">@I18n.T("Delete")</button>
+                }
+                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+            </div>
+        </EditForm>
+    </div>
+
+    <div class="panel list-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@I18n.T("Doctor's Daily Schedule")</h2>
+                <p>@I18n.T("Appointments for") @filterDate.ToString("dd MMMM yyyy")</p>
+            </div>
+            <InputDate class="date-filter" style="max-width: 150px; min-height: 32px;" @bind-Value="filterDate" @bind-Value:after="LoadAppointmentsAsync" />
+        </div>
+
+        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
+            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+            <input type="text"
+                   class="scanner-input"
+                   placeholder="@I18n.T("Scan Appointment Barcode / QR or Patient ID...", "Scan Appointment Barcode / QR or Patient ID...")"
+                   @bind="apptScanQuery"
+                   @bind:event="oninput"
+                   @onkeydown="HandleApptScanKeyDown" />
+            @if (!string.IsNullOrWhiteSpace(apptScanQuery))
+            {
+                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearApptScan">✕</button>
+            }
+        </div>
+
+        <div class="schedule-list">
+            @if (!FilteredAppointments.Any())
+            {
+                <div class="empty-state">@I18n.T("No appointments scheduled for this date.")</div>
+            }
+            @foreach (var appt in FilteredAppointments)
+            {
+                <div class="schedule-card">
+                    <span class="serial">#@appt.ApptSLNO.ToString("00")</span>
+                    <span class="record-main">
+                        <strong>@appt.Name</strong>
+                        <small>@DoctorName(appt.DoctorID) &bull; @I18n.T("Age"): @appt.Age &bull; @(string.IsNullOrWhiteSpace(appt.ContactNo) ? I18n.T("No mobile") : appt.ContactNo)</small>
+                    </span>
+                    <span class="pill">@(string.IsNullOrWhiteSpace(appt.PatientID) ? I18n.T("Walk-in") : appt.PatientID)</span>
+                    <span class="pill">@appt.Status</span>
+                    <span class="record-actions">
+                        @if (appt.Status == "Booked" && appt.ApptDate == DateTime.Today)
+                        {
+                            <button class="btn btn-primary btn-sm" @onclick="() => CheckInAsync(appt)">@I18n.T("Check in")</button>
+                        }
+                        <button class="icon-btn" @onclick="() => Select(appt)" title="@I18n.T("Edit")">@I18n.T("Edit")</button>
+                        <button class="icon-btn" @onclick="() => Print(appt)" title="@I18n.T("Print")">🖨️</button>
+                        <button class="icon-btn danger" @onclick="() => DeleteAsync(appt)" title="@I18n.T("Delete")">×</button>
+                    </span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div id="appointment-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Doctor Appointment Slip"
+                             DocNo="@($"#{editor.ID}")"
+                             DocNoLabel="Appointment"
+                             BarcodeCode="@($"APT-{editor.ID:00000}")"
+                             QrPayload="@BarcodeQr.GenerateAppointmentQrPayload(editor.ID, editor.ApptSLNO, editor.Name ?? "", DoctorName(editor.DoctorID), editor.ApptDate)" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Queue Serial #")</span><b style="font-size: 16px; color: #0284c7;">#@editor.ApptSLNO.ToString("00")</b></div>
+            <div><span>@I18n.T("Appointment Date")</span><b>@editor.ApptDate.ToString("dd MMM yyyy")</b></div>
+            <div><span>@I18n.T("Patient Name")</span><b>@editor.Name</b></div>
+            <div><span>@I18n.T("Patient ID")</span>@(string.IsNullOrWhiteSpace(editor.PatientID) ? I18n.T("Walk-in") : editor.PatientID)</div>
+            <div><span>@I18n.T("Consultant Doctor")</span><b>@DoctorName(editor.DoctorID)</b></div>
+            <div><span>@I18n.T("Age / Contact")</span>@editor.Age / @editor.ContactNo</div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                             SignTitle3="Reception Desk"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+<div id="schedule-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Daily Doctor Appointment Schedule"
+                             Subtitle="@($"Schedule Date: {filterDate:dd MMM yyyy}")" />
+
+        <table class="data-table" style="margin-top: 12px;">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Serial")</th>
+                    <th>@I18n.T("Patient Name")</th>
+                    <th>@I18n.T("Patient ID")</th>
+                    <th>@I18n.T("Doctor")</th>
+                    <th>@I18n.T("Age")</th>
+                    <th>@I18n.T("Mobile")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var a in appointments)
+                {
+                    <tr>
+                        <td><b>#@a.ApptSLNO.ToString("00")</b></td>
+                        <td>@a.Name</td>
+                        <td>@a.PatientID</td>
+                        <td>@DoctorName(a.DoctorID)</td>
+                        <td>@a.Age</td>
+                        <td>@a.ContactNo</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <PrintDocumentFooter SignTitle1="Duty Receptionist"
+                             SignTitle3="Medical Officer In-Charge"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "patientId")]
+    public string? QueryPatientId { get; set; }
+
+    private DoctorAppointment editor = NewAppointment();
+    private List<DoctorsProfile> doctors = [];
+    private List<DoctorAppointment> appointments = [];
+    private string apptScanQuery = string.Empty;
+    private DateTime filterDate = DateTime.Today;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+    private int originalDoctorId;
+    private DateTime originalDate;
+
+    private IEnumerable<DoctorAppointment> FilteredAppointments => string.IsNullOrWhiteSpace(apptScanQuery)
+        ? appointments
+        : appointments.Where(a => a.ID.ToString().Contains(apptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                               || a.ApptSLNO.ToString().Contains(apptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                               || (a.Name?.Contains(apptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                               || (a.PatientID?.Contains(apptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                               || (a.ContactNo?.Contains(apptScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        if (doctors.Count > 0) editor.DoctorID = doctors[0].ID;
+        await LoadAppointmentsAsync();
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryPatientId) && editor.ID == 0)
+        {
+            editor.PatientID = QueryPatientId.Trim();
+            await FindPatientAsync();
+        }
+    }
+
+    private async Task LoadAppointmentsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        appointments = await db.DoctorAppointments.AsNoTracking()
+            .Where(x => x.ApptDate == filterDate.Date)
+            .OrderBy(x => x.DoctorID)
+            .ThenBy(x => x.ApptSLNO)
+            .ToListAsync();
+    }
+
+    private async Task FindPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.PatientID.Trim());
+        if (patient is null)
+        {
+            messageClass = "danger";
+            message = $"Patient ID '{editor.PatientID}' was not found.";
+            return;
+        }
+        editor.Name = patient.Name;
+        editor.Age = Age(patient.DateOfBirth);
+        editor.ContactNo = patient.Contact;
+        messageClass = "success";
+        message = $"Loaded profile for {patient.Name} ({patient.PatientID}).";
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            editor.ApptDate = editor.ApptDate.Date;
+            if (editor.ID != 0 && await db.PatientEncounters.AnyAsync(x => x.AppointmentID == editor.ID))
+                throw new InvalidOperationException("A checked-in appointment can no longer be edited.");
+            if (editor.ID == 0 || editor.DoctorID != originalDoctorId || editor.ApptDate != originalDate)
+            {
+                await SqlServerConcurrency.AcquireTransactionLockAsync(
+                    db, $"HPM:Appointment:{editor.DoctorID}:{editor.ApptDate:yyyyMMdd}");
+                editor.ApptSLNO = (await db.DoctorAppointments.Where(x => x.DoctorID == editor.DoctorID && x.ApptDate == editor.ApptDate).MaxAsync(x => (int?)x.ApptSLNO) ?? 0) + 1;
+            }
+            if (editor.ID == 0)
+            {
+                editor.TransDate = DateTime.Now;
+                db.DoctorAppointments.Add(editor);
+            }
+            else
+            {
+                db.DoctorAppointments.Update(editor);
+            }
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            var serial = editor.ApptSLNO;
+            filterDate = editor.ApptDate;
+            messageClass = "success";
+            message = $"Appointment confirmed. Daily serial number assigned: #{serial:00}.";
+            await LoadAppointmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Could not schedule appointment: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Reset()
+    {
+        ResetEditor();
+        message = string.Empty;
+    }
+
+    private void ResetEditor()
+    {
+        editor = NewAppointment();
+        if (doctors.Count > 0) editor.DoctorID = doctors[0].ID;
+    }
+
+    private void Select(DoctorAppointment a)
+    {
+        editor = new DoctorAppointment
+        {
+            ID = a.ID,
+            DoctorID = a.DoctorID,
+            ApptSLNO = a.ApptSLNO,
+            ApptDate = a.ApptDate,
+            Name = a.Name,
+            Age = a.Age,
+            ContactNo = a.ContactNo,
+            PatientID = a.PatientID,
+            Status = a.Status,
+            EnteredBy = a.EnteredBy,
+            TransDate = a.TransDate
+        };
+        originalDoctorId = a.DoctorID;
+        originalDate = a.ApptDate;
+        message = string.Empty;
+    }
+
+    private async Task DeleteAsync(DoctorAppointment a)
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", $"Delete appointment serial #{a.ApptSLNO:00} for {a.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.DoctorAppointments.FindAsync(a.ID);
+        if (entity is not null)
+        {
+            if (await db.PatientEncounters.AnyAsync(x => x.AppointmentID == entity.ID))
+            {
+                messageClass = "danger";
+                message = "A checked-in appointment cannot be deleted. Cancel the encounter from the doctor queue instead.";
+                return;
+            }
+            db.Remove(entity);
+            await db.SaveChangesAsync();
+        }
+        if (editor.ID == a.ID) ResetEditor();
+        messageClass = "success";
+        message = "Appointment deleted.";
+        await LoadAppointmentsAsync();
+    }
+
+    private async Task CheckInAsync(DoctorAppointment appointment)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        try
+        {
+            var entity = await db.DoctorAppointments.SingleAsync(x => x.ID == appointment.ID);
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+            var encounter = await ClinicalEncounterWorkflow.CheckInAppointmentAsync(db, entity, userId);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            messageClass = "success";
+            message = $"{entity.Name} checked in. Doctor queue #{encounter.QueueNo}.";
+            await LoadAppointmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+    }
+
+    private async Task Print(DoctorAppointment a)
+    {
+        Select(a);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(50);
+        await JS.InvokeVoidAsync("hpm.printElement", "appointment-print", $"Appointment {a.ID}");
+    }
+
+    private async Task HandleApptScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(apptScanQuery))
+        {
+            await ProcessApptScanAsync(apptScanQuery.Trim());
+        }
+    }
+
+    private async Task ProcessApptScanAsync(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        // 1. Check if it is an Appointment QR payload: HPM:APT|ID:123...
+        if (raw.StartsWith("HPM:APT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var idPart = parts.FirstOrDefault(p => p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase));
+            if (idPart != null && long.TryParse(idPart.Substring(3), out var apptId))
+            {
+                await LoadAppointmentByIdAsync(apptId);
+                return;
+            }
+        }
+
+        // 2. Check if it is a Patient QR payload: HPM:PAT|ID:12|REG:202600001...
+        if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
+            if (regPart != null)
+            {
+                var regNo = regPart.Substring(4).Trim();
+                editor.PatientID = regNo;
+                await FindPatientAsync();
+                return;
+            }
+        }
+
+        // 3. Check for APT-XXXXX format
+        if (raw.StartsWith("APT-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(4), out var scannedId))
+        {
+            await LoadAppointmentByIdAsync(scannedId);
+            return;
+        }
+
+        // 4. If numeric, check if it matches an appointment on current date or any date
+        if (long.TryParse(raw, out var numericId))
+        {
+            var matched = appointments.FirstOrDefault(a => a.ID == numericId);
+            if (matched != null)
+            {
+                Select(matched);
+                messageClass = "success";
+                message = $"Appointment #{numericId} selected from scan.";
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dbAppt = await db.DoctorAppointments.AsNoTracking().FirstOrDefaultAsync(a => a.ID == numericId);
+            if (dbAppt != null)
+            {
+                filterDate = dbAppt.ApptDate;
+                await LoadAppointmentsAsync();
+                Select(dbAppt);
+                messageClass = "success";
+                message = $"Appointment #{numericId} loaded for {dbAppt.ApptDate:dd MMM yyyy}.";
+                return;
+            }
+
+            // If not found as appointment ID, try finding as Patient ID
+            editor.PatientID = raw;
+            await FindPatientAsync();
+            return;
+        }
+
+        // 5. Try patient search with raw text
+        editor.PatientID = raw;
+        await FindPatientAsync();
+    }
+
+    private async Task LoadAppointmentByIdAsync(long id)
+    {
+        var matched = appointments.FirstOrDefault(a => a.ID == id);
+        if (matched != null)
+        {
+            Select(matched);
+            messageClass = "success";
+            message = $"Appointment #{id} selected from scan.";
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var dbAppt = await db.DoctorAppointments.AsNoTracking().FirstOrDefaultAsync(a => a.ID == id);
+        if (dbAppt != null)
+        {
+            filterDate = dbAppt.ApptDate;
+            await LoadAppointmentsAsync();
+            Select(dbAppt);
+            messageClass = "success";
+            message = $"Appointment #{id} loaded for {dbAppt.ApptDate:dd MMM yyyy}.";
+        }
+        else
+        {
+            messageClass = "danger";
+            message = $"Appointment #{id} not found.";
+        }
+    }
+
+    private void ClearApptScan()
+    {
+        apptScanQuery = string.Empty;
+    }
+
+    private Task DeleteSelectedAsync() => DeleteAsync(editor);
+    private Task PrintAppointmentAsync() => JS.InvokeVoidAsync("hpm.printElement", "appointment-print", $"Appointment {editor.ID}").AsTask();
+    private Task PrintScheduleAsync() => JS.InvokeVoidAsync("hpm.printElement", "schedule-print", $"Appointments {filterDate:yyyy-MM-dd}").AsTask();
+    private static DoctorAppointment NewAppointment() => new() { ApptDate = DateTime.Today, TransDate = DateTime.Now, Status = "Booked" };
+    private string DoctorName(int id) => doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private static string Age(DateTime birth)
+    {
+        var years = DateTime.Today.Year - birth.Year;
+        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        return $"{Math.Max(0, years)}Y";
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

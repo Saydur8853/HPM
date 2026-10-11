@@ -1,0 +1,233 @@
+@page "/ipd/bed-turnover"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.IPDOperator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Bed Turnover") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("IPD Bed Operations")</span>
+        <h1>@I18n.T("Bed Cleaning & Turnover")</h1>
+        <p>@I18n.T("Record cleaning, obtain supervisor confirmation, and release beds for admission.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="LoadAsync">@I18n.T("Refresh")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="metric-grid" style="margin-bottom:24px;">
+    <div class="metric-card" style="--metric:#f59e0b;"><span>@I18n.T("Cleaning pending")</span><strong>@Rows.Count(x => x.Turnover?.Status == "Cleaning")</strong><small>@I18n.T("IPD operator action required")</small></div>
+    <div class="metric-card accent-blue"><span>@I18n.T("Awaiting approval")</span><strong>@Rows.Count(x => x.Turnover?.Status == "AwaitingApproval")</strong><small>@I18n.T("Supervisor confirmation required")</small></div>
+    <div class="metric-card" style="--metric:#10b981;"><span>@I18n.T("Available")</span><strong>@Rows.Count(x => x.Bed.Status == BedStatuses.Available)</strong><small>@I18n.T("Ready for admission")</small></div>
+    <div class="metric-card accent-red"><span>@I18n.T("Maintenance")</span><strong>@Rows.Count(x => x.Bed.Status == BedStatuses.Maintenance)</strong><small>@I18n.T("Temporarily unavailable")</small></div>
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div><h2>@I18n.T("Bed readiness queue")</h2><p>@I18n.T("Cleaning beds appear first.")</p></div>
+        <select class="date-filter" @bind="statusFilter">
+            <option value="All">@I18n.T("All statuses")</option>
+            <option value="Cleaning">@I18n.T("Cleaning")</option>
+            <option value="AwaitingApproval">@I18n.T("Awaiting approval")</option>
+            <option value="Available">@I18n.T("Available")</option>
+            <option value="Maintenance">@I18n.T("Maintenance")</option>
+        </select>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead><tr><th>@I18n.T("Bed / Cabin")</th><th>@I18n.T("Status")</th><th>@I18n.T("Released patient")</th><th>@I18n.T("Timeline")</th><th>@I18n.T("Action")</th></tr></thead>
+            <tbody>
+            @if (!FilteredRows.Any())
+            {
+                <tr><td colspan="5"><div class="empty-state small">@I18n.T("No beds match this status.")</div></td></tr>
+            }
+            @foreach (var row in FilteredRows)
+            {
+                <tr>
+                    <td><b>@row.Bed.Name</b><br/><small>@CategoryName(row.Bed.CategoryID)</small></td>
+                    <td><span class="pill @StatusClass(row)">@I18n.T(DisplayStatus(row))</span></td>
+                    <td>@(row.Turnover?.RegNo ?? "—")</td>
+                    <td>
+                        @if (row.Turnover is not null)
+                        {
+                            <small>@I18n.T("Requested"): @row.Turnover.RequestedAt.ToString("dd MMM yyyy hh:mm tt")</small>
+                            @if (row.Turnover.CleaningCompletedAt.HasValue)
+                            {
+                                <br/><small>@I18n.T("Cleaned"): @row.Turnover.CleaningCompletedAt.Value.ToString("dd MMM yyyy hh:mm tt") · @UserName(row.Turnover.CleaningCompletedBy)</small>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(row.Turnover.CleaningNotes))
+                            {
+                                <br/><small>@row.Turnover.CleaningNotes</small>
+                            }
+                        }
+                        else { <span>—</span> }
+                    </td>
+                    <td>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        @if (row.Turnover?.Status == "Cleaning")
+                        {
+                            <button class="btn btn-primary btn-sm" disabled="@isSaving" @onclick="() => CompleteCleaningAsync(row)">@I18n.T("Mark cleaned")</button>
+                        }
+                        @if (isAdministrator && row.Turnover?.Status == "AwaitingApproval")
+                        {
+                            <button class="btn btn-primary btn-sm" disabled="@isSaving" @onclick="() => ApproveAsync(row)">@I18n.T("Confirm & release")</button>
+                            <button class="btn btn-secondary btn-sm" disabled="@isSaving" @onclick="() => RejectAsync(row)">@I18n.T("Return for cleaning")</button>
+                        }
+                        @if (isAdministrator && row.Bed.Status == BedStatuses.Available)
+                        {
+                            <button class="btn btn-ghost btn-sm" disabled="@isSaving" @onclick="() => SetMaintenanceAsync(row, true)">@I18n.T("Set maintenance")</button>
+                        }
+                        @if (isAdministrator && row.Bed.Status == BedStatuses.Maintenance)
+                        {
+                            <button class="btn btn-primary btn-sm" disabled="@isSaving" @onclick="() => SetMaintenanceAsync(row, false)">@I18n.T("Restore available")</button>
+                        }
+                        </div>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<BedRow> Rows = [];
+    private List<BedCategory> categories = [];
+    private Dictionary<int, string> userNames = [];
+    private string statusFilter = "All";
+    private string message = "";
+    private string messageClass = "success";
+    private bool isAdministrator;
+    private bool isSaving;
+
+    private IEnumerable<BedRow> FilteredRows => statusFilter == "All"
+        ? Rows
+        : Rows.Where(x => DisplayStatus(x) == statusFilter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = user.IsInRole(RoleNames.Administrator);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.BedCategories.AsNoTracking().ToListAsync();
+        var beds = await db.BedCabins.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        var open = await db.BedTurnovers.AsNoTracking()
+            .Where(x => x.Status == "Cleaning" || x.Status == "AwaitingApproval")
+            .ToListAsync();
+        Rows = beds.Select(b => new BedRow(b, open.SingleOrDefault(x => x.BedCabinID == b.ID)))
+            .OrderBy(x => SortOrder(DisplayStatus(x))).ThenBy(x => x.Bed.Name).ToList();
+        var userIds = open.SelectMany(x => new[] { x.CleaningCompletedBy, x.ReleasedBy }).Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToArray();
+        userNames = userIds.Length == 0 ? [] : await db.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.UserName ?? $"User #{x.Id}");
+    }
+
+    private async Task CompleteCleaningAsync(BedRow row)
+    {
+        var notes = await JS.InvokeAsync<string?>("hpm.prompt", I18n.T("Cleaning notes (optional)"), "");
+        if (notes is null) return;
+        await ChangeTurnoverAsync(row, "Cleaning", async (turnover, bed, userId) =>
+        {
+            turnover.Status = "AwaitingApproval";
+            turnover.CleaningCompletedBy = userId;
+            turnover.CleaningCompletedAt = DateTime.Now;
+            turnover.CleaningNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim()[..Math.Min(notes.Trim().Length, 500)];
+            bed.Status = BedStatuses.Cleaning;
+            await Task.CompletedTask;
+        }, I18n.T("Cleaning recorded. Supervisor approval is now required."));
+    }
+
+    private async Task ApproveAsync(BedRow row)
+    {
+        if (!isAdministrator) return;
+        await ChangeTurnoverAsync(row, "AwaitingApproval", async (turnover, bed, userId) =>
+        {
+            if (bed.IsAllocated) throw new InvalidOperationException(I18n.T("An allocated bed cannot be released."));
+            turnover.Status = "Completed";
+            turnover.ReleasedBy = userId;
+            turnover.ReleasedAt = DateTime.Now;
+            bed.Status = BedStatuses.Available;
+            await Task.CompletedTask;
+        }, I18n.T("Bed confirmed clean and released for admission."));
+    }
+
+    private async Task RejectAsync(BedRow row)
+    {
+        if (!isAdministrator) return;
+        await ChangeTurnoverAsync(row, "AwaitingApproval", async (turnover, bed, userId) =>
+        {
+            turnover.Status = "Cleaning";
+            turnover.CleaningCompletedBy = null;
+            turnover.CleaningCompletedAt = null;
+            turnover.CleaningNotes = null;
+            bed.Status = BedStatuses.Cleaning;
+            await Task.CompletedTask;
+        }, I18n.T("Bed returned to the cleaning queue."));
+    }
+
+    private async Task ChangeTurnoverAsync(BedRow row, string expectedStatus, Func<BedTurnover, BedCabin, int, Task> update, string success)
+    {
+        isSaving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            var turnover = await db.BedTurnovers.SingleOrDefaultAsync(x => x.ID == row.Turnover!.ID && x.Status == expectedStatus)
+                ?? throw new InvalidOperationException(I18n.T("This turnover was already updated. Refresh and try again."));
+            var bed = await db.BedCabins.FindAsync(turnover.BedCabinID)
+                ?? throw new InvalidOperationException(I18n.T("Bed was not found."));
+            await update(turnover, bed, await CurrentUserIdAsync());
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            Success(success);
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { isSaving = false; }
+    }
+
+    private async Task SetMaintenanceAsync(BedRow row, bool maintenance)
+    {
+        if (!isAdministrator) return;
+        if (maintenance && !await JS.InvokeAsync<bool>("hpm.confirm", I18n.T("Mark this bed unavailable for maintenance?"))) return;
+        isSaving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var bed = await db.BedCabins.FindAsync(row.Bed.ID) ?? throw new InvalidOperationException(I18n.T("Bed was not found."));
+            var expected = maintenance ? BedStatuses.Available : BedStatuses.Maintenance;
+            if (bed.IsAllocated || bed.Status != expected) throw new InvalidOperationException(I18n.T("Bed status changed. Refresh and try again."));
+            bed.Status = maintenance ? BedStatuses.Maintenance : BedStatuses.Available;
+            await db.SaveChangesAsync();
+            Success(maintenance ? I18n.T("Bed moved to maintenance.") : I18n.T("Bed restored for admission."));
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { isSaving = false; }
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : throw new InvalidOperationException("Signed-in user was not identified.");
+    }
+
+    private string CategoryName(int id) => categories.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string UserName(int? id) => id.HasValue && userNames.TryGetValue(id.Value, out var name) ? name : id.HasValue ? $"User #{id}" : "—";
+    private static string DisplayStatus(BedRow row) => row.Turnover?.Status ?? row.Bed.Status;
+    private static int SortOrder(string status) => status switch { "Cleaning" => 0, "AwaitingApproval" => 1, "Maintenance" => 2, "Available" => 3, _ => 4 };
+    private static string StatusClass(BedRow row) => DisplayStatus(row) switch { "Available" => "pill-success", "Cleaning" => "pill-warning", "AwaitingApproval" => "pill-info", _ => "pill-danger" };
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private sealed record BedRow(BedCabin Bed, BedTurnover? Turnover);
+}

@@ -1,0 +1,296 @@
+@page "/reports"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>@I18n.T("Hospital Reports", "OPD Reports") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Reports & Analytics", "Reporting")</span>
+        <h1>@I18n.T("OPD & Emergency Reports", "OPD & emergency reports")</h1>
+        <p>@I18n.T("Operational and collection summary across the five modules.", "Operational and collection summary across the five modules.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print report", "Print report")</button>
+</div>
+@if(!string.IsNullOrWhiteSpace(message)){<div class="alert danger">@message</div>}
+
+<div class="panel">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Filter Period", "Filter Period")</h2>
+            <p>@I18n.T("Select date range to calculate metrics and collections.", "Select date range to calculate metrics and collections.")</p>
+        </div>
+    </div>
+    <div class="report-filter">
+        <label><span>@I18n.T("From date", "From date")</span><InputDate @bind-Value="fromDate" /></label>
+        <label><span>@I18n.T("To date", "To date")</span><InputDate @bind-Value="toDate" /></label>
+        <button class="btn btn-primary" @onclick="LoadAsync">@I18n.T("Generate report", "Generate report")</button>
+    </div>
+</div>
+
+<div class="metric-grid report-section">
+    <div class="metric-card accent-blue"><span>@I18n.T("New patients", "New patients")</span><strong>@registrations.Count</strong><small>@I18n.T("Registered in period", "Registered in period")</small></div>
+    <div class="metric-card accent-violet"><span>@I18n.T("Appointments", "Appointments")</span><strong>@appointments.Count</strong><small>@I18n.T("Scheduled consultations", "Scheduled consultations")</small></div>
+    <div class="metric-card accent-amber"><span>@I18n.T("Ticket collection", "Ticket collection")</span><strong>@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</strong><small>@tickets.Count @I18n.T("consultation tickets", "consultation tickets")</small></div>
+    <div class="metric-card accent-red"><span>@I18n.T("Emergency collection", "Emergency collection")</span><strong>@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Paid))</strong><small>@emergencyMemos.Count @I18n.T("emergency memos", "emergency memos")</small></div>
+</div>
+
+<div class="report-section panel">
+    <div class="panel-heading">
+        <div><h2>@I18n.T("Consultation tickets", "Consultation tickets")</h2><p>@tickets.Count @I18n.T("record(s)", "record(s)")</p></div>
+        <strong class="amount">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</strong>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Date", "Date")</th>
+                    <th>@I18n.T("Ticket", "Ticket")</th>
+                    <th>@I18n.T("Patient", "Patient")</th>
+                    <th>@I18n.T("Doctor", "Doctor")</th>
+                    <th>@I18n.T("Department", "Department")</th>
+                    <th class="num">@I18n.T("Fee", "Fee")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var t in tickets){
+                    <tr>
+                        <td>@t.TransDate.ToString("dd MMM yyyy")</td>
+                        <td>#@t.ID</td>
+                        <td>@t.Name</td>
+                        <td>@DoctorName(t.DoctorID)</td>
+                        <td>@DepartmentName(t.DeptID)</td>
+                        <td class="num">@I18n.FormatCurrency(t.Total)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="master-grid report-section">
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Emergency services", "Emergency services")</h2><p>@emergencyMemos.Count @I18n.T("memo(s)", "memo(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Memo", "Memo")</th>
+                        <th>@I18n.T("Patient", "Patient")</th>
+                        <th class="num">@I18n.T("Total", "Total")</th>
+                        <th class="num">@I18n.T("Paid", "Paid")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var m in emergencyMemos){
+                        <tr>
+                            <td>#@m.ID<br/><small>@m.TransDate.ToString("dd MMM")</small></td>
+                            <td>@m.PatientName</td>
+                            <td class="num">@I18n.FormatCurrency(m.Total)</td>
+                            <td class="num">@I18n.FormatCurrency(m.Paid)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("OT cash memos", "OT cash memos")</h2><p>@otMemos.Count @I18n.T("memo(s)", "memo(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Memo", "Memo")</th>
+                        <th>@I18n.T("Patient", "Patient")</th>
+                        <th class="num">@I18n.T("Total", "Total")</th>
+                        <th class="num">@I18n.T("Net", "Net")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var m in otMemos){
+                        <tr>
+                            <td>#@m.ID<br/><small>@m.TransDate.ToString("dd MMM")</small></td>
+                            <td>@m.PatientName</td>
+                            <td class="num">@I18n.FormatCurrency(m.Total)</td>
+                            <td class="num">@I18n.FormatCurrency(m.Total-m.Discount)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="master-grid report-section">
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Patient registrations", "Patient registrations")</h2><p>@registrations.Count @I18n.T("patient(s)", "patient(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("ID", "ID")</th>
+                        <th>@I18n.T("Patient", "Patient")</th>
+                        <th>@I18n.T("Contact", "Contact")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var p in registrations){
+                        <tr>
+                            <td>@p.PatientID</td>
+                            <td>@p.Name</td>
+                            <td>@p.Contact</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Appointments", "Appointments")</h2><p>@appointments.Count @I18n.T("appointment(s)", "appointment(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Date", "Date")</th>
+                        <th>@I18n.T("Serial", "Serial")</th>
+                        <th>@I18n.T("Patient", "Patient")</th>
+                        <th>@I18n.T("Doctor", "Doctor")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach(var a in appointments){
+                        <tr>
+                            <td>@a.ApptDate.ToString("dd MMM")</td>
+                            <td>@a.ApptSLNO.ToString("00")</td>
+                            <td>@a.Name</td>
+                            <td>@DoctorName(a.DoctorID)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div id="report-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="@I18n.T("OPD & Emergency Summary Report", "OPD & Emergency Summary Report")"
+                             SubTitle="@I18n.T("Hospital Management System", "Hospital Management System")"
+                             DocumentNo="@($"{fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")" />
+        <div class="report-cards">
+            <div class="report-card"><span>@I18n.T("Patients", "Patients")</span><strong>@registrations.Count</strong></div>
+            <div class="report-card"><span>@I18n.T("Appointments", "Appointments")</span><strong>@appointments.Count</strong></div>
+            <div class="report-card"><span>@I18n.T("Tickets", "Tickets")</span><strong>@tickets.Count</strong></div>
+            <div class="report-card"><span>@I18n.T("Emergency memos", "Emergency memos")</span><strong>@emergencyMemos.Count</strong></div>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>@I18n.T("Collection source", "Collection source")</th>
+                    <th class="num">@I18n.T("Records", "Records")</th>
+                    <th class="num">@I18n.T("Gross", "Gross")</th>
+                    <th class="num">@I18n.T("Discount", "Discount")</th>
+                    <th class="num">@I18n.T("Net / Paid", "Net / Paid")</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>@I18n.T("Consultation ticket", "Consultation ticket")</td>
+                    <td class="num">@tickets.Count</td>
+                    <td class="num">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</td>
+                    <td class="num">@I18n.FormatCurrency(0)</td>
+                    <td class="num">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</td>
+                </tr>
+                <tr>
+                    <td>@I18n.T("Emergency service", "Emergency service")</td>
+                    <td class="num">@emergencyMemos.Count</td>
+                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Total))</td>
+                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Discount))</td>
+                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Paid))</td>
+                </tr>
+                <tr>
+                    <td>@I18n.T("OT cash memo", "OT cash memo")</td>
+                    <td class="num">@otMemos.Count</td>
+                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Total))</td>
+                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Discount))</td>
+                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Total-x.Discount))</td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="print-total">
+            <div class="grand">
+                <span>@I18n.T("Combined net collection", "Combined net collection")</span>
+                <strong>@I18n.FormatCurrency(NetCollection)</strong>
+            </div>
+        </div>
+        <h3>@I18n.T("Consultation ticket detail", "Consultation ticket detail")</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>@I18n.T("Date", "Date")</th>
+                    <th>@I18n.T("Ticket", "Ticket")</th>
+                    <th>@I18n.T("Patient", "Patient")</th>
+                    <th>@I18n.T("Doctor", "Doctor")</th>
+                    <th class="num">@I18n.T("Fee", "Fee")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach(var t in tickets){
+                    <tr>
+                        <td>@t.TransDate.ToString("dd MMM")</td>
+                        <td>#@t.ID</td>
+                        <td>@t.Name</td>
+                        <td>@DoctorName(t.DoctorID)</td>
+                        <td class="num">@I18n.FormatCurrency(t.Total)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <PrintDocumentFooter Signatures='new string[] { I18n.T("Prepared By", "Prepared By"), I18n.T("Accounts In-Charge", "Accounts In-Charge"), I18n.T("Authorized Signature", "Authorized signature") }' />
+    </div>
+</div>
+
+@code{
+    private DateTime fromDate=DateTime.Today.AddDays(-7); private DateTime toDate=DateTime.Today;
+    private List<Registration> registrations=[];private List<DoctorAppointment> appointments=[];private List<OPDTicket> tickets=[];private List<CashMemoDInvestigation> emergencyMemos=[];private List<CashMemoOT> otMemos=[];private List<DoctorsProfile> doctors=[];private List<Department> departments=[];private string message=string.Empty;
+    private decimal NetCollection=>tickets.Sum(x=>x.Total)+emergencyMemos.Sum(x=>x.Paid)+otMemos.Sum(x=>x.Total-x.Discount);
+    
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using(var db=await DbFactory.CreateDbContextAsync())
+        {
+            doctors=await db.Doctors.AsNoTracking().ToListAsync();
+            departments=await db.Departments.AsNoTracking().ToListAsync();
+        }
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync()
+    {
+        if(toDate.Date<fromDate.Date){message=I18n.IsBangla ? "শেষের তারিখ শুরুর তারিখের আগের হতে পারে না।" : "To date cannot be earlier than From date.";return;}
+        if((toDate.Date-fromDate.Date).TotalDays>366){message=I18n.IsBangla ? "৩৬৬ দিন বা তার কম সময়ের রিপোর্ট নির্বাচন করুন।" : "Select a report period of 366 days or less.";return;}
+        message=string.Empty;
+        var start=fromDate.Date;var end=toDate.Date.AddDays(1);
+        var registrationsTask=LoadRegistrationsAsync(start,end);
+        var appointmentsTask=LoadAppointmentsAsync(start,end);
+        var ticketsTask=LoadTicketsAsync(start,end);
+        var emergencyTask=LoadEmergencyAsync(start,end);
+        var otTask=LoadOtAsync(start,end);
+        await Task.WhenAll(registrationsTask,appointmentsTask,ticketsTask,emergencyTask,otTask);
+        registrations=await registrationsTask;appointments=await appointmentsTask;tickets=await ticketsTask;emergencyMemos=await emergencyTask;otMemos=await otTask;
+    }
+    private async Task<List<Registration>> LoadRegistrationsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.Registrations.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.TransDate).ToListAsync();}
+    private async Task<List<DoctorAppointment>> LoadAppointmentsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.DoctorAppointments.AsNoTracking().Where(x=>x.ApptDate>=start&&x.ApptDate<end).OrderBy(x=>x.ApptDate).ThenBy(x=>x.ApptSLNO).ToListAsync();}
+    private async Task<List<OPDTicket>> LoadTicketsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.OPDTickets.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.ID).ToListAsync();}
+    private async Task<List<CashMemoDInvestigation>> LoadEmergencyAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.EmergencyMemos.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end&&x.ModuleID==11).OrderByDescending(x=>x.ID).ToListAsync();}
+    private async Task<List<CashMemoOT>> LoadOtAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.OTCashMemos.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.ID).ToListAsync();}
+    private string DoctorName(int id)=>doctors.FirstOrDefault(x=>x.ID==id)?.Name??"—";private string DepartmentName(int id)=>departments.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private Task PrintAsync()=>JS.InvokeVoidAsync("hpm.printElement","report-print",$"OPD Report {fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd}").AsTask();
+}

@@ -1,0 +1,524 @@
+@page "/accounts"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@implements IDisposable
+@using HPM.Web.Components.Common
+@using HPM.Web.Services
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Hospital Accounts & Ledger", "Accounts & Finance") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div><span class="eyebrow">@I18n.T("Accounts & Finance", "Accounts & finance")</span><h1>@I18n.T("Financial Control Centre", "Financial Control Centre")</h1><p>@I18n.T("Approval, immutable reversal, day closing, period lock and cash-to-ledger reconciliation.", "Approval, immutable reversal, day closing, period lock and cash-to-ledger reconciliation.")</p></div>
+    <button class="btn btn-secondary" @onclick="PrintLedgerAsync">@I18n.T("Print ledger", "Print ledger")</button>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="panel" style="margin-bottom:20px">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Reporting period", "Reporting period")</h2>
+            <p>@I18n.T("Financial statement and cash movement date range.", "Financial statement and cash movement date range.")</p>
+        </div>
+    </div>
+    <div class="report-filter">
+        <label><span>@I18n.T("From date", "From date")</span><InputDate @bind-Value="fromDate"/></label>
+        <label><span>@I18n.T("To date", "To date")</span><InputDate @bind-Value="toDate"/></label>
+        <button class="btn btn-primary" @onclick="LoadAsync">@I18n.T("Apply", "Apply")</button>
+    </div>
+</div>
+
+<div class="metric-grid" style="margin-bottom:24px">
+    <div class="metric-card accent-blue"><span>@I18n.T("Central cash", "Central cash")</span><strong>@I18n.FormatCurrency(cashCollection)</strong><small>@I18n.T("Operational collection", "Operational collection")</small></div>
+    <div class="metric-card accent-teal"><span>@I18n.T("GL cash movement", "GL cash movement")</span><strong>@I18n.FormatCurrency(glCash)</strong><small>@I18n.T("Approved journals", "Approved journals")</small></div>
+    <div class="metric-card @(cashDifference == 0 ? "accent-violet" : "accent-red")"><span>@I18n.T("Cash variance", "Cash variance")</span><strong>@I18n.FormatCurrency(cashDifference)</strong><small>@I18n.T("Central cash − GL", "Central cash − GL")</small></div>
+    <div class="metric-card accent-violet"><span>@I18n.T("Pending vouchers", "Pending vouchers")</span><strong>@pendingCount</strong><small>@I18n.T("Awaiting approval", "Awaiting approval")</small></div>
+</div>
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Prepare manual voucher", "Prepare manual voucher")</h2><p>@I18n.T("Saved as pending; Administrator approval is required", "Saved as pending; Administrator approval is required")</p></div><button class="icon-btn" @onclick="ResetVoucher">@I18n.T("New", "New")</button></div>
+        <div class="form-grid">
+            <label><span>@I18n.T("Voucher type *", "Voucher type *")</span><select @bind="voucherType"><option value="Receipt">@I18n.T("Receipt", "Receipt")</option><option value="Payment">@I18n.T("Payment", "Payment")</option><option value="Expense">@I18n.T("Expense", "Expense")</option><option value="Journal">@I18n.T("Journal", "Journal")</option></select></label>
+            <label><span>@I18n.T("Voucher date *", "Voucher date *")</span><InputDate @bind-Value="voucherDate"/></label>
+            <label><span>@I18n.T("Reference", "Reference")</span><input @bind="reference"/></label>
+            <label><span>@I18n.T("Narration *", "Narration *")</span><input @bind="narration"/></label>
+        </div>
+        <div class="form-section-title">@I18n.T("Journal line", "Journal line")</div>
+        <div class="form-grid three">
+            <label><span>@I18n.T("Account *", "Account *")</span><select @bind="lineAccountId"><option value="0">@I18n.T("Select", "Select")</option>@foreach (var x in accounts.Where(x => x.IsActive)) { <option value="@x.ID">@x.Code · @x.Name</option> }</select></label>
+            <label><span>@I18n.T("Debit", "Debit")</span><InputNumber @bind-Value="lineDebit"/></label>
+            <label><span>@I18n.T("Credit", "Credit")</span><InputNumber @bind-Value="lineCredit"/></label>
+        </div>
+        <div class="form-actions"><button class="btn btn-secondary" @onclick="AddVoucherLine">+ @I18n.T("Add line", "Add line")</button></div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Account", "Account")</th><th class="num">@I18n.T("Debit", "Debit")</th><th class="num">@I18n.T("Credit", "Credit")</th><th></th></tr></thead><tbody>
+            @foreach (var x in voucherLines) { <tr><td>@AccountName(x.AccountID)</td><td class="num">@I18n.FormatCurrency(x.Debit)</td><td class="num">@I18n.FormatCurrency(x.Credit)</td><td><button class="icon-btn" @onclick="() => voucherLines.Remove(x)">@I18n.T("Remove", "Remove")</button></td></tr> }
+            <tr><td><b>@I18n.T("Total", "Total")</b></td><td class="num"><b>@I18n.FormatCurrency(voucherLines.Sum(x => x.Debit))</b></td><td class="num"><b>@I18n.FormatCurrency(voucherLines.Sum(x => x.Credit))</b></td><td></td></tr>
+        </tbody></table></div>
+        <div class="form-actions"><button class="btn btn-primary" @onclick="SubmitVoucherAsync">@I18n.T("Submit for approval", "Submit for approval")</button></div>
+    </div>
+
+    <div>
+        <div class="panel form-panel">
+            <div class="panel-heading"><div><h2>@I18n.T("Cashier day closing", "Cashier day closing")</h2><p>@handoverDate.ToString("dd MMM yyyy") · @I18n.T("System cash", "System cash") @I18n.FormatCurrency(handoverSystem)</p></div>@if (currentHandover?.IsLocked == true) { <span class="badge">@I18n.T("LOCKED", "LOCKED")</span> }</div>
+            <div class="form-grid">
+                <label><span>@I18n.T("Business date", "Business date")</span><InputDate @bind-Value="handoverDate" @bind-Value:after="CalculateHandoverAsync"/></label>
+                <label><span>@I18n.T("Declared handover *", "Declared handover *")</span><InputNumber @bind-Value="handedAmount" disabled="@(currentHandover?.IsLocked == true)"/></label>
+                <label class="span-2"><span>@I18n.T("Notes", "Notes")</span><input @bind="handoverNotes" disabled="@(currentHandover?.IsLocked == true)"/></label>
+            </div>
+            <div class="form-actions">
+                @if (currentHandover?.IsLocked != true) { <button class="btn btn-primary" @onclick="CloseDayAsync">@I18n.T("Close & lock day", "Close & lock day")</button> }
+                else if (isAdministrator) { <button class="btn btn-secondary" @onclick="ReopenCurrentDayAsync">@I18n.T("Reopen day", "Reopen day")</button> }
+            </div>
+            @if (isAdministrator && recentHandovers.Count > 0)
+            {
+                <div class="form-section-title">@I18n.T("Recent cashier closing records", "Recent cashier closing records")</div>
+                @foreach (var x in recentHandovers.Take(10))
+                {
+                    <div class="patient-summary"><div><b>@x.BusinessDate.ToString("dd MMM yyyy") · @I18n.T("Cashier", "Cashier") #@x.CashierID</b><small style="display:block">@I18n.T("System", "System") @I18n.FormatCurrency(x.SystemAmount) · @I18n.T("Declared", "Declared") @I18n.FormatCurrency(x.HandedOverAmount) · @(x.IsLocked ? I18n.T("Locked", "Locked") : I18n.T("Open", "Open"))</small></div>@if (x.IsLocked) { <button class="icon-btn" @onclick="() => ReopenHandoverAsync(x)">@I18n.T("Reopen", "Reopen")</button> }</div>
+                }
+            }
+        </div>
+
+        @if (isAdministrator)
+        {
+            <div class="panel form-panel">
+                <div class="panel-heading"><div><h2>@I18n.T("Financial period lock", "Financial period lock")</h2><p>@I18n.T("Prevents posting into a closed period", "Prevents posting into a closed period")</p></div></div>
+                <div class="form-grid"><label><span>@I18n.T("From *", "From *")</span><InputDate @bind-Value="lockFrom"/></label><label><span>@I18n.T("To *", "To *")</span><InputDate @bind-Value="lockTo"/></label><label class="span-2"><span>@I18n.T("Reason *", "Reason *")</span><input @bind="lockReason"/></label></div>
+                <div class="form-actions"><button class="btn btn-primary" @onclick="LockPeriodAsync">@I18n.T("Lock period", "Lock period")</button></div>
+                @foreach (var x in periodLocks.Where(x => x.IsActive))
+                {
+                    <div class="patient-summary"><div><b>@x.FromDate.ToString("dd MMM yyyy") – @x.ToDate.ToString("dd MMM yyyy")</b><small style="display:block">@x.Reason</small></div><button class="icon-btn" @onclick="() => UnlockPeriodAsync(x)">@I18n.T("Unlock", "Unlock")</button></div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<div class="panel" style="margin-top:24px">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Voucher approval & control", "Voucher approval & control")</h2>
+            <p>@I18n.T("Posted vouchers are never edited or deleted; cancellation creates an equal opposite journal.", "Posted vouchers are never edited or deleted; cancellation creates an equal opposite journal.")</p>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <div class="scanner-search-group" style="min-width:280px;">
+                <span class="scanner-icon">⚡</span>
+                <input type="text" class="form-control" style="font-size:12px; padding:5px 8px;" placeholder="@I18n.T("Scan / Search Voucher (VCH-XXXXXX)...")" @bind="voucherSearchScan" @bind:event="oninput" @onkeydown="HandleVoucherScanKeyDownAsync" />
+            </div>
+            <input placeholder="@I18n.T("Reason for reject/reversal", "Reason for reject/reversal")" @bind="actionReason" style="min-width:220px"/>
+        </div>
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Date / Voucher", "Date / Voucher")</th>
+                    <th>@I18n.T("Type", "Type")</th>
+                    <th>@I18n.T("Reference / Narration", "Reference / Narration")</th>
+                    <th>@I18n.T("Status", "Status")</th>
+                    <th class="num">@I18n.T("Amount", "Amount")</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (!FilteredVouchers.Any()) { <tr><td colspan="6"><div class="empty-state small">@I18n.T("No vouchers in this period.", "No vouchers in this period.")</div></td></tr> }
+                @foreach (var x in FilteredVouchers.OrderByDescending(x => x.ID))
+                {
+                    <tr>
+                        <td>@x.VoucherDate.ToString("dd MMM yy")<br/><small>@x.VoucherNo</small></td>
+                        <td>@I18n.T(x.VoucherType, x.VoucherType)</td>
+                        <td>@x.Reference<br/><small>@x.Narration</small></td>
+                        <td><span class="pill">@I18n.T(x.Status, x.Status)</span></td>
+                        <td class="num">@I18n.FormatCurrency(VoucherAmount(x.ID))</td>
+                        <td>
+                            <button class="icon-btn" @onclick="() => SelectVoucherAsync(x)">@I18n.T("Print", "Print")</button>
+                            @if (isAdministrator && x.Status == "Pending") { <button class="icon-btn" @onclick="() => ApproveVoucherAsync(x)">@I18n.T("Approve", "Approve")</button><button class="icon-btn" @onclick="() => RejectVoucherAsync(x)">@I18n.T("Reject", "Reject")</button> }
+                            @if (isAdministrator && x.Status == "Approved" && x.ReversalOfVoucherID == null) { <button class="icon-btn" @onclick="() => ReverseVoucherAsync(x)">@I18n.T("Reverse", "Reverse")</button> }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="panel" style="margin-top:24px">
+    <div class="panel-heading"><div><h2>@I18n.T("Cash vs General Ledger reconciliation", "Cash vs General Ledger reconciliation")</h2><p>@I18n.T("Daily comparison; zero variance means central collection and cash account agree.", "Daily comparison; zero variance means central collection and cash account agree.")</p></div><button class="btn btn-secondary" @onclick="BackfillOperationalJournalsAsync" disabled="@(!isAdministrator)">@I18n.T("Post missing operational journals", "Post missing operational journals")</button></div>
+    <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Date", "Date")</th><th class="num">@I18n.T("Central cash", "Central cash")</th><th class="num">@I18n.T("GL cash", "GL cash")</th><th class="num">@I18n.T("Variance", "Variance")</th><th>@I18n.T("Status", "Status")</th></tr></thead><tbody>
+        @foreach (var x in reconciliationRows) { <tr><td>@x.Date.ToString("dd MMM yyyy")</td><td class="num">@I18n.FormatCurrency(x.CentralCash)</td><td class="num">@I18n.FormatCurrency(x.GlCash)</td><td class="num">@I18n.FormatCurrency(x.Variance)</td><td><span class="pill">@(x.Variance == 0 ? I18n.T("MATCHED", "MATCHED") : I18n.T("REVIEW", "REVIEW"))</span></td></tr> }
+    </tbody></table></div>
+</div>
+
+@if (isAdministrator)
+{
+    <div class="panel form-panel" style="margin-top:24px">
+        <div class="panel-heading"><div><h2>@(accountEditor.ID == 0 ? I18n.T("Add account head", "Add account head") : I18n.T("Edit account head", "Edit account head"))</h2><p>@I18n.T("Chart of Accounts", "Chart of Accounts")</p></div><button class="icon-btn" @onclick="ResetAccount">@I18n.T("New", "New")</button></div>
+        <div class="form-grid"><label><span>@I18n.T("Code *", "Code *")</span><input @bind="accountEditor.Code"/></label><span>@I18n.T("Name *", "Name *")</span><input @bind="accountEditor.Name"/><label><span>@I18n.T("Type *", "Type *")</span><select @bind="accountEditor.AccountType"><option value="Asset">@I18n.T("Asset", "Asset")</option><option value="Liability">@I18n.T("Liability", "Liability")</option><option value="Equity">@I18n.T("Equity", "Equity")</option><option value="Income">@I18n.T("Income", "Income")</option><option value="Expense">@I18n.T("Expense", "Expense")</option></select></label><label><span>@I18n.T("Active", "Active")</span><InputCheckbox @bind-Value="accountEditor.IsActive"/></label></div>
+        <div class="form-actions"><button class="btn btn-primary" @onclick="SaveAccountAsync">@I18n.T("Save account", "Save account")</button></div>
+        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Code", "Code")</th><th>@I18n.T("Account", "Account")</th><th>@I18n.T("Type", "Type")</th><th></th></tr></thead><tbody>@foreach (var x in accounts) { <tr><td>@x.Code</td><td>@x.Name</td><td><span class="pill">@I18n.T(x.AccountType, x.AccountType)</span></td><td><button class="icon-btn" @onclick="() => SelectAccount(x)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
+    </div>
+}
+
+<div id="accounts-ledger-print" class="panel print-sheet" style="margin-top:24px">
+    <div class="print-brand"><div><h1>@Branding.HospitalName</h1><p>@I18n.T("Accounts & Finance", "Accounts & Finance")</p></div><div><b>@I18n.T("General Ledger", "General Ledger")</b><br/><small>@fromDate.ToString("dd MMM yyyy") – @toDate.ToString("dd MMM yyyy")</small></div></div>
+    <div class="panel-heading"><div><h2>@I18n.T("General ledger", "General ledger")</h2><p>@I18n.T("Approved and reversal entries", "Approved and reversal entries")</p></div><select @bind="ledgerAccountId"><option value="0">@I18n.T("All accounts", "All accounts")</option>@foreach (var x in accounts) { <option value="@x.ID">@x.Code · @x.Name</option> }</select></div>
+    <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Date / Voucher", "Date / Voucher")</th><th>@I18n.T("Account", "Account")</th><th>@I18n.T("Narration", "Narration")</th><th class="num">@I18n.T("Debit", "Debit")</th><th class="num">@I18n.T("Credit", "Credit")</th></tr></thead><tbody>@foreach (var x in LedgerRows) { <tr><td>@x.Date.ToString("dd MMM yy")<br/><small>@x.VoucherNo</small></td><td>@AccountName(x.AccountID)</td><td>@x.Narration</td><td class="num">@I18n.FormatCurrency(x.Debit)</td><td class="num">@I18n.FormatCurrency(x.Credit)</td></tr> }</tbody></table></div>
+</div>
+
+@if (selectedVoucher is not null)
+{
+    <div id="voucher-print" class="print-sheet panel">
+        <div class="print-brand">
+            <div>
+                <h1>@Branding.HospitalName</h1>
+                <p>@I18n.T("Accounts & Finance", "Accounts & Finance")</p>
+            </div>
+            <div style="display:flex; align-items:center; gap:16px;">
+                <BarcodeQrView Code="@($"VCH-{selectedVoucher.ID}")"
+                               QrPayload="@BarcodeQr.GenerateVoucherQrPayload(selectedVoucher.ID, selectedVoucher.VoucherType ?? "Journal", VoucherAmount(selectedVoucher.ID), selectedVoucher.VoucherDate)"
+                               Layout="side-by-side"
+                               BarHeight="28"
+                               QrPixelsPerModule="3" />
+                <div style="text-align:right;">
+                    <b>@selectedVoucher.VoucherNo</b>
+                    <br /><small>@selectedVoucher.VoucherDate.ToString("dd MMM yyyy")</small>
+                </div>
+            </div>
+        </div>
+        <h2 class="print-title">@I18n.T(selectedVoucher.VoucherType, selectedVoucher.VoucherType) @I18n.T("Voucher", "Voucher")</h2>
+        <div class="print-grid">
+            <div><span>@I18n.T("Status:", "Status:")</span> <b>@I18n.T(selectedVoucher.Status, selectedVoucher.Status)</b></div>
+            <div><span>@I18n.T("Reference:", "Reference:")</span> <b>@selectedVoucher.Reference</b></div>
+            <div class="span-2"><span>@I18n.T("Narration:", "Narration:")</span> <b>@selectedVoucher.Narration</b></div>
+        </div>
+        <table class="data-table" style="margin-top:12px;">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Account", "Account")</th>
+                    <th class="num">@I18n.T("Debit", "Debit")</th>
+                    <th class="num">@I18n.T("Credit", "Credit")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in selectedVoucherLines)
+                {
+                    <tr>
+                        <td>@AccountName(x.AccountID)</td>
+                        <td class="num">@I18n.FormatCurrency(x.Debit)</td>
+                        <td class="num">@I18n.FormatCurrency(x.Credit)</td>
+                    </tr>
+                }
+                <tr style="background:#f8fafc; font-weight:750;">
+                    <td><b>@I18n.T("Total", "Total")</b></td>
+                    <td class="num"><b>@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Debit))</b></td>
+                    <td class="num"><b>@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Credit))</b></td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="print-footer"><span class="print-sign">@I18n.T("Prepared By", "Prepared By")</span><span class="print-sign">@I18n.T("Approved By", "Approved By")</span><span class="print-sign">@I18n.T("Receiver", "Receiver")</span></div>
+    </div>
+}
+
+@code {
+    private List<AccountHead> accounts = [];
+    private List<AccountVoucher> vouchers = [];
+    private List<AccountVoucherLine> allLines = [];
+    private List<AccountVoucherLine> voucherLines = [];
+    private List<AccountVoucherLine> selectedVoucherLines = [];
+    private List<FinancialPeriodLock> periodLocks = [];
+    private List<CashierHandover> recentHandovers = [];
+    private List<ReconciliationRow> reconciliationRows = [];
+    private AccountVoucher? selectedVoucher;
+    private AccountHead accountEditor = new() { AccountType = "Asset", IsActive = true };
+    private CashierHandover? currentHandover;
+    private DateTime fromDate = DateTime.Today.AddDays(-30), toDate = DateTime.Today;
+    private DateTime voucherDate = DateTime.Today, handoverDate = DateTime.Today;
+    private DateTime lockFrom = new(DateTime.Today.Year, DateTime.Today.Month, 1), lockTo = DateTime.Today;
+    private decimal cashCollection, glCash, cashDifference, income, expense, lineDebit, lineCredit, handoverSystem, handedAmount;
+    private int lineAccountId, ledgerAccountId, pendingCount;
+    private string voucherType = "Journal", reference = "", narration = "", handoverNotes = "", actionReason = "", lockReason = "", message = "", messageClass = "success";
+    private string voucherSearchScan = "";
+    private bool isAdministrator;
+
+    private IEnumerable<AccountVoucher> FilteredVouchers
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(voucherSearchScan)) return vouchers;
+            var q = voucherSearchScan.Trim();
+            long? matchedId = null;
+            if (q.StartsWith("HPM:VCH|", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = q.Split('|');
+                if (parts.Length > 1 && long.TryParse(parts[1], out var id)) matchedId = id;
+            }
+            else if (q.StartsWith("VCH-", StringComparison.OrdinalIgnoreCase))
+            {
+                if (long.TryParse(q[4..], out var id)) matchedId = id;
+            }
+            else if (long.TryParse(q, out var id))
+            {
+                matchedId = id;
+            }
+
+            return vouchers.Where(x =>
+                (matchedId.HasValue && x.ID == matchedId.Value) ||
+                (x.VoucherNo != null && x.VoucherNo.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (x.Reference != null && x.Reference.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (x.Narration != null && x.Narration.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (x.VoucherType != null && x.VoucherType.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private async Task HandleVoucherScanKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(voucherSearchScan))
+        {
+            var target = FilteredVouchers.FirstOrDefault();
+            if (target != null)
+            {
+                await SelectVoucherAsync(target);
+            }
+        }
+    }
+
+    private IEnumerable<LedgerRow> LedgerRows =>
+        from l in allLines
+        join v in vouchers.Where(x => x.IsPosted && x.Status != "Pending" && x.Status != "Rejected") on l.VoucherID equals v.ID
+        where ledgerAccountId == 0 || l.AccountID == ledgerAccountId
+        orderby v.VoucherDate descending, v.ID descending
+        select new LedgerRow(v.VoucherDate, v.VoucherNo, l.AccountID, v.Narration, l.Debit, l.Credit);
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        await LoadAsync();
+        await CalculateHandoverAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        accounts = await db.AccountHeads.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        var end = toDate.Date.AddDays(1);
+        vouchers = await db.AccountVouchers.AsNoTracking().Where(x => x.VoucherDate >= fromDate.Date && x.VoucherDate < end).ToListAsync();
+        var ids = vouchers.Select(x => x.ID).ToArray();
+        allLines = ids.Length == 0 ? [] : await db.AccountVoucherLines.AsNoTracking().Where(x => ids.Contains(x.VoucherID)).ToListAsync();
+        var collections = await db.CentralCashCollections.AsNoTracking().Where(x => x.TransDateCL >= fromDate.Date && x.TransDateCL < end).ToListAsync();
+        cashCollection = collections.Sum(x => x.Amount);
+        var postedIds = vouchers.Where(x => x.IsPosted && x.Status != "Pending" && x.Status != "Rejected").Select(x => x.ID).ToHashSet();
+        var postedLines = allLines.Where(x => postedIds.Contains(x.VoucherID)).ToList();
+        glCash = postedLines.Where(x => x.AccountID == AccountingPosting.Cash).Sum(x => x.Debit - x.Credit);
+        cashDifference = cashCollection - glCash;
+        pendingCount = vouchers.Count(x => x.Status == "Pending");
+        var incomeIds = accounts.Where(x => x.AccountType == "Income").Select(x => x.ID).ToHashSet();
+        var expenseIds = accounts.Where(x => x.AccountType == "Expense").Select(x => x.ID).ToHashSet();
+        income = postedLines.Where(x => incomeIds.Contains(x.AccountID)).Sum(x => x.Credit - x.Debit);
+        expense = postedLines.Where(x => expenseIds.Contains(x.AccountID)).Sum(x => x.Debit - x.Credit);
+        periodLocks = await db.FinancialPeriodLocks.AsNoTracking().OrderByDescending(x => x.ID).ToListAsync();
+        recentHandovers = isAdministrator
+            ? await db.CashierHandovers.AsNoTracking().OrderByDescending(x => x.BusinessDate).ThenByDescending(x => x.ID).Take(50).ToListAsync()
+            : [];
+
+        var centralByDay = collections.GroupBy(x => x.TransDateCL.Date).ToDictionary(x => x.Key, x => x.Sum(y => y.Amount));
+        var voucherDates = vouchers.ToDictionary(x => x.ID, x => x.VoucherDate.Date);
+        var glByDay = postedLines.Where(x => x.AccountID == AccountingPosting.Cash)
+            .GroupBy(x => voucherDates[x.VoucherID]).ToDictionary(x => x.Key, x => x.Sum(y => y.Debit - y.Credit));
+        reconciliationRows = centralByDay.Keys.Union(glByDay.Keys).OrderByDescending(x => x)
+            .Select(x => new ReconciliationRow(x, centralByDay.GetValueOrDefault(x), glByDay.GetValueOrDefault(x))).ToList();
+    }
+
+    private void AddVoucherLine()
+    {
+        if (lineAccountId <= 0 || lineDebit < 0 || lineCredit < 0 || (lineDebit == 0 && lineCredit == 0) || (lineDebit > 0 && lineCredit > 0)) { Fail(I18n.IsBangla ? "হিসাব খাত নির্বাচন করুন এবং ডেবিট অথবা ক্রেডিট পরিমাণ লিখুন।" : "Select an account and enter either debit or credit."); return; }
+        voucherLines.Add(new AccountVoucherLine { AccountID = lineAccountId, Debit = lineDebit, Credit = lineCredit });
+        lineAccountId = 0; lineDebit = 0; lineCredit = 0;
+    }
+
+    private async Task SubmitVoucherAsync()
+    {
+        var debit = voucherLines.Sum(x => x.Debit); var credit = voucherLines.Sum(x => x.Credit);
+        if (voucherLines.Count < 2 || debit <= 0 || debit != credit || string.IsNullOrWhiteSpace(narration)) { Fail(I18n.IsBangla ? "ভাউচারের জন্য বিবরণ এবং কমপক্ষে দুটি সমপরিমাণ ডেবিট/ক্রেডিট লাইন আবশ্যক।" : "Voucher requires narration and at least two balanced lines."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var uid = await CurrentUserIdAsync();
+            await FinancialControl.EnsurePostingAllowedAsync(db, voucherDate, uid);
+            var v = new AccountVoucher
+            {
+                VoucherNo = $"V{DateTime.Now:yyMMddHHmmssfff}", VoucherType = voucherType, VoucherDate = voucherDate.Date,
+                Narration = narration.Trim(), Reference = reference.Trim(), IsPosted = false, Status = "Pending",
+                EnteredBy = uid, TransDate = DateTime.Now,
+                Lines = voucherLines.Select(x => new AccountVoucherLine { AccountID = x.AccountID, Debit = x.Debit, Credit = x.Credit }).ToList()
+            };
+            db.AccountVouchers.Add(v); await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? $"ভাউচার {v.VoucherNo} অনুমোদনের জন্য জমা দেওয়া হয়েছে।" : $"Voucher {v.VoucherNo} submitted for approval."); ResetVoucher(); await LoadAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+    }
+
+    private async Task ApproveVoucherAsync(AccountVoucher row)
+    {
+        if (!isAdministrator) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var x = await db.AccountVouchers.FindAsync(row.ID); if (x is null || x.Status != "Pending") { Fail(I18n.IsBangla ? "ভাউচারটি আর পেন্ডিং অবস্থায় নেই।" : "Voucher is no longer pending."); return; }
+        var uid = await CurrentUserIdAsync(); await FinancialControl.EnsurePostingAllowedAsync(db, x.VoucherDate, uid);
+        x.Status = "Approved"; x.IsPosted = true; x.ApprovedBy = uid; x.ApprovedAt = DateTime.Now;
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} অনুমোদিত ও পোস্ট হয়েছে।" : $"Voucher {x.VoucherNo} approved and posted."); await LoadAsync();
+    }
+
+    private async Task RejectVoucherAsync(AccountVoucher row)
+    {
+        if (!isAdministrator || string.IsNullOrWhiteSpace(actionReason)) { Fail(I18n.IsBangla ? "প্রথমে বাতিলের কারণ লিখুন।" : "Enter a rejection reason first."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var x = await db.AccountVouchers.FindAsync(row.ID); if (x is null || x.Status != "Pending") return;
+        x.Status = "Rejected"; x.IsPosted = false; x.CancelledBy = await CurrentUserIdAsync(); x.CancelledAt = DateTime.Now; x.CancellationReason = actionReason.Trim();
+        await db.SaveChangesAsync(); actionReason = ""; Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} বাতিল করা হয়েছে।" : $"Voucher {x.VoucherNo} rejected."); await LoadAsync();
+    }
+
+    private async Task ReverseVoucherAsync(AccountVoucher row)
+    {
+        if (!isAdministrator || string.IsNullOrWhiteSpace(actionReason)) { Fail(I18n.IsBangla ? "প্রথমে রিভার্সালের কারণ লিখুন।" : "Enter a reversal reason first."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            var uid = await CurrentUserIdAsync(); await FinancialControl.EnsurePostingAllowedAsync(db, DateTime.Today, uid);
+            var x = await db.AccountVouchers.SingleAsync(x => x.ID == row.ID);
+            var reversal = await AccountingPosting.ReversePostedVoucherAsync(db, x, actionReason, uid, DateTime.Now);
+            await db.SaveChangesAsync(); await tx.CommitAsync();
+            actionReason = ""; Success(I18n.IsBangla ? $"{x.VoucherNo} রিভার্সাল {reversal.VoucherNo} এর মাধ্যমে বাতিল করা হয়েছে।" : $"{x.VoucherNo} cancelled through reversal {reversal.VoucherNo}."); await LoadAsync();
+        }
+        catch (Exception ex) { await tx.RollbackAsync(); Fail(ex.GetBaseException().Message); }
+    }
+
+    private async Task SelectVoucherAsync(AccountVoucher row)
+    {
+        selectedVoucher = row; await using var db = await DbFactory.CreateDbContextAsync();
+        selectedVoucherLines = await db.AccountVoucherLines.AsNoTracking().Where(x => x.VoucherID == row.ID).ToListAsync();
+        await InvokeAsync(StateHasChanged); await Task.Delay(50); await JS.InvokeVoidAsync("hpm.printElement", "voucher-print", row.VoucherNo);
+    }
+
+    private async Task CalculateHandoverAsync()
+    {
+        var uid = await CurrentUserIdAsync(); await using var db = await DbFactory.CreateDbContextAsync(); var end = handoverDate.Date.AddDays(1);
+        handoverSystem = await db.CentralCashCollections.Where(x => x.EnteredBy == uid && x.TransDateCL >= handoverDate.Date && x.TransDateCL < end).SumAsync(x => (decimal?)x.Amount) ?? 0;
+        currentHandover = await db.CashierHandovers.AsNoTracking().FirstOrDefaultAsync(x => x.BusinessDate == handoverDate.Date && x.CashierID == uid);
+        handedAmount = currentHandover?.HandedOverAmount ?? handoverSystem; handoverNotes = currentHandover?.Notes ?? "";
+    }
+
+    private async Task CloseDayAsync()
+    {
+        if (handedAmount < 0) { Fail(I18n.IsBangla ? "হস্তান্তরিত পরিমাণ ঋণাত্মক হতে পারে না।" : "Handover amount cannot be negative."); return; }
+        var uid = await CurrentUserIdAsync(); await using var db = await DbFactory.CreateDbContextAsync();
+        await FinancialControl.EnsurePostingAllowedAsync(db, handoverDate, uid);
+        var x = await db.CashierHandovers.FirstOrDefaultAsync(x => x.BusinessDate == handoverDate.Date && x.CashierID == uid) ?? new CashierHandover { BusinessDate = handoverDate.Date, CashierID = uid };
+        if (x.ID == 0) db.CashierHandovers.Add(x);
+        x.SystemAmount = handoverSystem; x.HandedOverAmount = handedAmount; x.Variance = handedAmount - handoverSystem; x.Notes = handoverNotes.Trim(); x.TransDate = DateTime.Now; x.IsLocked = true; x.ClosedAt = DateTime.Now;
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? $"ক্যাশিয়ার শিফট সমাপ্ত ও লক করা হয়েছে। পার্থক্য: {I18n.FormatCurrency(x.Variance)}।" : $"Cashier day closed and locked. Variance: {I18n.FormatCurrency(x.Variance)}."); await CalculateHandoverAsync();
+    }
+
+    private async Task ReopenCurrentDayAsync()
+    {
+        if (currentHandover is not null) await ReopenHandoverAsync(currentHandover);
+    }
+
+    private async Task ReopenHandoverAsync(CashierHandover row)
+    {
+        if (!isAdministrator) return;
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", I18n.IsBangla ? $"ক্যাশিয়ার #{row.CashierID} ({row.BusinessDate:dd MMM yyyy}) পুনরায় খোলার কারণ:" : $"Reason for reopening cashier #{row.CashierID} on {row.BusinessDate:dd MMM yyyy}:"); if (string.IsNullOrWhiteSpace(reason)) return;
+        var uid = await CurrentUserIdAsync(); await using var db = await DbFactory.CreateDbContextAsync();
+        var x = await db.CashierHandovers.FindAsync(row.ID); if (x is null || !x.IsLocked) return;
+        x.IsLocked = false; x.ReopenedBy = uid; x.ReopenedAt = DateTime.Now; x.ReopenReason = reason.Trim(); await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ক্যাশিয়ার শিফট অডিট কারণসহ পুনরায় খোলা হয়েছে।" : "Cashier day reopened with audit reason."); await LoadAsync(); await CalculateHandoverAsync();
+    }
+
+    private async Task LockPeriodAsync()
+    {
+        if (!isAdministrator || lockFrom.Date > lockTo.Date || string.IsNullOrWhiteSpace(lockReason)) { Fail(I18n.IsBangla ? "সঠিক সময়কাল এবং লক করার কারণ লিখুন।" : "Enter a valid period and lock reason."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.FinancialPeriodLocks.AnyAsync(x => x.IsActive && x.FromDate <= lockTo.Date && x.ToDate >= lockFrom.Date)) { Fail(I18n.IsBangla ? "এই সময়কালটি অন্য একটি সক্রিয় আর্থিক লকের সাথে মিলে যায়।" : "This range overlaps an active financial lock."); return; }
+        db.FinancialPeriodLocks.Add(new FinancialPeriodLock { FromDate = lockFrom.Date, ToDate = lockTo.Date, Reason = lockReason.Trim(), IsActive = true, LockedBy = await CurrentUserIdAsync(), LockedAt = DateTime.Now });
+        await db.SaveChangesAsync(); lockReason = ""; Success(I18n.IsBangla ? "আর্থিক সময়কাল লক করা হয়েছে।" : "Financial period locked."); await LoadAsync();
+    }
+
+    private async Task UnlockPeriodAsync(FinancialPeriodLock row)
+    {
+        var reason = await JS.InvokeAsync<string?>("hpm.prompt", I18n.IsBangla ? "আর্থিক সময়কাল আনলক করার কারণ:" : "Reason for unlocking this financial period:"); if (string.IsNullOrWhiteSpace(reason)) return;
+        await using var db = await DbFactory.CreateDbContextAsync(); var x = await db.FinancialPeriodLocks.FindAsync(row.ID); if (x is null || !x.IsActive) return;
+        x.IsActive = false; x.UnlockedBy = await CurrentUserIdAsync(); x.UnlockedAt = DateTime.Now; x.UnlockReason = reason.Trim(); await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "আর্থিক সময়কাল অডিট রেকর্ডসহ আনলক করা হয়েছে।" : "Financial period unlocked with audit trail."); await LoadAsync();
+    }
+
+    private async Task BackfillOperationalJournalsAsync()
+    {
+        if (!isAdministrator) return;
+        await using var db = await DbFactory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync();
+        try
+        {
+            var uid = await CurrentUserIdAsync(); var end = toDate.Date.AddDays(1);
+            var opd = await db.OPDTickets.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
+            foreach (var x in opd) await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
+            var memos = await db.EmergencyMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && (x.ModuleID == 11 || x.ModuleID == 2)).ToListAsync();
+            foreach (var x in memos)
+            {
+                var diagnostic = x.ModuleID == 2; var prefix = diagnostic ? "DIAGNOSTIC" : "EMERGENCY";
+                var flag = diagnostic ? AccountingPosting.ModuleFlags.Diagnostic : AccountingPosting.ModuleFlags.Emergency;
+                var netAmount = Math.Max(0, x.Total - x.Discount);
+                var paidAmount = Math.Min(x.Paid, netAmount);
+                await OperationalAccounting.SyncSplitRevenueAsync(db, $"{prefix}:{x.ID}", x.ID, netAmount, paidAmount, x.TransDate, uid, $"{prefix} memo #{x.ID}", x.PatientType == "1" ? flag : null);
+            }
+            var ot = await db.OTCashMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
+            foreach (var x in ot)
+            {
+                var debit = x.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+                await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{x.ID}", x.ID, Math.Max(0, x.Total - x.Discount), x.TransDate, uid, $"OT cash memo #{x.ID}", debit, x.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null);
+            }
+            var reversedIds = await db.FinancialReversals.Where(x => x.EntityType == "IPD Money Receipt").Select(x => x.EntityID).ToListAsync();
+            var receipts = await db.IpdMoneyReceipts.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && !reversedIds.Contains(x.ID)).ToListAsync();
+            foreach (var x in receipts)
+            {
+                var reference = $"IPD-RECEIPT:{x.ID}";
+                if (!await db.AccountVouchers.AnyAsync(v => v.Reference == reference && v.Status != "Cancelled"))
+                {
+                    var credit = x.Against == "Advance" ? AccountingPosting.PatientAdvance : AccountingPosting.PatientReceivable;
+                    AccountingPosting.AddPostedVoucher(db, "Receipt", x.TransDate, $"IPD {x.Against} receipt {x.RegNo}", reference, uid,
+                        (AccountingPosting.Cash, x.Amount, 0), (credit, 0, x.Amount));
+                }
+            }
+            await db.SaveChangesAsync(); await tx.CommitAsync(); Success(I18n.IsBangla ? "অপারেশনাল জার্নাল ব্যাকফিল সম্পন্ন হয়েছে।" : "Operational journal backfill completed. Review the reconciliation variance."); await LoadAsync();
+        }
+        catch (Exception ex) { await tx.RollbackAsync(); Fail($"Backfill failed: {ex.GetBaseException().Message}"); }
+    }
+
+    private async Task SaveAccountAsync()
+    {
+        if (!isAdministrator) return; accountEditor.Code = accountEditor.Code.Trim(); accountEditor.Name = accountEditor.Name.Trim();
+        if (string.IsNullOrWhiteSpace(accountEditor.Code) || string.IsNullOrWhiteSpace(accountEditor.Name)) { Fail(I18n.IsBangla ? "হিসাব কোড ও নাম আবশ্যক।" : "Account code and name are required."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.AccountHeads.AnyAsync(x => x.Code == accountEditor.Code && x.ID != accountEditor.ID)) { Fail(I18n.IsBangla ? "হিসাব কোড ইতিমধ্যে বিদ্যমান।" : "Account code already exists."); return; }
+        if (accountEditor.ID == 0) db.AccountHeads.Add(accountEditor); else { var x = await db.AccountHeads.FindAsync(accountEditor.ID); if (x is null) return; x.Code = accountEditor.Code; x.Name = accountEditor.Name; x.AccountType = accountEditor.AccountType; x.IsActive = accountEditor.IsActive; }
+        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "হিসাব খাত সংরক্ষিত হয়েছে।" : "Account head saved."); ResetAccount(); await LoadAsync();
+    }
+
+    private void SelectAccount(AccountHead x) => accountEditor = new() { ID = x.ID, Code = x.Code, Name = x.Name, AccountType = x.AccountType, ParentID = x.ParentID, IsActive = x.IsActive };
+    private void ResetAccount() => accountEditor = new() { AccountType = "Asset", IsActive = true };
+    private void ResetVoucher() { voucherLines = []; voucherType = "Journal"; voucherDate = DateTime.Today; reference = ""; narration = ""; }
+    private decimal VoucherAmount(long id) => allLines.Where(x => x.VoucherID == id).Sum(x => x.Debit);
+    private string AccountName(int id) => accounts.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private async Task<int> CurrentUserIdAsync() { var u = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
+    private async Task PrintLedgerAsync() => await JS.InvokeVoidAsync("hpm.printElement", "accounts-ledger-print", "General Ledger");
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private sealed record LedgerRow(DateTime Date, string VoucherNo, int AccountID, string? Narration, decimal Debit, decimal Credit);
+    private sealed record ReconciliationRow(DateTime Date, decimal CentralCash, decimal GlCash) { public decimal Variance => CentralCash - GlCash; }
+}

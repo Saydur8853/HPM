@@ -1,0 +1,95 @@
+@page "/masters/services"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>@I18n.T("Service Masters", "Service Masters") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <a class="back-link" href="masters">← @I18n.T("Master setup", "Master setup")</a>
+        <h1>@I18n.T("Service Masters", "Service masters")</h1>
+        <p>@I18n.T("Emergency and operation-theatre service catalogue.", "Emergency and operation-theatre service catalogue.")</p>
+    </div>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="master-grid">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div><h2>@I18n.T("Service categories", "Service categories")</h2><p>@I18n.T("Service and charge categorization.", "Service and charge categorization.")</p></div>
+            <button class="icon-btn" @onclick="ResetCategory">@I18n.T("New", "New")</button>
+        </div>
+        <EditForm Model="category" OnSubmit="SaveCategoryAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Category name *", "Category name *")</span><InputText @bind-Value="category.Name" /></label>
+                <label><span>@I18n.T("Used in", "Used in")</span><InputSelect @bind-Value="category.SubID"><option value="0">@I18n.T("OPD / Emergency", "OPD / Emergency")</option><option value="1">@I18n.T("Operation Theatre", "Operation Theatre")</option></InputSelect></label>
+                <label><span>@I18n.T("Module ID", "Module ID")</span><InputNumber @bind-Value="category.ModuleID" /></label>
+                <label><span>@I18n.T("Service charge", "Service charge")</span><InputNumber @bind-Value="category.ServiceCharge" /></label>
+                <label><span>@I18n.T("Percentage?", "Percentage?")</span><InputSelect @bind-Value="category.IsPercentage"><option value="">@I18n.T("Not set", "Not set")</option><option value="true">@I18n.T("Yes", "Yes")</option><option value="false">@I18n.T("No", "No")</option></InputSelect></label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(category.ID==0 ? I18n.T("Save category", "Save category") : I18n.T("Update category", "Update category"))</button>
+                @if(category.ID>0){<button class="btn btn-ghost" type="button" @onclick="DeleteCategoryAsync">@I18n.T("Delete", "Delete")</button>}
+            </div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("ID", "ID")</th><th>@I18n.T("Category", "Category")</th><th>@I18n.T("Used in", "Used in")</th><th></th></tr></thead>
+                <tbody>@foreach(var c in categories){<tr><td>@c.ID</td><td>@c.Name</td><td>@(c.SubID==1 ? I18n.T("OT", "OT") : I18n.T("Emergency", "Emergency"))</td><td><button class="icon-btn" @onclick="()=>SelectCategory(c)">@I18n.T("Edit", "Edit")</button></td></tr>}</tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div><h2>@I18n.T("Services", "Services")</h2><p>@I18n.T("Hospital procedures, investigation and clinical charge catalog.", "Hospital procedures, investigation and clinical charge catalog.")</p></div>
+            <button class="icon-btn" @onclick="ResetService">@I18n.T("New", "New")</button>
+        </div>
+        <EditForm Model="service" OnSubmit="SaveServiceAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Service name *", "Service name *")</span><InputText @bind-Value="service.Name" /></label>
+                <label class="span-2"><span>@I18n.T("Category *", "Category *")</span><InputSelect @bind-Value="service.CategoryID"><option value="">@I18n.T("Select", "Select")</option>@foreach(var c in categories){<option value="@c.ID">@c.Name</option>}</InputSelect></label>
+                <label><span>@I18n.T("Sale rate", "Sale rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="service.SaleRate" /></label>
+                <label><span>@I18n.T("Buy rate", "Buy rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="service.BuyRate" /></label>
+                <label><span>@I18n.T("VAT applicable?", "VAT applicable?")</span><InputSelect @bind-Value="service.IsVATApp"><option value="">@I18n.T("Not set", "Not set")</option><option value="true">@I18n.T("Yes", "Yes")</option><option value="false">@I18n.T("No", "No")</option></InputSelect></label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(service.ID==0 ? I18n.T("Save service", "Save service") : I18n.T("Update service", "Update service"))</button>
+                @if(service.ID>0){<button class="btn btn-ghost" type="button" @onclick="DeleteServiceAsync">@I18n.T("Delete", "Delete")</button>}
+            </div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("Service", "Service")</th><th>@I18n.T("Category", "Category")</th><th class="num">@I18n.T("Rate", "Rate")</th><th></th></tr></thead>
+                <tbody>@foreach(var s in services){<tr><td>@s.Name</td><td>@CategoryName(s.CategoryID)</td><td class="num">@I18n.FormatCurrency(s.SaleRate??0)</td><td><button class="icon-btn" @onclick="()=>SelectService(s)">@I18n.T("Edit", "Edit")</button></td></tr>}</tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code{
+    private ServiceCategory category=NewCategory(); private Service service=new();
+    private List<ServiceCategory> categories=[]; private List<Service> services=[];
+    private string message=string.Empty; private string messageClass="success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){await using var db=await DbFactory.CreateDbContextAsync();categories=await db.ServiceCategories.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();services=await db.Services.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();}
+    private async Task SaveCategoryAsync(){if(string.IsNullOrWhiteSpace(category.Name)){Fail(I18n.IsBangla ? "ক্যাটাগরির নাম আবশ্যক।" : "Category name is required.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(category.ID==0){category.ID=(await db.ServiceCategories.MaxAsync(x=>(int?)x.ID)??0)+1;db.ServiceCategories.Add(category);}else db.ServiceCategories.Update(category);await db.SaveChangesAsync();Success(I18n.IsBangla ? "সার্ভিস ক্যাটাগরি সংরক্ষিত হয়েছে।" : "Service category saved.");ResetCategory();await LoadAsync();}
+    private async Task SaveServiceAsync(){if(string.IsNullOrWhiteSpace(service.Name)||service.CategoryID is null){Fail(I18n.IsBangla ? "সার্ভিসের নাম এবং ক্যাটাগরি আবশ্যক।" : "Service name and category are required.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(service.ID==0)db.Services.Add(service);else db.Services.Update(service);await db.SaveChangesAsync();Success(I18n.IsBangla ? "সার্ভিস সংরক্ষিত হয়েছে।" : "Service saved.");ResetService();await LoadAsync();}
+    private void SelectCategory(ServiceCategory c)=>category=new(){ID=c.ID,Name=c.Name,SubID=c.SubID,ModuleID=c.ModuleID,ServiceCharge=c.ServiceCharge,IsPercentage=c.IsPercentage,GroupSubID=c.GroupSubID,InvestigationSLNO=c.InvestigationSLNO};
+    private void SelectService(Service s)=>service=new(){ID=s.ID,Name=s.Name,SaleRate=s.SaleRate,BuyRate=s.BuyRate,ReOrderLevel=s.ReOrderLevel,IsVATApp=s.IsVATApp,CategoryID=s.CategoryID,TypeID=s.TypeID,GenericID=s.GenericID,SupplierID=s.SupplierID,InvestigationModuleID=s.InvestigationModuleID};
+    private void ResetCategory()=>category=NewCategory();private void ResetService()=>service=new();private static ServiceCategory NewCategory()=>new(){SubID=0};
+    private async Task DeleteCategoryAsync(){if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ক্যাটাগরি {category.Name} মুছে ফেলতে চান?" : $"Delete category {category.Name}?"))return;await using var db=await DbFactory.CreateDbContextAsync();if(await db.Services.AnyAsync(x=>x.CategoryID==category.ID)){Fail(I18n.IsBangla ? "এই ক্যাটাগরিতে সার্ভিস রয়েছে এবং এটি মুছে ফেলা যাবে না।" : "This category contains services and cannot be deleted.");return;}var item=await db.ServiceCategories.FindAsync(category.ID);if(item is not null){db.Remove(item);await db.SaveChangesAsync();}Success(I18n.IsBangla ? "ক্যাটাগরি মুছে ফেলা হয়েছে।" : "Category deleted.");ResetCategory();await LoadAsync();}
+    private async Task DeleteServiceAsync(){if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"সার্ভিস {service.Name} মুছে ফেলতে চান?" : $"Delete service {service.Name}?"))return;await using var db=await DbFactory.CreateDbContextAsync();var used=await db.EmergencyMemoItems.AnyAsync(x=>x.TestID==service.ID)||await db.OTCashMemoItems.AnyAsync(x=>x.ServiceID==service.ID);if(used){Fail(I18n.IsBangla ? "এই সার্ভিসটি ক্যাশ মেমোতে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "This service is referenced by cash memos and cannot be deleted.");return;}var item=await db.Services.FindAsync(service.ID);if(item is not null){db.Remove(item);await db.SaveChangesAsync();}Success(I18n.IsBangla ? "সার্ভিস মুছে ফেলা হয়েছে।" : "Service deleted.");ResetService();await LoadAsync();}
+    private string CategoryName(int? id)=>categories.FirstOrDefault(x=>x.ID==id)?.Name??"—";private void Success(string t){messageClass="success";message=t;}private void Fail(string t){messageClass="danger";message=t;}
+}

@@ -1,0 +1,111 @@
+@page "/clinical/diagnostic-orders"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Diagnostic Order") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div><span class="eyebrow">@I18n.T("Clinical Care")</span><h1>@I18n.T("Diagnostic Test Order")</h1><p>@I18n.T("Order investigations during a doctor consultation; cashier will complete billing.")</p></div>
+    <a class="btn btn-secondary" href="clinical/doctor-queue">← @I18n.T("Doctor Queue")</a>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="panel form-panel">
+    @if (encounter is null)
+    {
+        <div class="empty-state">@I18n.T("Open this screen from an active consultation.")</div>
+    }
+    else
+    {
+        <div class="panel-heading"><div><h2>@encounter.PatientName</h2><p>@(encounter.PatientID ?? I18n.T("Walk-in")) · @I18n.T("Queue") #@encounter.QueueNo</p></div><span class="badge">@(order?.Status ?? "NEW ORDER")</span></div>
+        <div class="form-grid">
+            <label class="span-2"><span>@I18n.T("Clinical indication / instructions")</span><InputTextArea @bind-Value="clinicalNotes" disabled="@(order?.Status == "Billed")" /></label>
+            <label class="span-2"><span>@I18n.T("Test / Investigation")</span><select @bind="selectedServiceId" disabled="@(order?.Status == "Billed")"><option value="0">@I18n.T("Select test")</option>@foreach (var s in services) { <option value="@s.ID">@s.Name (@I18n.FormatCurrency(s.SaleRate ?? 0))</option> }</select></label>
+        </div>
+        @if (order?.Status != "Billed") { <div class="form-actions"><button class="btn btn-secondary" @onclick="AddItem">+ @I18n.T("Add Test")</button></div> }
+        <div class="data-table-wrap">
+            <table class="data-table"><thead><tr><th>#</th><th>@I18n.T("Investigation")</th><th>@I18n.T("Rate")</th><th></th></tr></thead><tbody>
+            @if (items.Count == 0) { <tr><td colspan="4"><div class="empty-state small">@I18n.T("No test selected.")</div></td></tr> }
+            @for (var i=0; i<items.Count; i++) { var index=i; var item=items[i]; <tr><td>@(i+1)</td><td>@ServiceName(item.ServiceID)</td><td>@I18n.FormatCurrency(ServiceRate(item.ServiceID))</td><td>@if (order?.Status != "Billed") { <button class="icon-btn danger" @onclick="() => items.RemoveAt(index)">×</button> }</td></tr> }
+            </tbody></table>
+        </div>
+        @if (order?.Status != "Billed")
+        {
+            <div class="form-actions"><button class="btn btn-primary" @onclick="SaveAsync">@I18n.T("Send Order to Diagnostic Billing")</button></div>
+        }
+        else if (order.BilledMemoID.HasValue)
+        {
+            <div class="alert success">@I18n.T("Order billed as diagnostic memo") #@order.BilledMemoID.</div>
+            @if (encounter.Status == EncounterStatuses.InConsultation) { <div class="form-actions"><button class="btn btn-secondary" @onclick="NewOrder">+ @I18n.T("New Diagnostic Order")</button></div> }
+        }
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name="encounterId")] public long? EncounterId { get; set; }
+    private PatientEncounter? encounter;
+    private DiagnosticOrder? order;
+    private List<DiagnosticOrderItem> items=[];
+    private List<Service> services=[];
+    private int selectedServiceId;
+    private int? currentDoctorProfileId;
+    private bool isAdministrator;
+    private string? clinicalNotes;
+    private string message="", messageClass="success";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db=await DbFactory.CreateDbContextAsync();
+        services=await db.Services.AsNoTracking().Where(x=>x.Name!=null).OrderBy(x=>x.Name).ToListAsync();
+        if (EncounterId is not > 0) return;
+        var principal=(await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator=principal.IsInRole(RoleNames.Administrator);
+        if(int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim),out var mappedDoctorId))currentDoctorProfileId=mappedDoctorId;
+        encounter=await db.PatientEncounters.AsNoTracking().SingleOrDefaultAsync(x=>x.ID==EncounterId.Value);
+        if(encounter is null){Fail(I18n.T("Clinical encounter was not found."));return;}
+        if(!isAdministrator&&(!currentDoctorProfileId.HasValue||encounter.DoctorID!=currentDoctorProfileId.Value)){encounter=null;Fail(I18n.T("You can create orders only for your own patient queue."));return;}
+        order=await db.DiagnosticOrders.AsNoTracking().Include(x=>x.Items).Where(x=>x.EncounterID==encounter.ID&&x.Status!="Cancelled").OrderByDescending(x=>x.ID).FirstOrDefaultAsync();
+        if(order is not null){items=order.Items.Select(x=>new DiagnosticOrderItem{ID=x.ID,OrderID=x.OrderID,ServiceID=x.ServiceID}).ToList();clinicalNotes=order.ClinicalNotes;}
+    }
+
+    private void AddItem(){if(selectedServiceId<=0)return;if(items.All(x=>x.ServiceID!=selectedServiceId))items.Add(new DiagnosticOrderItem{ServiceID=selectedServiceId});selectedServiceId=0;}
+    private void NewOrder(){order=null;items=[];clinicalNotes=null;selectedServiceId=0;message="";}
+    private async Task SaveAsync()
+    {
+        if(encounter is null||items.Count==0){Fail(I18n.T("Select at least one diagnostic test."));return;}
+        await using var db=await DbFactory.CreateDbContextAsync();
+        await using var tx=await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        try
+        {
+            var current=await db.PatientEncounters.SingleAsync(x=>x.ID==encounter.ID);
+            if(!isAdministrator&&current.DoctorID!=currentDoctorProfileId)throw new InvalidOperationException("This encounter belongs to another doctor.");
+            if(current.Status!=EncounterStatuses.InConsultation)throw new InvalidOperationException(I18n.T("Diagnostic orders can be placed only during an active consultation."));
+            DiagnosticOrder target;
+            if(order is null)
+            {
+                target=new DiagnosticOrder{EncounterID=current.ID,PatientID=current.PatientID,PatientName=current.PatientName,DoctorID=current.DoctorID,Status="Pending",OrderedBy=await CurrentUserIdAsync(),OrderedAt=DateTime.Now};
+                db.DiagnosticOrders.Add(target);
+            }
+            else
+            {
+                target=await db.DiagnosticOrders.Include(x=>x.Items).SingleAsync(x=>x.ID==order.ID);
+                if(target.Status!="Pending")throw new InvalidOperationException(I18n.T("Only pending orders can be edited."));
+                db.DiagnosticOrderItems.RemoveRange(target.Items);
+            }
+            target.ClinicalNotes=clinicalNotes?.Trim();
+            target.Items=items.Select(x=>new DiagnosticOrderItem{ServiceID=x.ServiceID}).ToList();
+            await db.SaveChangesAsync();await tx.CommitAsync();order=target;
+            Success(I18n.IsBangla?"ডায়াগনস্টিক অর্ডার বিলিং কাউন্টারে পাঠানো হয়েছে।":$"Diagnostic order #{target.ID} sent to billing.");
+        }
+        catch(Exception ex){await tx.RollbackAsync();Fail(ex.GetBaseException().Message);}
+    }
+    private async Task<int> CurrentUserIdAsync(){var p=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
+    private string ServiceName(int id)=>services.FirstOrDefault(x=>x.ID==id)?.Name??"—";
+    private decimal ServiceRate(int id)=>services.FirstOrDefault(x=>x.ID==id)?.SaleRate??0;
+    private void Success(string text){messageClass="success";message=text;}
+    private void Fail(string text){messageClass="danger";message=text;}
+}

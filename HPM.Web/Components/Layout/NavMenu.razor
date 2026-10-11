@@ -1,0 +1,192 @@
+﻿@inject NavigationManager Nav
+@implements IDisposable
+
+<AuthorizeView Context="auth">
+    <Authorized>
+        <nav class="legacy-menu-bar" aria-label="PrimeHPM navigation menu">
+            @if (openMenu != null)
+            {
+                <div class="legacy-menu-backdrop" @onclick="CloseMenus"></div>
+            }
+            @foreach (var group in MenuGroups.Where(group => CanView(auth.User, group.Roles)))
+            {
+                var isGroupActive = IsGroupActive(group);
+                var isOpen = openMenu == group.Key;
+                <div class="legacy-menu-root @(isOpen ? "open" : string.Empty) @(isGroupActive ? "active" : string.Empty)">
+                    <button type="button" 
+                            class="legacy-menu-root-button @(isOpen ? "is-open" : string.Empty) @(isGroupActive ? "is-active" : string.Empty)" 
+                            aria-expanded="@isOpen" 
+                            @onclick="() => ToggleMenu(group.Key)">
+                        <span class="legacy-menu-root-label">@group.Label</span>
+                        <svg class="menu-root-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    @if (isOpen)
+                    {
+                        <div class="legacy-menu-dropdown">
+                            @foreach (var item in group.Items.Where(item => CanView(auth.User, item.Roles)))
+                            {
+                                @if (item.IsSeparator)
+                                {
+                                    <div class="legacy-menu-separator" role="separator"></div>
+                                }
+                                else if (item.Children.Count > 0)
+                                {
+                                    var isSubOpen = openSubmenu == item.Key;
+                                    <div class="legacy-menu-nested @(isSubOpen ? "open" : string.Empty)">
+                                        <button type="button" class="legacy-menu-entry legacy-menu-parent @(isSubOpen ? "active" : string.Empty)" @onclick="() => ToggleSubmenu(item.Key)">
+                                            <span>@item.Label</span>
+                                            <svg class="legacy-menu-subarrow" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                                <polyline points="9 18 15 12 9 6"></polyline>
+                                            </svg>
+                                        </button>
+                                        @if (isSubOpen)
+                                        {
+                                            <div class="legacy-menu-submenu">
+                                                @foreach (var child in item.Children.Where(child => CanView(auth.User, child.Roles)))
+                                                {
+                                                    <NavLink class="legacy-menu-entry" href="@child.Href" Match="NavLinkMatch.All" @onclick="CloseMenus">@child.Label</NavLink>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else if (item.IsLogout)
+                                {
+                                    <form method="post" action="/account/logout" class="legacy-menu-form">
+                                        <AntiforgeryToken />
+                                        <button type="submit" class="legacy-menu-entry">@item.Label</button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <NavLink class="legacy-menu-entry" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseMenus">@item.Label</NavLink>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </nav>
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    private string? openMenu;
+    private string? openSubmenu;
+
+    private static readonly string[] Admin = [RoleNames.Administrator];
+    private static readonly string[] Opd = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier, RoleNames.EmergencyOperator, RoleNames.OTOperator, RoleNames.Doctor, RoleNames.Nurse];
+    private static readonly string[] Diagnostic = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier, RoleNames.LabTechnician, RoleNames.Doctor];
+    private static readonly string[] Ipd = [RoleNames.Administrator, RoleNames.Reception, RoleNames.IPDOperator, RoleNames.Doctor, RoleNames.Cashier, RoleNames.Nurse];
+    private static readonly string[] Pharmacy = [RoleNames.Administrator, RoleNames.PharmacyOperator, RoleNames.Cashier, RoleNames.Doctor, RoleNames.Nurse];
+    private static readonly string[] Finance = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
+
+    private static readonly IReadOnlyList<MenuGroup> MenuGroups =
+    [
+        Group("opd", "OPD & Emergency", Opd,
+            Item("Patient Registration", "/patients"), Item("Doctor Appointment", "/appointments"),
+            Item("Consultation Ticket", "/tickets"), Item("OPD & Emergency Service", "/emergency-services"),
+            Item("OT Cash Memo", "/ot-cash-memos")),
+
+        Group("investigation", "Investigation", Diagnostic,
+            Item("OPD Cash Memo", "/diagnostic/billing?patientType=OPD"),
+            Item("IPD Cash Memo", "/diagnostic/billing?patientType=IPD"), Legacy("Cash Memo Return", "Investigation")),
+
+        Group("pathology", "Pathology", Diagnostic,
+            Item("Pathology Manager", "/diagnostic/worklist"), ReportItem("Haematology Report Detail"),
+            ReportItem("Haematology Report"), ReportItem("Electrolytes Report"), ReportItem("Serological Report"),
+            ReportItem("Immunology Report"), Parent("microbiology", "Microbiology Report", ReportItem("Culture"), ReportItem("Microscopy")),
+            ReportItem("Urine Report"), ReportItem("Stool Report"), ReportItem("Blood Cross Match Report"),
+            ReportItem("B-hCG Report"), ReportItem("Immunology Report Detail"), ReportItem("APTT Report"),
+            ReportItem("Prothombin Time Report"), ReportItem("MT Report"), ReportItem("Tuberculin Report"),
+            ReportItem("Semen Analysis Report"), ReportItem("Biochemistry Report"), ReportItem("BNP Report"), ReportItem("LAB Report")),
+
+        Group("imaging", "Imaging", Diagnostic,
+            ImagingItem("X Ray"), ImagingItem("USG"), ImagingItem("Echo"), ImagingItem("CT Scan"), ImagingItem("MRI"),
+            Parent("sticker", "Sticker", Item("Investigation", "/diagnostic/worklist"))),
+
+        Group("ipd", "IPD Services", Ipd,
+            Item("Patient Admission", "/ipd/admissions"), Item("Patient Admissin M", "/ipd/admissions?mode=manual"),
+            Item("Money Receipt", "/ipd/advance-receipts"), Item("Patient Service", "/ipd/patient-services"),
+            Legacy("Patient Transfer", "IPD Services"), Item("Billing System", "/ipd/discharge-billing"),
+            Item("Patient Discharge", "/ipd/medical-discharge-orders"), Item("Billing System General", "/ipd/discharge-billing?mode=general")),
+
+        Group("pharmacy", "Pharmacy", Pharmacy,
+            Item("OPD Cash Memo", "/pharmacy/pos?patientType=OPD"), Item("IPD Cash Memo", "/pharmacy/pos?patientType=IPD"),
+            Item("Receiving Challan", "/pharmacy/purchases"), Item("Return to Supplier (RTS)", "/pharmacy/returns-payments"),
+            Item("Purchase Requisition", "/pharmacy/purchases?view=requisition"), Item("Store Requisition", "/pharmacy/stock-control?view=requisition"),
+            Item("IPD Indent", "/pharmacy/prescriptions?view=ipd-indent"), Item("Issue to Department", "/pharmacy/stock-control?view=department-issue"),
+            Item("Supplier Payment", "/pharmacy/returns-payments?view=payments"), Item("Customer Payment", "/pharmacy/pos?view=customer-payment")),
+
+        Group("reports", "Reports", Finance, Item("Financial Reports", "/reports?type=financial"), Item("MIS Reports", "/reports?type=mis")),
+
+        Group("medical", "Medical Services", Opd,
+            Legacy("Operation List", "Medical Services"), Legacy("OT Note", "Medical Services"),
+            Item("Treatment Followup", "/clinical/doctor-queue"),
+            Parent("nurse-desk", "Nurse's Desk", Legacy("Sticker/Forms", "Nurse's Desk"),
+                Item("Indent Medicine", "/pharmacy/prescriptions?view=ipd-indent"), Item("IPD Investigation", "/diagnostic/billing?patientType=IPD")),
+            Item("Doctor Prescription", "/pharmacy/prescriptions"),
+            Parent("certificates", "Certificates & Others", Legacy("Birth Certificate", "Certificates & Others"),
+                Legacy("Death Certificate", "Certificates & Others"), Legacy("Fitness Certificate", "Certificates & Others"),
+                Legacy("Discharge Certificate", "Certificates & Others"))),
+
+        Group("canteen", "Canteen", Admin, Legacy("Challan", "Canteen"), Legacy("Sales", "Canteen"), Legacy("Product", "Canteen")),
+
+        Group("store", "Store", Admin, Legacy("Challan", "Store"), Legacy("Issue", "Store"), Legacy("Products", "Store"),
+            Legacy("Lab Inventory", "Store"), Legacy("Lab Inventory Issue", "Store")),
+
+        Group("hrm", "Payroll & HRM", Admin, Legacy("Employee Holiday", "Payroll & HRM"), Legacy("Employee Info", "Payroll & HRM"),
+            Legacy("Employee Leave", "Payroll & HRM"), Legacy("Employee Shift", "Payroll & HRM"), Legacy("Employee Shift Monthly", "Payroll & HRM"),
+            Legacy("Import Attn Data", "Payroll & HRM"), Legacy("Report", "Payroll & HRM")),
+
+        Group("accounts", "Accounts", Finance, Item("Voucher", "/accounts?view=voucher"),
+            Item("Report", "/accounts?view=report"), Item("Particulers Head", "/accounts?view=particulars"))
+    ];
+
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+    private void ToggleMenu(string key) { openMenu = openMenu == key ? null : key; openSubmenu = null; }
+    private void ToggleSubmenu(string key) => openSubmenu = openSubmenu == key ? null : key;
+        private void CloseMenus() { openMenu = null; openSubmenu = null; }
+
+    private bool IsGroupActive(MenuGroup group)
+    {
+        var currentRelative = "/" + Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].TrimStart('/');
+        return group.Items.Any(item => IsItemActive(item, currentRelative));
+    }
+
+    private bool IsItemActive(MenuItem item, string currentRelative)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Href))
+        {
+            var itemRelative = "/" + item.Href.Split('?')[0].TrimStart('/');
+            if (string.Equals(itemRelative, currentRelative, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (item.Children.Count > 0)
+        {
+            return item.Children.Any(c => IsItemActive(c, currentRelative));
+        }
+
+        return false;
+    }
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) { CloseMenus(); InvokeAsync(StateHasChanged); }
+    private static bool CanView(System.Security.Claims.ClaimsPrincipal user, IReadOnlyList<string> roles) => roles.Count == 0 || roles.Any(user.IsInRole);
+    private static MenuGroup Group(string key, string label, params MenuItem[] items) => new(key, label, [], items);
+    private static MenuGroup Group(string key, string label, string[] roles, params MenuItem[] items) => new(key, label, roles, items);
+    private static MenuItem Item(string label, string href) => new(Key(label), label, href, [], [], false, false);
+    private static MenuItem Logout(string label) => new(Key(label), label, string.Empty, [], [], false, true);
+    private static MenuItem Separator() => new(Guid.NewGuid().ToString("N"), string.Empty, string.Empty, [], [], true, false);
+    private static MenuItem Parent(string key, string label, params MenuItem[] children) => new(key, label, string.Empty, [], children, false, false);
+    private static MenuItem ReportItem(string label) => Item(label, $"/diagnostic/results?report={Uri.EscapeDataString(label)}");
+    private static MenuItem ImagingItem(string label) => Item(label, $"/diagnostic/results?modality={Uri.EscapeDataString(label)}");
+    private static MenuItem Legacy(string label, string module) => Item(label, $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(label)}");
+    private static string Key(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("&", "and").Replace("'", string.Empty);
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+    private sealed record MenuGroup(string Key, string Label, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Items);
+    private sealed record MenuItem(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Children, bool IsSeparator, bool IsLogout);
+}

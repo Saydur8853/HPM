@@ -1,0 +1,340 @@
+@page "/diagnostic/worklist"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Data
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Lab Worklist") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Diagnostic & Lab")</span>
+        <h1>@I18n.T("Lab Worklist & Specimen Tracking", "Lab Worklist & Sample Collection")</h1>
+        <p>@I18n.T("Live worklist of ordered tests, specimen collection queue and lab dispatch.")</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary" @onclick="LoadAsync">@I18n.T("Refresh")</button>
+        <AuthorizeView Roles="@RoleNames.Administrator">
+            <NavLink href="diagnostic/billing" class="btn btn-primary">@I18n.T("+ New Diagnostic Bill")</NavLink>
+        </AuthorizeView>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="metric-grid" style="margin-bottom:24px;">
+    <div class="metric-card accent-blue">
+        <span>@I18n.T("Total")</span>
+        <strong>@worklist.Count</strong>
+        <small>@I18n.T("Selected Tests & Investigations")</small>
+    </div>
+    <div class="metric-card accent-amber">
+        <span>@I18n.T("Pending Collection")</span>
+        <strong>@worklist.Count(x => x.SampleStatus == "Pending")</strong>
+        <small>@I18n.T("Pending")</small>
+    </div>
+    <div class="metric-card accent-violet">
+        <span>@I18n.T("Under Processing")</span>
+        <strong>@worklist.Count(x => x.SampleStatus == "InProcess")</strong>
+        <small>@I18n.T("Under Processing")</small>
+    </div>
+    <div class="metric-card" style="--metric:#10b981;">
+        <span>@I18n.T("Completed")</span>
+        <strong>@worklist.Count(x => x.SampleStatus == "Completed")</strong>
+        <small>@I18n.T("Completed")</small>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-heading">
+        <div>
+            <h2>@I18n.T("Diagnostic Test Worklist")</h2>
+            <p>@I18n.T("Live worklist of ordered tests, specimen collection queue and lab dispatch.")</p>
+        </div>
+        <select class="date-filter" style="min-width:160px;" @bind="statusFilter" @bind:after="FilterWorklist">
+            <option value="all">@I18n.T("All Specimen Status")</option>
+            <option value="Pending">@I18n.T("Pending Collection")</option>
+            <option value="InProcess">@I18n.T("Under Processing")</option>
+            <option value="Completed">@I18n.T("Completed")</option>
+        </select>
+    </div>
+
+    <div class="scanner-search-group" style="margin: 0 1.25rem 1rem 1.25rem;">
+        <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+        <input type="text"
+               class="scanner-input"
+               placeholder="@I18n.T("Scan Sample Tube Barcode (SMP-XXXX), Invoice Barcode (LAB-XXXX), or Patient ID...", "Scan Sample Tube Barcode (SMP-XXXX), Invoice Barcode (LAB-XXXX), or Patient ID...")"
+               @bind="scanQuery"
+               @bind:event="oninput"
+               @onkeydown="HandleScanKeyDown" />
+        @if (!string.IsNullOrWhiteSpace(scanQuery))
+        {
+            <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearScan">✕</button>
+        }
+    </div>
+
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Bill No", "Memo #")</th>
+                    <th>@I18n.T("Patient Details")</th>
+                    <th>@I18n.T("Investigation Details", "Ordered Test")</th>
+                    <th>@I18n.T("Sample Type", "Specimen")</th>
+                    <th>@I18n.T("Status")</th>
+                    <th>@I18n.T("Date", "Order Time")</th>
+                    <th>@I18n.T("Action / Event", "Action")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (filteredWorklist.Count == 0)
+                {
+                    <tr><td colspan="7"><div class="empty-state small">@I18n.T("No records found.")</div></td></tr>
+                }
+                @foreach (var item in filteredWorklist)
+                {
+                    <tr>
+                        <td><b>#@item.MemoID</b>@if (!string.IsNullOrWhiteSpace(item.PatientID)) { <br /><small>@item.PatientID</small> }</td>
+                        <td><b>@item.PatientName</b><br /><small>@item.Age / @item.Sex · @(item.Contact ?? "—")</small></td>
+                        <td><b>@item.TestName</b></td>
+                        <td>
+                            <select style="min-height:30px;font-size:11px;padding:2px 6px;" value="@item.SpecimenType" @onchange="(e) => UpdateSpecimen(item, e.Value?.ToString())">
+                                <option value="Blood">Blood (EDTA/Serum)</option>
+                                <option value="Urine">Urine</option>
+                                <option value="Stool">Stool</option>
+                                <option value="Swab">Swab</option>
+                                <option value="Sputum">Sputum</option>
+                                <option value="X-Ray / Imaging">X-Ray / Scan</option>
+                            </select>
+                        </td>
+                        <td>
+                            @if (item.SampleStatus == "Pending") { <span class="pill" style="background:#fef3c7;color:#b45309;font-weight:800;">@I18n.T("Pending Collection")</span> }
+                            else if (item.SampleStatus == "InProcess") { <span class="pill" style="background:#ede9fe;color:#6d28d9;font-weight:800;">@I18n.T("Under Processing")</span> }
+                            else { <span class="pill pill-success">@I18n.T("Completed")</span> }
+                        </td>
+                        <td>@item.TransDate.ToString("dd MMM hh:mm tt")</td>
+                        <td>
+                            <div style="display:flex;gap:6px;">
+                                @if (item.SampleStatus == "Pending") { <button class="btn btn-secondary btn-sm" @onclick='() => SetStatusAsync(item, "InProcess")'>@I18n.T("Mark Specimen Collected", "Collect")</button> }
+                                else if (item.SampleStatus == "InProcess") { <button class="btn btn-primary btn-sm" @onclick='() => SetStatusAsync(item, "Completed")'>@I18n.T("Complete Sale & Print Receipt", "Finish")</button> }
+                                <NavLink href="@($"diagnostic/results?memoId={item.MemoID}")" class="btn btn-ghost btn-sm">@I18n.T("Results & Report") &rarr;</NavLink>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<WorklistItem> worklist = [];
+    private List<WorklistItem> filteredWorklist = [];
+    private string statusFilter = "all";
+    private string scanQuery = "";
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
+            .Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(200).ToListAsync();
+        var memoIds = memos.Select(x => x.ID).ToArray();
+        var samples = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToListAsync();
+        var sampleMap = samples.GroupBy(x => (x.MemoID, x.ServiceID)).ToDictionary(x => x.Key, x => x.First());
+
+        worklist = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(group =>
+        {
+            sampleMap.TryGetValue((m.ID, group.Key), out var sample);
+            return new WorklistItem
+            {
+                MemoID = m.ID, ServiceID = group.Key, PatientID = m.PatientID, PatientName = m.PatientName,
+                Age = m.Age ?? "—", Sex = m.Sex ?? "—", Contact = m.Contact, TransDate = m.TransDate,
+                TestName = services.GetValueOrDefault(group.Key) ?? $"Test #{group.Key}",
+                SpecimenType = sample?.SpecimenType ?? "Blood", SampleStatus = sample?.Status ?? "Pending", SampleCollectionID = sample?.ID
+            };
+        })).ToList();
+        FilterWorklist();
+    }
+
+    private void FilterWorklist()
+    {
+        var query = worklist.AsEnumerable();
+        if (statusFilter != "all")
+        {
+            query = query.Where(x => x.SampleStatus == statusFilter);
+        }
+        if (!string.IsNullOrWhiteSpace(scanQuery))
+        {
+            var q = scanQuery.Trim();
+            query = query.Where(x => x.MemoID.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
+                                  || (x.PatientID?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || x.PatientName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                  || x.TestName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                  || (x.Contact?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || $"SMP-{x.MemoID}".Contains(q, StringComparison.OrdinalIgnoreCase)
+                                  || $"LAB-{x.MemoID}".Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+        filteredWorklist = query.ToList();
+    }
+
+    private void HandleScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            ProcessScan();
+        }
+    }
+
+    private void ProcessScan()
+    {
+        if (string.IsNullOrWhiteSpace(scanQuery)) return;
+        var raw = scanQuery.Trim();
+
+        if (raw.StartsWith("HPM:TUBE|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:LAB|", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = raw.Split('|');
+            foreach (var p in parts)
+            {
+                if (p.StartsWith("INV:", StringComparison.OrdinalIgnoreCase))
+                {
+                    scanQuery = p.Substring(4).Trim();
+                    break;
+                }
+                if (p.StartsWith("SMP:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var smp = p.Substring(4).Trim();
+                    if (smp.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var segs = smp.Substring(4).Split('-');
+                        if (segs.Length > 0)
+                        {
+                            scanQuery = segs[0];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        else if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase))
+        {
+            scanQuery = raw.Substring(4);
+        }
+        else if (raw.Contains("/portal/report/", StringComparison.OrdinalIgnoreCase))
+        {
+            var idx = raw.LastIndexOf("/portal/report/", StringComparison.OrdinalIgnoreCase);
+            scanQuery = raw.Substring(idx + "/portal/report/".Length).Trim().TrimEnd('/');
+        }
+        else if (raw.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+        {
+            var segs = raw.Substring(4).Split('-');
+            if (segs.Length > 0)
+            {
+                scanQuery = segs[0];
+            }
+        }
+
+        FilterWorklist();
+    }
+
+    private void ClearScan()
+    {
+        scanQuery = "";
+        FilterWorklist();
+    }
+
+    private async Task UpdateSpecimen(WorklistItem item, string? newSpecimen)
+    {
+        if (string.IsNullOrWhiteSpace(newSpecimen)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+        if (sample is null)
+        {
+            sample = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = newSpecimen, Status = "Pending" };
+            db.LabSampleCollections.Add(sample);
+        }
+        else sample.SpecimenType = newSpecimen;
+        await db.SaveChangesAsync();
+        item.SpecimenType = newSpecimen;
+        item.SampleCollectionID = sample.ID;
+        Success(I18n.IsBangla ? $"{item.TestName}-এর জন্য নমুনা আপডেট করা হয়েছে।" : $"Specimen updated for {item.TestName}.");
+    }
+
+    private async Task SetStatusAsync(WorklistItem item, string newStatus)
+    {
+        if (newStatus is not ("InProcess" or "Completed")) { Fail("Invalid laboratory status."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        try
+        {
+            var validOrder = await db.EmergencyMemoItems.AnyAsync(x => x.MemoID == item.MemoID && x.TestID == item.ServiceID)
+                && await db.EmergencyMemos.AnyAsync(x => x.ID == item.MemoID && x.ModuleID == 2);
+            if (!validOrder) throw new InvalidOperationException("The diagnostic test order no longer exists.");
+            var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+            var currentStatus = sample?.Status ?? "Pending";
+            if (!DiagnosticWorkflow.CanAdvance(currentStatus, newStatus))
+                throw new InvalidOperationException($"Invalid status transition from {currentStatus} to {newStatus}.");
+            if (sample is null)
+            {
+                sample = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = item.SpecimenType, Status = "Pending" };
+                db.LabSampleCollections.Add(sample);
+            }
+            sample.Status = newStatus;
+            if (newStatus == "InProcess")
+            {
+                var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+                sample.CollectedAt ??= DateTime.Now;
+                sample.CollectedBy = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ? userId : null;
+            }
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            item.SampleStatus = newStatus;
+            item.SampleCollectionID = sample.ID;
+            Success(I18n.IsBangla ? $"মেমো #{item.MemoID}-এর {item.TestName} আপডেট করা হয়েছে।" : $"{item.TestName} on order #{item.MemoID} updated to {newStatus}.");
+            FilterWorklist();
+        }
+        catch (Exception ex)
+        {
+            await tx.RollbackAsync();
+            Fail(ex.Message);
+            await LoadAsync();
+        }
+    }
+
+    private void Success(string text) { messageClass = "alert success"; message = text; }
+    private void Fail(string text) { messageClass = "alert danger"; message = text; }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    private sealed class WorklistItem
+    {
+        public long MemoID { get; set; }
+        public int ServiceID { get; set; }
+        public string? PatientID { get; set; }
+        public string PatientName { get; set; } = "";
+        public string Age { get; set; } = "";
+        public string Sex { get; set; } = "";
+        public string? Contact { get; set; }
+        public DateTime TransDate { get; set; }
+        public string TestName { get; set; } = "";
+        public string SpecimenType { get; set; } = "Blood";
+        public string SampleStatus { get; set; } = "Pending";
+        public long? SampleCollectionID { get; set; }
+    }
+}

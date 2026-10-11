@@ -1,0 +1,89 @@
+@page "/masters/clinical"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>@I18n.T("Clinical Masters", "Clinical Masters") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <a class="back-link" href="masters">← @I18n.T("Master setup", "Master setup")</a>
+        <h1>@I18n.T("Clinical Masters", "Clinical masters")</h1>
+        <p>@I18n.T("Departments and consultation ticket fees.", "Departments and consultation ticket fees.")</p>
+    </div>
+</div>
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+
+<div class="master-grid">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div><h2>@I18n.T("Departments", "Departments")</h2><p>@I18n.T("Clinical departments and specialty units.", "Clinical departments and specialty units.")</p></div>
+            <button class="icon-btn" @onclick="ResetDepartment">@I18n.T("New", "New")</button>
+        </div>
+        <EditForm Model="department" OnSubmit="SaveDepartmentAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Department name *", "Department name *")</span><InputText @bind-Value="department.Name" /></label>
+                <label class="span-2"><span>@I18n.T("Category ID", "Category ID")</span><InputNumber @bind-Value="department.DepartmentCategoryID" /></label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(department.ID==0 ? I18n.T("Save department", "Save department") : I18n.T("Update department", "Update department"))</button>
+                @if(department.ID>0){<button class="btn btn-ghost" type="button" @onclick="DeleteDepartmentAsync">@I18n.T("Delete", "Delete")</button>}
+            </div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("ID", "ID")</th><th>@I18n.T("Department", "Department")</th><th></th></tr></thead>
+                <tbody>@foreach(var d in departments){<tr><td>@d.ID</td><td>@d.Name</td><td><button class="icon-btn" @onclick="()=>SelectDepartment(d)">@I18n.T("Edit", "Edit")</button></td></tr>}</tbody>
+            </table>
+        </div>
+    </div>
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div><h2>@I18n.T("Ticket types", "Ticket types")</h2><p>@I18n.T("Consultation fee slabs and ticket categories.", "Consultation fee slabs and ticket categories.")</p></div>
+            <button class="icon-btn" @onclick="ResetTicketType">@I18n.T("New", "New")</button>
+        </div>
+        <EditForm Model="ticketType" OnSubmit="SaveTicketTypeAsync">
+            <div class="form-grid">
+                <label class="span-2"><span>@I18n.T("Ticket type name *", "Ticket type name *")</span><InputText @bind-Value="ticketType.Name" /></label>
+                <label class="span-2"><span>@I18n.T("Fee", "Fee") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="ticketType.Amount" /></label>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" type="submit">@(ticketType.ID==0 ? I18n.T("Save ticket type", "Save ticket type") : I18n.T("Update ticket type", "Update ticket type"))</button>
+                @if(ticketType.ID>0){<button class="btn btn-ghost" type="button" @onclick="DeleteTicketTypeAsync">@I18n.T("Delete", "Delete")</button>}
+            </div>
+        </EditForm>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("ID", "ID")</th><th>@I18n.T("Ticket type", "Ticket type")</th><th class="num">@I18n.T("Fee", "Fee")</th><th></th></tr></thead>
+                <tbody>@foreach(var t in ticketTypes){<tr><td>@t.ID</td><td>@t.Name</td><td class="num">@I18n.FormatCurrency(t.Amount)</td><td><button class="icon-btn" @onclick="()=>SelectTicketType(t)">@I18n.T("Edit", "Edit")</button></td></tr>}</tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code{
+    private Department department=new(); private TicketType ticketType=new();
+    private List<Department> departments=[]; private List<TicketType> ticketTypes=[];
+    private string message=string.Empty; private string messageClass="success";
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadAsync(){await using var db=await DbFactory.CreateDbContextAsync();departments=await db.Departments.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();ticketTypes=await db.TicketTypes.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();}
+    private async Task SaveDepartmentAsync(){if(string.IsNullOrWhiteSpace(department.Name)){Fail(I18n.IsBangla ? "বিভাগের নাম আবশ্যক।" : "Department name is required.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(department.ID==0)db.Departments.Add(department);else db.Departments.Update(department);await db.SaveChangesAsync();Success(I18n.IsBangla ? "বিভাগ সংরক্ষিত হয়েছে।" : "Department saved.");ResetDepartment();await LoadAsync();}
+    private async Task SaveTicketTypeAsync(){if(string.IsNullOrWhiteSpace(ticketType.Name)||ticketType.Amount<0){Fail(I18n.IsBangla ? "সঠিক টিকিটের ধরন এবং ফি লিখুন।" : "Enter a valid ticket type and fee.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(ticketType.ID==0)db.TicketTypes.Add(ticketType);else db.TicketTypes.Update(ticketType);await db.SaveChangesAsync();Success(I18n.IsBangla ? "টিকিট টাইপ সংরক্ষিত হয়েছে।" : "Ticket type saved.");ResetTicketType();await LoadAsync();}
+    private void SelectDepartment(Department d)=>department=new(){ID=d.ID,Name=d.Name,DepartmentCategoryID=d.DepartmentCategoryID};
+    private void SelectTicketType(TicketType t)=>ticketType=new(){ID=t.ID,Name=t.Name,Amount=t.Amount};
+    private void ResetDepartment()=>department=new(); private void ResetTicketType()=>ticketType=new();
+    private async Task DeleteDepartmentAsync(){if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বিভাগ {department.Name} মুছে ফেলতে চান?" : $"Delete department {department.Name}?"))return;await using var db=await DbFactory.CreateDbContextAsync();var used=await db.Doctors.AnyAsync(x=>x.Department==department.ID)||await db.OPDTickets.AnyAsync(x=>x.DeptID==department.ID);if(used){Fail(I18n.IsBangla ? "এই বিভাগটি ডাক্তার বা টিকিটে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "This department is referenced by doctors or tickets and cannot be deleted.");return;}var item=await db.Departments.FindAsync(department.ID);if(item is not null){db.Remove(item);await db.SaveChangesAsync();}Success(I18n.IsBangla ? "বিভাগ মুছে ফেলা হয়েছে।" : "Department deleted.");ResetDepartment();await LoadAsync();}
+    private async Task DeleteTicketTypeAsync(){if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"টিকিট টাইপ {ticketType.Name} মুছে ফেলতে চান?" : $"Delete ticket type {ticketType.Name}?"))return;await using var db=await DbFactory.CreateDbContextAsync();var id=ticketType.ID.ToString();if(await db.OPDTickets.AnyAsync(x=>x.TicketRate==id)){Fail(I18n.IsBangla ? "এই টিকিট টাইপটি টিকিটে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "This ticket type is referenced by consultation tickets and cannot be deleted.");return;}var item=await db.TicketTypes.FindAsync(ticketType.ID);if(item is not null){db.Remove(item);await db.SaveChangesAsync();}Success(I18n.IsBangla ? "টিকিট টাইপ মুছে ফেলা হয়েছে।" : "Ticket type deleted.");ResetTicketType();await LoadAsync();}
+    private void Success(string text){messageClass="success";message=text;}private void Fail(string text){messageClass="danger";message=text;}
+}

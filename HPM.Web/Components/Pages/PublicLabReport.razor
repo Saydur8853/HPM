@@ -1,0 +1,973 @@
+@page "/portal/report"
+@page "/portal/report/{Id:long}"
+@attribute [AllowAnonymous]
+@layout Layout.LoginLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Localization
+@using HPM.Web.Services
+@using HPM.Web.Components.Common
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>@((isPublished && canViewReport && memo != null) ? $"Diagnostic Report #{memo.ID} - {memo.PatientName}" : "Patient Diagnostic Report Portal") | @Branding.HospitalName</PageTitle>
+
+<div class="portal-wrapper">
+    <header class="portal-header">
+        <div class="portal-header-content">
+            <div class="portal-brand">
+                @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                {
+                    <img src="@Branding.LogoData" alt="Logo" class="portal-logo-img" style="max-height: 48px; max-width: 55px; object-fit: contain; border-radius: 6px;" />
+                }
+                else
+                {
+                    <div class="portal-brand-logo">🏥</div>
+                }
+                <div>
+                    <h1 class="portal-hospital-title">@Branding.HospitalName</h1>
+                    <p class="portal-hospital-sub">@(string.IsNullOrWhiteSpace(Branding.Tagline) ? I18n.T("Official Diagnostic & Laboratory Patient Portal", "Official Diagnostic & Laboratory Patient Portal") : Branding.Tagline)</p>
+                </div>
+            </div>
+            <div class="portal-header-actions">
+                <button type="button" class="portal-lang-btn" @onclick="ToggleLanguage">
+                    🌐 @(isBangla ? "English" : "বাংলা")
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="portal-main">
+        <div class="portal-card">
+            @if (isLoading)
+            {
+                <div class="portal-loading">
+                    <div class="portal-spinner"></div>
+                    <h3>@(isBangla ? "রিপোর্ট তথ্য অনুসন্ধান করা হচ্ছে..." : "Loading diagnostic records...")</h3>
+                    <p>@(isBangla ? "হাসপাতাল ডাটাবেজের সাথে সংযোগ স্থাপন করা হচ্ছে..." : "Connecting to official hospital laboratory system...")</p>
+                </div>
+            }
+            else if (memo == null && matchedReports.Count == 0)
+            {
+                <!-- ================= 1. UNIVERSAL SEARCH BOX ================= -->
+                <div class="portal-search-box">
+                    <div class="portal-search-icon">🔍</div>
+                    <h2>@(isBangla ? "রোগীর ডায়াগনস্টিক রিপোর্ট ও ফলাফল অনুসন্ধান" : "Universal Patient Diagnostic Report Search")</h2>
+                    <p>
+                        @(isBangla
+                            ? "পেশেন্ট আইডি (PID), মোবাইল নম্বর বা মানি রিসিটের বিল নম্বর লিখে সকল রিপোর্ট অনুসন্ধান করুন:"
+                            : "Enter Patient ID (e.g. P-10084), Registered Mobile Number, or Memo / Invoice No to view and download all reports:")
+                    </p>
+
+                    <div class="portal-search-form">
+                        <input type="text"
+                               class="portal-input"
+                               placeholder="@(isBangla ? "পেশেন্ট আইডি (যেমন: P-10084), মোবাইল বা বিল নং" : "Enter Patient ID (P-10084), Mobile or Memo #")"
+                               @bind="searchQuery"
+                               @bind:event="oninput"
+                               @onkeydown="HandleSearchKeyDown" />
+                        <button type="button" class="portal-btn portal-btn-primary" @onclick="SearchReportsAsync">
+                            @(isBangla ? "অনুসন্ধান করুন ➔" : "Search Reports ➔")
+                        </button>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(errorMessage))
+                    {
+                        <div class="portal-alert portal-alert-danger">@errorMessage</div>
+                    }
+
+                    <div class="portal-help-note">
+                        ℹ️ @(isBangla
+                            ? "পেশেন্ট আইডি বা মোবাইল নম্বর দিয়ে সার্চ করলে রোগীর অতীত ও বর্তমানের সকল টেস্টের রিপোর্ট দেখতে পাবেন। সর্বশেষ রিপোর্টটি তালিকায় সবার প্রথমে প্রদর্শিত হবে।"
+                            : "Searching by Patient ID or Mobile will list all historical and current investigations for this patient with the latest report shown first.")
+                    </div>
+                </div>
+            }
+            else if (memo == null && matchedReports.Count > 1)
+            {
+                <!-- ================= 2. MULTI-REPORT PATIENT PORTFOLIO LIST (LATEST 1ST) ================= -->
+                <div class="portal-reports-list-container">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+                        <div>
+                            <span class="portal-status-badge portal-badge-success" style="font-size:11.5px; padding:4px 12px;">
+                                📁 @(isBangla ? "রোগীর টেস্ট হিস্ট্রি ও রিপোর্ট তালিকা" : "PATIENT INVESTIGATION DOSSIER")
+                            </span>
+                        </div>
+                        <button type="button" class="portal-btn portal-btn-secondary" style="padding:6px 14px; font-size:12px;" @onclick="ResetSearch">
+                            🔍 @(isBangla ? "নতুন অনুসন্ধান" : "New Search")
+                        </button>
+                    </div>
+
+                    <!-- Patient Summary Banner -->
+                    @{
+                        var primaryPatient = matchedReports.First();
+                    }
+                    <div class="patient-list-header-banner">
+                        <div class="patient-banner-avatar">
+                            @(string.IsNullOrWhiteSpace(primaryPatient.PatientName) ? "PT" : primaryPatient.PatientName.Substring(0, Math.Min(2, primaryPatient.PatientName.Length)).ToUpperInvariant())
+                        </div>
+                        <div class="patient-banner-info">
+                            <h3>@primaryPatient.PatientName</h3>
+                            <div class="patient-banner-meta">
+                                <span class="patient-meta-pill">🆔 PID: @(primaryPatient.PatientID ?? (isBangla ? "বহির্বিভাগ" : "Walk-in"))</span>
+                                @if (!string.IsNullOrWhiteSpace(primaryPatient.Contact))
+                                {
+                                    <span class="patient-meta-pill">📞 @primaryPatient.Contact</span>
+                                }
+                                <span class="patient-meta-pill">🎂 @primaryPatient.Age / @primaryPatient.Sex</span>
+                                <span class="patient-meta-pill" style="background:#e0f2fe; border-color:#7dd3fc; color:#0369a1;">
+                                    📊 @matchedReports.Count @(isBangla ? "টি টেস্ট ইনভয়েস পাওয়া গেছে" : "Diagnostic Orders Found")
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:12px; font-size:13px; color:#475569; font-weight:600;">
+                        @(isBangla ? "সকল রিপোর্ট কালানুক্রমিক সাজানো হয়েছে (সর্বশেষ রিপোর্ট উপরে):" : "All investigation reports sorted chronologically (newest on top):")
+                    </div>
+
+                    <!-- Chronological Reports List (Latest 1st) -->
+                    <div class="portal-reports-grid">
+                        @for (int i = 0; i < matchedReports.Count; i++)
+                        {
+                            var rep = matchedReports[i];
+                            var isLatest = i == 0;
+                            <div class="portal-report-card @(isLatest ? "latest-card" : "")">
+                                <div class="report-card-top">
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <strong class="report-card-inv">Invoice #@rep.ID</strong>
+                                        @if (isLatest)
+                                        {
+                                            <span class="report-badge-latest">🌟 @(isBangla ? "সর্বশেষ রিপোর্ট (LATEST)" : "LATEST REPORT")</span>
+                                        }
+                                    </div>
+                                    <span class="report-card-date">
+                                        📅 @rep.TransDate.ToString("dd MMM yyyy — hh:mm tt")
+                                    </span>
+                                </div>
+
+                                <div class="report-card-body">
+                                    @if (rep.TestNames.Count > 0)
+                                    {
+                                        <div class="report-tests-list">
+                                            @foreach (var tName in rep.TestNames)
+                                            {
+                                                <span class="test-pill">🔬 @tName</span>
+                                            }
+                                        </div>
+                                    }
+
+                                    <div class="report-doctor-line">
+                                        <span>👨‍⚕️ @(isBangla ? "রেফারেল ডাক্তার" : "Doctor"): <b>@DoctorName(rep.DoctorID)</b></span>
+                                        <div>
+                                            <span>@(isBangla ? "বিল" : "Bill"): <b>৳ @((rep.Total - rep.Discount).ToString("N2"))</b> &bull; </span>
+                                            @if (rep.DueAmount > 0)
+                                            {
+                                                <span style="color:#dc2626; font-weight:700;">@(isBangla ? "বকেয়া" : "Due"): ৳ @rep.DueAmount.ToString("N2")</span>
+                                            }
+                                            else
+                                            {
+                                                <span style="color:#15803d; font-weight:700;">@(isBangla ? "পরিশোধিত (PAID)" : "PAID")</span>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style="display:flex; justify-content:space-between; align-items:center; padding-top:12px; border-top:1px solid #f1f5f9; flex-wrap:wrap; gap:8px;">
+                                    <div>
+                                        @if (rep.IsVerified && rep.CanView)
+                                        {
+                                            <span class="portal-status-badge portal-badge-success" style="font-size:11px; padding:4px 10px;">
+                                                ✅ @(isBangla ? "ভেরিফাইড ও প্রস্তুত" : "VERIFIED & READY")
+                                            </span>
+                                        }
+                                        else if (rep.IsVerified && !rep.CanView)
+                                        {
+                                            <span class="portal-status-badge portal-badge-due" style="font-size:11px; padding:4px 10px;">
+                                                🔒 @(isBangla ? "বকেয়া পরিশোধ প্রয়োজন" : "PAYMENT DUE LOCKED")
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="portal-status-badge portal-badge-pending" style="font-size:11px; padding:4px 10px;">
+                                                ⏳ @(isBangla ? "ল্যাব প্রক্রিয়াকরণ চলছে" : "IN PROGRESS")
+                                            </span>
+                                        }
+                                    </div>
+
+                                    <div style="display:flex; gap:8px;">
+                                        <button type="button" class="portal-btn portal-btn-primary" style="padding:6px 16px; font-size:12.5px;" @onclick="() => SelectReport(rep.ID)">
+                                            👁️ @(isBangla ? "রিপোর্ট দেখুন ও প্রিন্ট করুন ➔" : "View & Print Official Report ➔")
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else if (memo != null && !isPublished)
+            {
+                <!-- ================= 3. STATE: RESULT NOT PUBLISHED YET ================= -->
+                <div class="portal-pending-view">
+                    @if (matchedReports.Count > 1)
+                    {
+                        <div style="margin-bottom:14px;">
+                            <button type="button" class="portal-btn portal-btn-secondary" style="padding:4px 12px; font-size:11.5px;" @onclick="BackToReportsList">
+                                ⬅ @(isBangla ? $"রোগীর সকল রিপোর্টে ফিরুন ({matchedReports.Count}টি রিপোর্ট)" : $"Back to All Reports ({matchedReports.Count} found)")
+                            </button>
+                        </div>
+                    }
+
+                    <div class="portal-status-badge portal-badge-pending">
+                        <span class="status-pulse-dot"></span>
+                        @(isBangla ? "প্রক্রিয়াধীন / রেজাল্ট প্রকাশের অপেক্ষায়" : "REPORT IN PROGRESS / PROCESSING")
+                    </div>
+
+                    <div class="portal-pending-hero">
+                        <div class="portal-pending-icon-wrap">
+                            <span class="portal-pending-icon">⏳</span>
+                        </div>
+                        <h2 class="portal-pending-title">
+                            @(isBangla ? "আপনার পরীক্ষার রেজাল্ট এখনও প্রকাশিত হয়নি" : "The result didn't publish yet.")
+                        </h2>
+                        <p class="portal-pending-subtitle">
+                            @(isBangla
+                                ? $"ইনভয়েস #{memo.ID}-এর নমুনা ({memo.PatientName}) বর্তমানে ল্যাবরেটরিতে ক্লিনিক্যাল এনালাইসিস ও ডাক্তারের নিরীক্ষাধীন রয়েছে।"
+                                : $"Sample for Invoice #{memo.ID} ({memo.PatientName}) is currently under clinical laboratory analysis and awaiting pathologist verification.")
+                        </p>
+                    </div>
+
+                    <!-- Estimated Delivery Card -->
+                    <div class="portal-countdown-card">
+                        <div class="countdown-icon">📅</div>
+                        <div class="countdown-content">
+                            <span class="countdown-label">@(isBangla ? "সম্ভাব্য রিপোর্ট প্রকাশের সময় (Estimated Delivery):" : "Estimated Report Delivery Time:")</span>
+                            <strong class="countdown-time">@expectedDeliveryDate.ToString("dd MMM yyyy — hh:mm tt")</strong>
+                            <small class="countdown-note">
+                                @(isBangla
+                                    ? "সাধারণত টেস্ট সম্পন্ন হতে বিলিংয়ের সময় থেকে ১২ থেকে ২৪ ঘণ্টা সময় লাগে। অনুগ্রহ করে উল্লেখিত সময়ের পর পুনরায় রিফ্রেশ করুন।"
+                                    : "Standard laboratory turnaround time is 12 to 24 hours from sample intake. Please check back after this time.")
+                            </small>
+                        </div>
+                    </div>
+
+                    <!-- Live Progress Timeline -->
+                    <div class="portal-timeline-section">
+                        <h4 class="timeline-title">@(isBangla ? "ল্যাবরেটরি প্রক্রিয়াকরণ ট্র্যাকার (Live Status)" : "Laboratory Processing Timeline")</h4>
+                        <div class="portal-timeline">
+                            <div class="timeline-step step-completed">
+                                <div class="step-marker">✓</div>
+                                <div class="step-details">
+                                    <strong>@(isBangla ? "টেস্ট রেজিস্ট্রেশন ও বিলিং সম্পন্ন" : "Order Registered & Invoiced")</strong>
+                                    <span>@memo.TransDate.ToString("dd MMM yyyy, hh:mm tt")</span>
+                                </div>
+                            </div>
+                            <div class="timeline-step @(hasSampleCollected ? "step-completed" : "step-active")">
+                                <div class="step-marker">@(hasSampleCollected ? "✓" : "2")</div>
+                                <div class="step-details">
+                                    <strong>@(isBangla ? "নমুনা (Sample) সংগ্রহ ও ল্যাব গ্রহণ" : "Specimen Collected & Received at Lab")</strong>
+                                    <span>@(hasSampleCollected ? (sampleCollectionDate?.ToString("dd MMM, hh:mm tt") ?? "Received in Lab") : (isBangla ? "নমুনা সংগ্রহের প্রক্রিয়া চলছে" : "Sample collection in progress"))</span>
+                                </div>
+                            </div>
+                            <div class="timeline-step step-active">
+                                <div class="step-marker"><span class="spinner-dot"></span></div>
+                                <div class="step-details">
+                                    <strong>@(isBangla ? "প্যাথলজি ল্যাব এনালাইসিস চলছে" : "Clinical Pathology Analysis in Progress")</strong>
+                                    <span>@(isBangla ? "মেডিকেল টেকনোলজিস্ট দ্বারা পরীক্ষা সম্পন্ন হচ্ছে" : "Technicians are processing test parameters")</span>
+                                </div>
+                            </div>
+                            <div class="timeline-step">
+                                <div class="step-marker">4</div>
+                                <div class="step-details">
+                                    <strong>@(isBangla ? "ডাক্তার / কনসালটেন্ট প্যাথলজিস্ট সত্যায়ন" : "Consultant Review & Digital Verification")</strong>
+                                    <span>@(isBangla ? "সত্যায়নের অপেক্ষায়" : "Awaiting specialist authorization")</span>
+                                </div>
+                            </div>
+                            <div class="timeline-step">
+                                <div class="step-marker">5</div>
+                                <div class="step-details">
+                                    <strong>@(isBangla ? "চূড়ান্ত রিপোর্ট প্রকাশ ও ডাউনলোড" : "Official Report Published")</strong>
+                                    <span>@(isBangla ? "অনলাইন ও প্রিন্ট কপি সরবরাহ" : "Available for online view & download")</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Actions & Helpdesk -->
+                    <div class="portal-actions-row">
+                        <button type="button" class="portal-btn portal-btn-primary" @onclick="ReloadCurrentMemoAsync">
+                            🔄 @(isBangla ? "স্ট্যাটাস রিফ্রেশ করুন" : "Refresh Status")
+                        </button>
+                        @if (matchedReports.Count > 1)
+                        {
+                            <button type="button" class="portal-btn portal-btn-secondary" @onclick="BackToReportsList">
+                                ⬅ @(isBangla ? "সকল রিপোর্ট তালিকা" : "All Reports List")
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" class="portal-btn portal-btn-secondary" @onclick="ResetSearch">
+                                🔍 @(isBangla ? "অন্য ইনভয়েস খুঁজুন" : "Check Another Bill")
+                            </button>
+                        }
+                    </div>
+
+                    <div class="portal-support-card">
+                        <div>
+                            <strong>@(isBangla ? "জরুরি প্রয়োজনে ল্যাব হেল্পডেস্কে যোগাযোগ করুন:" : "Need urgent assistance? Contact Lab Helpdesk:")</strong>
+                            <p>📞 @(isBangla ? "হটলাইন: 01700-000000 / এক্সটেনশন: 104" : "Hotline: 01700-000000 / Lab Ext: 104")</p>
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (memo != null && isPublished && !canViewReport)
+            {
+                <!-- ================= 4. STATE: RESULT READY BUT LOCKED DUE TO OUTSTANDING BALANCE ================= -->
+                <div class="portal-due-view">
+                    @if (matchedReports.Count > 1)
+                    {
+                        <div style="margin-bottom:14px;">
+                            <button type="button" class="portal-btn portal-btn-secondary" style="padding:4px 12px; font-size:11.5px;" @onclick="BackToReportsList">
+                                ⬅ @(isBangla ? $"রোগীর সকল রিপোর্টে ফিরুন ({matchedReports.Count}টি রিপোর্ট)" : $"Back to All Reports ({matchedReports.Count} found)")
+                            </button>
+                        </div>
+                    }
+
+                    <div class="portal-status-badge portal-badge-due">
+                        🔒 @(isBangla ? "বকেয়া পরিশোধ প্রয়োজন / রিপোর্ট সুরক্ষিত" : "PAYMENT DUE — REPORT ACCESS LOCKED")
+                    </div>
+
+                    <div class="portal-due-hero">
+                        <div class="portal-due-icon-wrap">
+                            <span class="portal-due-icon">🔒</span>
+                        </div>
+                        <h2 class="portal-due-title">
+                            @(isBangla ? "রিপোর্ট দেখতে অনুগ্রহ করে বকেয়া টাকা পরিশোধ করুন" : "Please Pay due amount to see the report.")
+                        </h2>
+                        <p class="portal-due-subtitle">
+                            @(isBangla
+                                ? $"আপনার ইনভয়েস #{memo.ID}-এর টেস্টের ফলাফল প্রস্তুত রয়েছে। তবে বিলের বকেয়া পরিশোধ না থাকায় পূর্ণাঙ্গ রিপোর্টটি সাময়িকভাবে লক রয়েছে।"
+                                : $"Your laboratory test results for Invoice #{memo.ID} are verified and ready. However, the complete clinical report is locked pending clearance of the outstanding due amount.")
+                        </p>
+                    </div>
+
+                    <!-- Outstanding Due Breakdown Card -->
+                    <div class="portal-due-card">
+                        <div class="portal-due-card-header">
+                            <span>🧾 @(isBangla ? "বকেয়া পেমেন্ট বিবরণী" : "Payment Due Breakdown")</span>
+                            <span>#@memo.ID</span>
+                        </div>
+                        <div class="portal-due-card-body">
+                            <div class="portal-due-grid">
+                                <div class="portal-due-item">
+                                    <span>@(isBangla ? "রোগীর নাম" : "Patient Name"):</span>
+                                    <strong>@memo.PatientName</strong>
+                                </div>
+                                <div class="portal-due-item">
+                                    <span>@(isBangla ? "মোট বিল" : "Net Bill Amount"):</span>
+                                    <strong>৳ @netPayable.ToString("N2")</strong>
+                                </div>
+                                <div class="portal-due-item">
+                                    <span>@(isBangla ? "পরিশোধিত টাকা" : "Paid Amount"):</span>
+                                    <strong style="color:#059669;">৳ @paidAmount.ToString("N2")</strong>
+                                </div>
+                                <div class="portal-due-item">
+                                    <span>@(isBangla ? "বিলিংয়ের তারিখ" : "Invoice Date"):</span>
+                                    <strong>@memo.TransDate.ToString("dd MMM yyyy")</strong>
+                                </div>
+                            </div>
+
+                            <div class="portal-due-amount-box">
+                                <span class="due-label">⚠️ @(isBangla ? "মোট বকেয়া টাকা (Due Balance)" : "Total Due Balance"):</span>
+                                <span class="due-value">৳ @dueAmount.ToString("N2")</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step-by-Step Payment Clear Instructions -->
+                    <div class="portal-due-steps">
+                        <div class="portal-due-steps-title">
+                            ℹ️ @(isBangla ? "বকেয়া পরিশোধ ও রিপোর্ট দেখার সহজ ধাপসমূহ:" : "How to Unlock and View Your Report:")
+                        </div>
+                        <ul class="portal-step-list">
+                            <li class="portal-step-item">
+                                <span class="portal-step-num">1</span>
+                                <div>
+                                    <b>@(isBangla ? "ক্যাশ কাউন্টারে যোগাযোগ করুন:" : "Visit Hospital Diagnostic Cash Counter:")</b>
+                                    @(isBangla
+                                        ? $"হাসপাতালের ডায়াগনস্টিক ক্যাশ কাউন্টারে গিয়ে ইনভয়েস নম্বর #{memo.ID} উল্লেখ করে বকেয়া ৳ {dueAmount:N2} পরিশোধ করুন।"
+                                        : $"Go to the hospital billing / cashier desk and pay the outstanding balance of ৳ {dueAmount:N2} against Memo #{memo.ID}.")
+                                </div>
+                            </li>
+                            <li class="portal-step-item">
+                                <span class="portal-step-num">2</span>
+                                <div>
+                                    <b>@(isBangla ? "ক্যাশিয়ারের স্ট্যাটাস আপডেট:" : "Cashier Clears Status to Paid:")</b>
+                                    @(isBangla
+                                        ? "টাকা জমা নেওয়ার পর ক্যাশিয়ার বিলের স্ট্যাটাস 'Due' থেকে 'Paid' করে দেবেন (অথবা বিশেষ অনুমতিতে Authorize Release প্রদান করবেন)।"
+                                        : "Upon receiving payment, the cashier marks the bill status to 'Paid' (or grants Authorized Release permission).")
+                                </div>
+                            </li>
+                            <li class="portal-step-item">
+                                <span class="portal-step-num">3</span>
+                                <div>
+                                    <b>@(isBangla ? "তাৎক্ষণিক রিপোর্ট দর্শন ও ডাউনলোড:" : "Instant Report Unlock & Download:")</b>
+                                    @(isBangla
+                                        ? "পেমেন্ট ক্লিয়ার হওয়ার সাথে সাথে এই পেজে 'Refresh Status' বাটনে ক্লিক করে বা পুনরায় QR কোড স্ক্যান করে সম্পূর্ণ রিপোর্ট দেখতে ও ডাউনলোড করতে পারবেন।"
+                                        : "Immediately after payment is updated, click the 'Refresh Status' button below or re-scan your QR code to instantly view and print the full report.")
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="portal-actions-row">
+                        <button type="button" class="portal-btn portal-btn-primary" @onclick="ReloadCurrentMemoAsync">
+                            🔄 @(isBangla ? "স্ট্যাটাস রিফ্রেশ করুন (Refresh Status)" : "Refresh Status")
+                        </button>
+                        @if (matchedReports.Count > 1)
+                        {
+                            <button type="button" class="portal-btn portal-btn-secondary" @onclick="BackToReportsList">
+                                ⬅ @(isBangla ? "সকল রিপোর্ট তালিকা" : "All Reports List")
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" class="portal-btn portal-btn-secondary" @onclick="ResetSearch">
+                                🔍 @(isBangla ? "অন্য ইনভয়েস খুঁজুন" : "Check Another Bill")
+                            </button>
+                        }
+                    </div>
+
+                    <div class="portal-support-card">
+                        <div>
+                            <strong>@(isBangla ? "ক্যাশ কাউন্টার বা বিলিং সহায়তায় যোগাযোগ:" : "Hospital Reception & Billing Desk:")</strong>
+                            <p>📞 @(isBangla ? "হটলাইন: 01700-000000 / এক্সটেনশন: 101 বা 102" : "Hotline: 01700-000000 / Ext: 101 or 102")</p>
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (memo != null && isPublished && canViewReport)
+            {
+                <!-- ================= 5. STATE: RESULT PUBLISHED & UNLOCKED / OFFICIAL REPORT ================= -->
+                <div class="portal-report-view print-report-container" id="printable-lab-report">
+                    <div class="report-header-banner no-print">
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <div class="portal-status-badge portal-badge-success">
+                                🛡️ @(isBangla ? "অফিসিয়াল ডায়াগনস্টিক রিপোর্ট — ভেরিফাইড ও প্রস্তুত" : "OFFICIAL DIAGNOSTIC REPORT — VERIFIED & PUBLISHED")
+                            </div>
+                            @if (isAuthorizedRelease && dueAmount > 0)
+                            {
+                                <div class="portal-status-badge portal-badge-auth">
+                                    🛡️ @(isBangla ? $"বিশেষ অনুমতিতে প্রকাশিত (বকেয়া: ৳ {dueAmount:N2})" : $"AUTHORIZED RELEASE (Due: ৳ {dueAmount:N2})")
+                                </div>
+                            }
+                        </div>
+                        <div class="report-top-actions">
+                            @if (matchedReports.Count > 1)
+                            {
+                                <button type="button" class="portal-btn portal-btn-secondary" @onclick="BackToReportsList">
+                                    ⬅ @(isBangla ? $"সকল রিপোর্ট ({matchedReports.Count}টি)" : $"All Reports ({matchedReports.Count})")
+                                </button>
+                            }
+                            <button type="button" class="portal-btn portal-btn-primary" @onclick="PrintReportAsync">
+                                🖨️ @(isBangla ? "রিপোর্ট প্রিন্ট / PDF সেভ করুন" : "Print / Download PDF")
+                            </button>
+                            <button type="button" class="portal-btn portal-btn-secondary" @onclick="ResetSearch">
+                                🔍 @(isBangla ? "নতুন অনুসন্ধান" : "New Search")
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (isAuthorizedRelease && dueAmount > 0)
+                    {
+                        <div class="portal-auth-banner no-print">
+                            <span>🛡️</span>
+                            <div>
+                                <strong>@(isBangla ? "কর্তৃপক্ষের বিশেষ অনুমতি (Authorized Release):" : "Management Authorized Release:")</strong>
+                                @(isBangla
+                                    ? $"এই রিপোর্টে ৳ {dueAmount:N2} বকেয়া থাকা সত্ত্বেও বিশেষ প্রশাসনিক অনুমতিতে রিপোর্টটি দেখার অনুমতি দেওয়া হয়েছে।"
+                                    : $"This clinical report is released under special administrative authorization despite an outstanding due of ৳ {dueAmount:N2}.")
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Clinical Report Sheet (A4 Standard Format) -->
+                    <div class="clinical-report-sheet a4-page-sheet" id="printable-sheet">
+                        <!-- Standardized Report Header -->
+                        <PrintDocumentHeader Title="@(isBangla ? "ডায়াগনস্টিক ক্লিনিক্যাল ইনভেস্টিগেশন রিপোর্ট" : "OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT")"
+                                             SubTitle="@(isBangla ? "ডিপার্টমেন্ট অফ প্যাথলজি ও ডায়াগনস্টিক ল্যাবরেটরি মেডিসিন" : Branding.LabHeaderDept)"
+                                             DocNo="@($"# {memo.ID}")"
+                                             DocNoLabel="Memo #"
+                                             BarcodeCode="@($"LAB-{memo.ID}")"
+                                             QrPayload="@BarcodeQr.GenerateLabQrPayload(memo.ID, memo.PatientID ?? "", memo.PatientName, $"SMP-{memo.ID}", Navigation.BaseUri)" />
+
+                        <!-- Patient Demographics Info Grid -->
+                        <div class="report-patient-grid">
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "রোগীর নাম" : "Patient Name"):</span>
+                                <strong class="grid-value">@memo.PatientName</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "পেশেন্ট আইডি (PID)" : "Patient ID (PID)"):</span>
+                                <strong class="grid-value">@(memo.PatientID ?? (isBangla ? "বহির্বিভাগ" : "Walk-in"))</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "বয়স / লিঙ্গ" : "Age / Gender"):</span>
+                                <strong class="grid-value">@memo.Age / @memo.Sex</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "মোবাইল নম্বর" : "Contact No"):</span>
+                                <strong class="grid-value">@(memo.Contact ?? "—")</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "ইনভয়েস / বিল নং" : "Invoice / Memo #"):</span>
+                                <strong class="grid-value">#@memo.ID</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "নমুনা আইডি (Specimen ID)" : "Specimen / Tube ID"):</span>
+                                <strong class="grid-value">SMP-@memo.ID</strong>
+                            </div>
+                            <div class="patient-grid-item span-2">
+                                <span class="grid-label">@(isBangla ? "রেফারেল চিকিৎসক" : "Referred By Doctor"):</span>
+                                <strong class="grid-value">@DoctorName(memo.DoctorID)</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "নমুনা সংগ্রহের সময়" : "Sample Collected"):</span>
+                                <strong class="grid-value">@(sampleCollectionDate?.ToString("dd MMM yyyy, hh:mm tt") ?? memo.TransDate.ToString("dd MMM yyyy"))</strong>
+                            </div>
+                            <div class="patient-grid-item">
+                                <span class="grid-label">@(isBangla ? "রিপোর্ট প্রকাশের সময়" : "Report Released"):</span>
+                                <strong class="grid-value">@(reportReleaseDate?.ToString("dd MMM yyyy, hh:mm tt") ?? DateTime.Now.ToString("dd MMM yyyy"))</strong>
+                            </div>
+                        </div>
+
+                        <!-- Investigation Test Results -->
+                        @foreach (var group in resultsByService)
+                        {
+                            var sName = ServiceName(group.Key);
+                            <div class="report-investigation-block">
+                                <div class="investigation-title-bar">
+                                    <h3 class="investigation-name">🔬 @sName</h3>
+                                    <span class="investigation-badge">@(isBangla ? "ভেরিফাইড টেস্ট" : "VERIFIED TEST")</span>
+                                </div>
+
+                                <table class="report-parameter-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 32%;">@(isBangla ? "টেস্ট প্যারামিটার" : "Investigation Parameter")</th>
+                                            <th class="text-center" style="width: 20%;">@(isBangla ? "ফলাফল (Observed Result)" : "Observed Result")</th>
+                                            <th class="text-center" style="width: 14%;">@(isBangla ? "একক (Unit)" : "Unit")</th>
+                                            <th style="width: 22%;">@(isBangla ? "স্বাভাবিক রেফারেন্স মান" : "Reference Range")</th>
+                                            <th class="text-center" style="width: 12%;">@(isBangla ? "স্ট্যাটাস" : "Status")</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var res in group.Value)
+                                        {
+                                            var flagClass = (res.Flag ?? "Normal").ToLowerInvariant() switch
+                                            {
+                                                "high" => "flag-high",
+                                                "low" => "flag-low",
+                                                "critical" => "flag-critical",
+                                                "positive" => "flag-high",
+                                                _ => "flag-normal"
+                                            };
+                                            <tr>
+                                                <td class="param-name"><b>@res.ParameterName</b></td>
+                                                <td class="param-value text-center">
+                                                    <span class="value-highlight @flagClass">@res.ResultValue</span>
+                                                </td>
+                                                <td class="param-unit text-center">@(res.Unit ?? "—")</td>
+                                                <td class="param-range">@(res.ReferenceRange ?? "—")</td>
+                                                <td class="param-flag text-center">
+                                                    <span class="flag-pill @flagClass">
+                                                        @(res.Flag ?? "Normal")
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                            @if (!string.IsNullOrWhiteSpace(res.Interpretation))
+                                            {
+                                                <tr class="interpretation-row">
+                                                    <td colspan="5">
+                                                        <small><b>@(isBangla ? "ক্লিনিক্যাল মন্তব্য / ব্যাখ্যা:" : "Interpretation / Clinical Note:"):</b> @res.Interpretation</small>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+
+                        <!-- Standardized Report Footer with Verbatim Legal Disclaimer Notice -->
+                        <PrintDocumentFooter Signatures='new string[] { isBangla ? "মেডিকেল টেকনোলজিস্ট (ল্যাব)" : "Medical Technologist (Lab)", DoctorName(verifyingDoctorId) }' />
+                    </div>
+                </div>
+            }
+        </div>
+    </main>
+
+    <footer class="portal-footer no-print">
+        <p>&copy; @DateTime.Now.Year @Branding.HospitalName. All rights reserved. &bull; Universal Patient Diagnostic Portal</p>
+    </footer>
+</div>
+
+@code {
+    [Parameter] public long? Id { get; set; }
+    [SupplyParameterFromQuery(Name = "inv")] public long? QueryInv { get; set; }
+
+    public class MatchedReportItem
+    {
+        public long ID { get; set; }
+        public string? PatientID { get; set; }
+        public string PatientName { get; set; } = "";
+        public string? Contact { get; set; }
+        public string? Age { get; set; }
+        public string? Sex { get; set; }
+        public DateTime TransDate { get; set; }
+        public decimal Total { get; set; }
+        public decimal Discount { get; set; }
+        public decimal Paid { get; set; }
+        public decimal DueAmount => Math.Max(0, (Total - Discount) - Paid);
+        public bool IsPaidInFull => DueAmount <= 0.01m;
+        public bool IsAuthRelease { get; set; }
+        public int? DoctorID { get; set; }
+        public List<string> TestNames { get; set; } = [];
+        public bool HasResults { get; set; }
+        public bool IsVerified { get; set; }
+        public bool CanView => IsPaidInFull || IsAuthRelease;
+    }
+
+    private CashMemoDInvestigation? memo;
+    private List<MatchedReportItem> matchedReports = [];
+    private List<CashMemoSubDInvestigation> orderItems = [];
+    private List<LabSampleCollection> sampleCollections = [];
+    private List<LabTestResult> allResults = [];
+    private Dictionary<int, List<LabTestResult>> resultsByService = [];
+    private List<DoctorsProfile> doctors = [];
+    private List<Service> services = [];
+
+    private bool isLoading = true;
+    private bool isPublished = false;
+    private bool hasSampleCollected = false;
+    private DateTime? sampleCollectionDate;
+    private DateTime? reportReleaseDate;
+    private DateTime expectedDeliveryDate = DateTime.Now;
+    private int? verifyingDoctorId;
+    private string errorMessage = "";
+    private string searchQuery = "";
+    private bool isBangla = false;
+
+    // Payment & Access Control
+    private decimal grossTotal = 0;
+    private decimal discount = 0;
+    private decimal netPayable = 0;
+    private decimal paidAmount = 0;
+    private decimal dueAmount = 0;
+    private bool isPaidInFull = false;
+    private bool isAuthorizedRelease = false;
+    private bool canViewReport = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var targetId = Id ?? QueryInv;
+        if (targetId.HasValue && targetId.Value > 0)
+        {
+            await LoadReportAsync(targetId.Value);
+        }
+        else
+        {
+            isLoading = false;
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var targetId = Id ?? QueryInv;
+        if (targetId.HasValue && targetId.Value > 0 && (memo == null || memo.ID != targetId.Value))
+        {
+            await LoadReportAsync(targetId.Value);
+        }
+    }
+
+    private void ToggleLanguage()
+    {
+        isBangla = !isBangla;
+    }
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchReportsAsync();
+        }
+    }
+
+    private async Task SearchReportsAsync()
+    {
+        errorMessage = "";
+        var q = searchQuery?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(q))
+        {
+            errorMessage = isBangla
+                ? "অনুগ্রহ করে পেশেন্ট আইডি (PID), মোবাইল নম্বর বা বিল নম্বর লিখুন।"
+                : "Please enter a valid Patient ID, Mobile Number, or Memo / Invoice No.";
+            return;
+        }
+
+        isLoading = true;
+        memo = null;
+        matchedReports.Clear();
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            doctors = await db.Doctors.AsNoTracking().ToListAsync();
+            services = await db.Services.AsNoTracking().ToListAsync();
+
+            // Extract numeric or clean identifier if prefixed e.g. PAT-10084, LAB-1001, SMP-1001
+            var cleanQ = q;
+            if (cleanQ.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase)) cleanQ = cleanQ.Substring(4);
+            if (cleanQ.StartsWith("PAT-", StringComparison.OrdinalIgnoreCase)) cleanQ = cleanQ.Substring(4);
+            if (cleanQ.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = cleanQ.Substring(4).Split('-');
+                if (parts.Length > 0) cleanQ = parts[0];
+            }
+
+            long.TryParse(cleanQ, out var parsedNum);
+
+            // 1. Find matching patient in Registrations table if any
+            var matchedPatients = await db.Registrations.AsNoTracking()
+                .Where(p => p.PatientID == q || p.PatientID == cleanQ || p.Contact == q || p.Contact == cleanQ || (parsedNum > 0 && p.ID == parsedNum))
+                .ToListAsync();
+
+            var patientIds = matchedPatients.Select(p => p.PatientID).Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+            var patientContacts = matchedPatients.Select(p => p.Contact).Where(c => !string.IsNullOrWhiteSpace(c)).ToList();
+
+            // 2. Query EmergencyMemos for Diagnostic orders (ModuleID == 2 or 11)
+            var query = db.EmergencyMemos.AsNoTracking()
+                .Include(m => m.Items)
+                .Where(m => m.ModuleID == 2 || m.ModuleID == 11);
+
+            // Match criteria:
+            // - Direct Memo ID match
+            // - PatientID matches query or any matched patient's PatientID
+            // - Contact matches query or any matched patient's Contact
+            // - PatientName matches query
+            var rawMemos = await query
+                .Where(m => (parsedNum > 0 && m.ID == parsedNum) ||
+                            (m.PatientID != null && (m.PatientID == q || m.PatientID == cleanQ || (patientIds.Count > 0 && patientIds.Contains(m.PatientID)))) ||
+                            (m.Contact != null && (m.Contact == q || m.Contact == cleanQ || (patientContacts.Count > 0 && patientContacts.Contains(m.Contact)))) ||
+                            (q.Length >= 3 && m.PatientName.ToLower().Contains(q.ToLower())))
+                .OrderByDescending(m => m.TransDate)
+                .ToListAsync();
+
+            if (rawMemos.Count == 0)
+            {
+                errorMessage = isBangla
+                    ? $"'{q}' দিয়ে কোনো ডায়াগনস্টিক রিপোর্ট বা মেমো পাওয়া যায়নি। অনুগ্রহ করে সঠিক তথ্য প্রদান করুন।"
+                    : $"No diagnostic reports found matching '{q}'. Please verify your Patient ID, Mobile, or Memo #.";
+                isLoading = false;
+                return;
+            }
+
+            // Fetch test results for these memos to compute status
+            var memoIds = rawMemos.Select(m => m.ID).ToList();
+            var allResultsForMemos = await db.LabTestResults.AsNoTracking()
+                .Where(r => memoIds.Contains(r.MemoID))
+                .ToListAsync();
+
+            matchedReports = rawMemos.Select(m =>
+            {
+                var mResults = allResultsForMemos.Where(r => r.MemoID == m.ID).ToList();
+                var hasEntered = mResults.Any(r => !string.IsNullOrWhiteSpace(r.ResultValue));
+                var isVer = mResults.Count > 0 && mResults.All(r => r.IsVerified);
+                var isAuth = !string.IsNullOrWhiteSpace(m.Remarks) &&
+                             (m.Remarks.Contains("[AUTH_RELEASE]", StringComparison.OrdinalIgnoreCase) ||
+                              m.Remarks.Contains("Authorized Release", StringComparison.OrdinalIgnoreCase));
+
+                return new MatchedReportItem
+                {
+                    ID = m.ID,
+                    PatientID = m.PatientID,
+                    PatientName = m.PatientName,
+                    Contact = m.Contact,
+                    Age = m.Age,
+                    Sex = m.Sex,
+                    TransDate = m.TransDate,
+                    Total = m.Total,
+                    Discount = m.Discount,
+                    Paid = m.Paid,
+                    IsAuthRelease = isAuth,
+                    DoctorID = m.DoctorID,
+                    TestNames = m.Items.Select(i => ServiceName(i.TestID)).ToList(),
+                    HasResults = hasEntered,
+                    IsVerified = isVer || (hasEntered && mResults.Any(r => r.IsVerified))
+                };
+            }).OrderByDescending(m => m.TransDate).ToList();
+
+            if (matchedReports.Count == 1)
+            {
+                // Single report found: directly load
+                await LoadReportAsync(matchedReports[0].ID);
+            }
+            else
+            {
+                // Multiple reports found: display list with latest 1st
+                isLoading = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = isBangla ? $"অনুসন্ধানে সমস্যা হয়েছে: {ex.Message}" : $"Search error: {ex.Message}";
+            isLoading = false;
+        }
+    }
+
+    private async Task SelectReport(long memoId)
+    {
+        await LoadReportAsync(memoId);
+    }
+
+    private void BackToReportsList()
+    {
+        memo = null;
+        isLoading = false;
+    }
+
+    private async Task ReloadCurrentMemoAsync()
+    {
+        if (memo != null)
+        {
+            await LoadReportAsync(memo.ID);
+        }
+    }
+
+    private void ResetSearch()
+    {
+        memo = null;
+        matchedReports.Clear();
+        orderItems.Clear();
+        sampleCollections.Clear();
+        allResults.Clear();
+        resultsByService.Clear();
+        errorMessage = "";
+        searchQuery = "";
+        isPublished = false;
+        canViewReport = false;
+        isPaidInFull = false;
+        isAuthorizedRelease = false;
+        dueAmount = 0;
+        netPayable = 0;
+        paidAmount = 0;
+        isLoading = false;
+    }
+
+    private async Task LoadReportAsync(long memoId)
+    {
+        isLoading = true;
+        errorMessage = "";
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            doctors = await db.Doctors.AsNoTracking().ToListAsync();
+            services = await db.Services.AsNoTracking().ToListAsync();
+
+            memo = await db.EmergencyMemos.AsNoTracking()
+                .Include(x => x.Items)
+                .FirstOrDefaultAsync(x => x.ID == memoId && (x.ModuleID == 2 || x.ModuleID == 11));
+
+            if (memo == null)
+            {
+                errorMessage = isBangla
+                    ? $"ইনভয়েস #{memoId} পাওয়া যায়নি। অনুগ্রহ করে সঠিক বিল নম্বর নিশ্চিত করুন।"
+                    : $"Invoice #{memoId} was not found. Please check the number on your payment receipt.";
+                isLoading = false;
+                return;
+            }
+
+            // Calculate financial & due status
+            grossTotal = memo.Total;
+            discount = memo.Discount;
+            netPayable = Math.Max(0, memo.Total - memo.Discount);
+            paidAmount = memo.Paid;
+            dueAmount = Math.Max(0, netPayable - memo.Paid);
+            isPaidInFull = dueAmount <= 0.01m;
+            isAuthorizedRelease = !string.IsNullOrWhiteSpace(memo.Remarks) &&
+                                  (memo.Remarks.Contains("[AUTH_RELEASE]", StringComparison.OrdinalIgnoreCase) ||
+                                   memo.Remarks.Contains("Authorized Release", StringComparison.OrdinalIgnoreCase));
+            canViewReport = isPaidInFull || isAuthorizedRelease;
+
+            orderItems = memo.Items.ToList();
+            sampleCollections = await db.LabSampleCollections.AsNoTracking()
+                .Where(x => x.MemoID == memoId)
+                .ToListAsync();
+
+            allResults = await db.LabTestResults.AsNoTracking()
+                .Where(x => x.MemoID == memoId)
+                .ToListAsync();
+
+            // Check sample status
+            hasSampleCollected = sampleCollections.Any(x => x.Status == "Collected" || x.Status == "InProcess" || x.Status == "Completed");
+            sampleCollectionDate = sampleCollections.Where(x => x.CollectedAt.HasValue).Select(x => x.CollectedAt).FirstOrDefault() ?? memo.TransDate;
+
+            // Group results by service
+            resultsByService = allResults
+                .Where(x => !string.IsNullOrWhiteSpace(x.ResultValue))
+                .GroupBy(x => x.ServiceID)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // Estimated Delivery: standard 12 to 24 hours from billing
+            expectedDeliveryDate = memo.TransDate.AddHours(24);
+
+            // Determine if published: must have results and at least verified or results entered
+            var hasEnteredResults = allResults.Count > 0 && allResults.Any(x => !string.IsNullOrWhiteSpace(x.ResultValue));
+            var areResultsVerified = allResults.Count > 0 && allResults.All(x => x.IsVerified);
+
+            isPublished = hasEnteredResults && (areResultsVerified || allResults.Any(x => x.IsVerified));
+
+            if (isPublished)
+            {
+                reportReleaseDate = allResults.Where(x => x.ReportedAt.HasValue).Select(x => x.ReportedAt).Max() ?? DateTime.Now;
+                verifyingDoctorId = allResults.Where(x => x.ReportedBy.HasValue).Select(x => x.ReportedBy).FirstOrDefault() ?? memo.DoctorID;
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = isBangla
+                ? $"তথ্য লোড করতে সমস্যা হয়েছে: {ex.Message}"
+                : $"Failed to load report: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Test #{id}";
+
+    private string DoctorName(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d == null ? (isBangla ? "কনসালটেন্ট প্যাথলজিস্ট" : "Consultant Pathologist") : $"{d.Title} {d.Name}";
+    }
+
+    private async Task PrintReportAsync()
+    {
+        if (memo != null)
+        {
+            await JS.InvokeVoidAsync("window.hpm.printElement", "printable-sheet", $"Diagnostic Report #{memo.ID}");
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("window.print");
+        }
+    }
+}

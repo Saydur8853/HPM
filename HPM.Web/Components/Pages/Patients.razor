@@ -1,0 +1,1699 @@
+@page "/patients"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@implements IAsyncDisposable
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Patient Registration") | @Branding.HospitalName</PageTitle>
+
+<div class="patient-classic-fit">
+    @if (editor.ID > 0)
+    {
+        <!-- Fast Clinical Action Bar for saved patient (tabindex -1 so Tab skips non-entry links) -->
+        <div class="patient-screen-fast-flow">
+            <span class="flow-title">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                @I18n.T("Next Action for") <strong>@editor.Name (@editor.PatientID)</strong>:
+            </span>
+            <div class="flow-actions">
+                <a class="flow-pill flow-highlight" tabindex="-1" href="patient-documents?patientId=@editor.PatientID">&#128196; @I18n.T("All Reports")</a>
+                <a class="flow-pill" tabindex="-1" href="tickets?patientId=@editor.PatientID">&#127915; @I18n.T("OPD Ticket")</a>
+                <a class="flow-pill" tabindex="-1" href="appointments?patientId=@editor.PatientID">&#128197; @I18n.T("Doctor Appt")</a>
+                <a class="flow-pill" tabindex="-1" href="emergency-services?patientId=@editor.PatientID">&#128680; @I18n.T("Emergency")</a>
+                <a class="flow-pill" tabindex="-1" href="ipd/admissions?patientId=@editor.PatientID">&#128719; @I18n.T("IPD Admission")</a>
+                <a class="flow-pill" tabindex="-1" href="diagnostic/billing?patientId=@editor.PatientID">&#129514; @I18n.T("Diagnostic Bill")</a>
+            </div>
+        </div>
+    }
+
+    <div class="patient-classic-card">
+        <EditForm @key="editor.ID" Model="editor" OnValidSubmit="SaveAsync">
+            <DataAnnotationsValidator />
+
+            <!-- Row 1 Top Identifier Bar: Patient ID (Tab 1) and Patient Contact No. (Tab 2) -->
+            <div class="classic-top-bar">
+                <!-- Patient ID Search Combo -->
+                <div class="top-id-cell">
+                    <span class="classic-label bold-label">@I18n.T("Patient ID")</span>
+                    <div class="id-search-combo search-field-wrapper">
+                        <input id="input-patient-id"
+                               class="classic-input id-input" 
+                               tabindex="1"
+                               value="@idInput" 
+                               @oninput="OnIdInput" 
+                               @onkeydown="HandleIdKeyDown" 
+                               @onfocus="FilterIdSuggestionsAsync"
+                               title="@I18n.T("Type Patient ID & press Enter to search (or ESC to clear)")" />
+                        <button type="button" tabindex="-1" class="id-btn reset-btn" @onclick="Reset" title="@I18n.T("New / Reset")">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                        </button>
+                        <button type="button" tabindex="-1" class="id-btn search-btn" @onclick="SearchByIdAsync" title="@I18n.T("Search by ID (Enter)")">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                        </button>
+                        <!-- Live Suggestions Dropdown for Patient ID -->
+                        @if (showIdSuggestions && idSuggestions.Count > 0)
+                        {
+                            <div class="suggestions-dropdown id-dropdown">
+                                <div class="suggestions-header">
+                                    <span>@I18n.T("Recent / Matching Patients")</span>
+                                    <span class="close-sugg" tabindex="-1" @onclick="() => showIdSuggestions = false" @onmousedown:preventDefault>✕</span>
+                                </div>
+                                @foreach (var p in idSuggestions)
+                                {
+                                    <div class="suggestion-item" @onclick="() => SelectSuggestion(p)" @onmousedown:preventDefault>
+                                        <div class="sugg-top">
+                                            <strong class="sugg-id">@p.PatientID</strong>
+                                            <span class="sugg-name">@p.Name</span>
+                                        </div>
+                                        <div class="sugg-sub">
+                                            <span>📞 @p.Contact</span>
+                                            <span>🕒 @p.TransDate.ToString("dd-MMM-yyyy hh:mm tt")</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Patient Contact No. Search Combo -->
+                <div class="top-phone-cell">
+                    <span class="classic-label bold-label">@I18n.T("Patient's Contact No.")<span class="req">*</span></span>
+                    <div class="phone-search-combo search-field-wrapper">
+                        <input id="input-contact-no"
+                               class="classic-input phone-input" 
+                               tabindex="2"
+                               value="@editor.Contact" 
+                               @oninput="OnPhoneInput" 
+                               @onkeydown="HandlePhoneKeyDown" 
+                               @onfocus="FilterPhoneSuggestionsAsync"
+                               title="@I18n.T("Enter mobile & press Enter to search (or ESC to clear)")" />
+                        <button type="button" tabindex="-1" class="id-btn search-btn" @onclick="SearchByPhoneAsync" title="@I18n.T("Search by Phone (Enter)")">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                        </button>
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-secondary patient-top-action" tabindex="-1" type="button" @onclick="() => showCardPreview = true" title="@I18n.T("Print / Export Patient Card (Ctrl+P)")">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                                    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                                    <rect x="6" y="14" width="12" height="8"></rect>
+                                </svg>
+                                @I18n.T("Print Card")
+                            </button>
+                            <button class="btn btn-secondary patient-top-action" tabindex="-1" type="button" @onclick="Reset">+ @I18n.T("New Patient")</button>
+                        }
+
+                        <!-- Live Suggestions Dropdown for Contact No -->
+                        @if (showPhoneSuggestions && phoneSuggestions.Count > 0)
+                        {
+                            <div class="suggestions-dropdown phone-dropdown">
+                                <div class="suggestions-header">
+                                    <span>@I18n.T("Recent / Matching Contacts")</span>
+                                    <span class="close-sugg" tabindex="-1" @onclick="() => showPhoneSuggestions = false" @onmousedown:preventDefault>✕</span>
+                                </div>
+                                @foreach (var p in phoneSuggestions)
+                                {
+                                    <div class="suggestion-item" @onclick="() => SelectSuggestion(p)" @onmousedown:preventDefault>
+                                        <div class="sugg-top">
+                                            <strong class="sugg-phone">📞 @p.Contact</strong>
+                                            <span class="sugg-name">@p.Name</span>
+                                        </div>
+                                        <div class="sugg-sub">
+                                            <span>ID: @p.PatientID</span>
+                                            <span>🕒 @p.TransDate.ToString("dd-MMM-yyyy hh:mm tt")</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <!-- Two Balanced Columns Below Top Bar -->
+            <div class="classic-form-layout">
+                <!-- Left Column: Patient Personal Demographics (Tab 3 to 11) -->
+                <div class="classic-column-left">
+                    <!-- 3: Name -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Name")<span class="req">*</span></span>
+                        <InputText class="classic-input" tabindex="3" @bind-Value="editor.Name" placeholder="@I18n.T("Patient Full Name")" />
+                    </div>
+
+                    <!-- 4: Date of Birth -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Date of Birth")</span>
+                        <InputDate class="classic-input" tabindex="4" @bind-Value="editor.DateOfBirth" @bind-Value:after="OnDobChangedAfter" />
+                    </div>
+
+                    <!-- Age (Year Month Day Hour) - Editable; updates Date of Birth automatically -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Age (Year Month Day Hour)")<span class="req">*</span></span>
+                        <div class="age-quad-group">
+                            <div class="age-subfield">
+                                <input type="number" class="classic-input age-box editable-age-box" value="@ageYears" min="0" max="150" tabindex="5" @oninput='e => OnAgeChanged("years", e)' title="@I18n.T("Years")" />
+                                <span class="age-unit">Y</span>
+                            </div>
+                            <div class="age-subfield">
+                                <input type="number" class="classic-input age-box editable-age-box" value="@ageMonths" min="0" max="11" tabindex="6" @oninput='e => OnAgeChanged("months", e)' title="@I18n.T("Months")" />
+                                <span class="age-unit">M</span>
+                            </div>
+                            <div class="age-subfield">
+                                <input type="number" class="classic-input age-box editable-age-box" value="@ageDays" min="0" max="30" tabindex="7" @oninput='e => OnAgeChanged("days", e)' title="@I18n.T("Days")" />
+                                <span class="age-unit">D</span>
+                            </div>
+                            <div class="age-subfield">
+                                <input type="number" class="classic-input age-box editable-age-box" value="@ageHours" min="0" max="23" tabindex="8" @oninput='e => OnAgeChanged("hours", e)' title="@I18n.T("Hours")" />
+                                <span class="age-unit">H</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 5: Gender with Symbols -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Gender")<span class="req">*</span></span>
+                        <InputSelect class="classic-input" tabindex="9" @bind-Value="editor.Sex">
+                            <option value="">@I18n.T("Select")</option>
+                            <option value="Male">&#9794; Male</option>
+                            <option value="Female">&#9792; Female</option>
+                            <option value="Other">&#9895; Other</option>
+                        </InputSelect>
+                    </div>
+
+                    <!-- 6: Father's Name -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Father's Name")</span>
+                        <InputText class="classic-input" tabindex="10" @bind-Value="editor.FatherName" placeholder="@I18n.T("Father's Name")" />
+                    </div>
+
+                    <!-- 7: Mother's Name -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Mother's Name")</span>
+                        <InputText class="classic-input" tabindex="11" @bind-Value="editor.MotherName" placeholder="@I18n.T("Mother's Name")" />
+                    </div>
+
+                    <!-- 8: Spouse -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Spouse")</span>
+                        <InputText class="classic-input" tabindex="12" @bind-Value="editor.CareOf" placeholder="@I18n.T("Spouse / Guardian / Care Of")" />
+                    </div>
+
+                    <!-- 9: Email -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Email")</span>
+                        <InputText class="classic-input" tabindex="13" @bind-Value="editor.Email" placeholder="patient@example.com" />
+                    </div>
+
+                    <!-- 10: Occupation -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Occupation")</span>
+                        <InputText class="classic-input" tabindex="14" @bind-Value="editor.Occupation" placeholder="@I18n.T("Occupation")" />
+                    </div>
+
+                    <!-- 11: Blood Group -->
+                    <div class="classic-row">
+                        <span class="classic-label">@I18n.T("Blood Group")</span>
+                        <InputSelect class="classic-input" tabindex="15" @bind-Value="editor.BloodGroup">
+                            <option value="">@I18n.T("Select")</option>
+                            @foreach (var bg in bloodGroups) { <option>@bg</option> }
+                        </InputSelect>
+                    </div>
+                </div>
+
+                <!-- Right Column: Addresses (Tab 12 to 20) -->
+                <div class="classic-column-right">
+                    <!-- Present Address Fieldset (Tab 12 to 15) -->
+                    <fieldset class="classic-fieldset">
+                        <legend class="classic-legend">@I18n.T("Present Address")</legend>
+
+                        <!-- 12: Present Village -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Village/Holding")</span>
+                            <input class="classic-input" tabindex="16" value="@editor.PresentVillage" @oninput="OnPresentVillageInput" placeholder="@I18n.T("Village / House / Holding")" />
+                        </div>
+                        <!-- 13: Present PO -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Post Office")</span>
+                            <input class="classic-input" tabindex="17" value="@editor.PresentPO" @oninput="OnPresentPOInput" placeholder="@I18n.T("Post Office")" />
+                        </div>
+                        <!-- 14: Present PS -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Police Station/Upazilla")</span>
+                            <input class="classic-input" tabindex="18" value="@editor.PresentPS" @oninput="OnPresentPSInput" placeholder="@I18n.T("Police Station / Upazilla")" />
+                        </div>
+                        <!-- 15: Present District -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("District")</span>
+                            <input class="classic-input" tabindex="19" value="@editor.PresentDistrict" @oninput="OnPresentDistrictInput" placeholder="@I18n.T("District")" />
+                        </div>
+                    </fieldset>
+
+                    <!-- 16: Same Address Checkbox (Tab 16) -->
+                    <div class="classic-check-row">
+                        <input type="checkbox" id="chk-same-address" tabindex="20" checked="@sameAddress" @onchange="OnSameAddressCheckboxChanged" />
+                        <label for="chk-same-address">@I18n.T("Same as permanent address")</label>
+                    </div>
+
+                    <!-- Permanent Address Fieldset (Tab 17 to 20 when enabled, skipped (-1) when sameAddress is true) -->
+                    <fieldset class="classic-fieldset @(sameAddress ? "is-disabled" : "")">
+                        <legend class="classic-legend">@I18n.T("Permanent Address")</legend>
+
+                        <!-- 17: Permanent Village -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Village/Holding")</span>
+                            <input class="classic-input" tabindex="@(sameAddress ? -1 : 21)" value="@editor.PermanentVillage" @oninput="e => editor.PermanentVillage = e.Value?.ToString()" readonly="@sameAddress" placeholder="@I18n.T("Village / House / Holding")" />
+                        </div>
+                        <!-- 18: Permanent PO -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Post Office")</span>
+                            <input class="classic-input" tabindex="@(sameAddress ? -1 : 22)" value="@editor.PermanentPO" @oninput="e => editor.PermanentPO = e.Value?.ToString()" readonly="@sameAddress" placeholder="@I18n.T("Post Office")" />
+                        </div>
+                        <!-- 19: Permanent PS -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("Police Station/Upazilla")</span>
+                            <input class="classic-input" tabindex="@(sameAddress ? -1 : 23)" value="@editor.PermanentPS" @oninput="e => editor.PermanentPS = e.Value?.ToString()" readonly="@sameAddress" placeholder="@I18n.T("Police Station / Upazilla")" />
+                        </div>
+                        <!-- 20: Permanent District -->
+                        <div class="classic-row address-row">
+                            <span class="classic-label">@I18n.T("District")</span>
+                            <input class="classic-input" tabindex="@(sameAddress ? -1 : 24)" value="@editor.PermanentDistrict" @oninput="e => editor.PermanentDistrict = e.Value?.ToString()" readonly="@sameAddress" placeholder="@I18n.T("District")" />
+                        </div>
+                    </fieldset>
+                </div>
+            </div>
+
+            <!-- Footer Actions: Save Patient Profile (Tab 21) -->
+            <div class="classic-footer">
+                <div class="footer-msg">
+                    @if (!string.IsNullOrWhiteSpace(message))
+                    {
+                        <div class="inline-status @messageClass">
+                            @if (messageClass == "success")
+                            {
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                            }
+                            else
+                            {
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            }
+                            <span class="status-msg-text">@message</span>
+                            @if (editor.ID > 0)
+                            {
+                                <span class="status-reg-datetime">
+                                    | Reg Date & Time: <strong>@editor.TransDate.ToString("dd-MMM-yyyy hh:mm tt")</strong>
+                                </span>
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="footer-buttons">
+                    @if (editor.ID > 0)
+                    {
+                        <button class="btn btn-ghost btn-delete" tabindex="-1" type="button" @onclick="DeleteAsync">@I18n.T("Delete")</button>
+                    }
+                    <!-- Save/Update Patient Profile button (Tab loops cleanly back to first field) -->
+                    <button id="btn-save-profile" 
+                            class="btn btn-primary btn-save" 
+                            type="submit" 
+                            data-profile-mode="@(editor.ID > 0 ? "update" : "create")"
+                            tabindex="25" 
+                            @onkeydown="HandleSaveButtonKeyDown"
+                            disabled="@saving">
+                        @(saving
+                            ? I18n.T("Saving...")
+                            : editor.ID > 0
+                                ? I18n.T("Update Patient Profile")
+                                : I18n.T("Save Patient Profile"))
+                    </button>
+                    @if (editor.ID <= 0)
+                    {
+                        <button class="btn btn-ghost" tabindex="-1" type="button" @onclick="Reset">@I18n.T("Clear")</button>
+                    }
+                </div>
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+@if (showDependencyModal)
+{
+    <div class="modal-backdrop patient-dependency-backdrop" @onclick="CloseDependencyModal">
+        <div class="patient-dependency-modal" role="dialog" aria-modal="true" aria-labelledby="dependency-modal-title" @onclick:stopPropagation>
+            <div class="patient-dependency-header">
+                <div>
+                    <h3 id="dependency-modal-title">Patient-dependent records</h3>
+                    <p><strong>@editor.PatientID</strong> — @editor.Name</p>
+                </div>
+                <button type="button" class="patient-dependency-close" @onclick="CloseDependencyModal" aria-label="Close">×</button>
+            </div>
+
+            <div class="patient-dependency-warning">
+                Delete the records one by one. The patient profile can be deleted only after this list is empty.
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(dependencyMessage))
+            {
+                <div class="patient-dependency-message @(dependencyMessageIsError ? "error" : "success")">@dependencyMessage</div>
+            }
+
+            <div class="patient-dependency-list">
+                @if (patientDependencies.Count == 0)
+                {
+                    <div class="patient-dependency-empty">No dependent records remain. You may now delete the patient profile.</div>
+                }
+                else
+                {
+                    @foreach (var dependency in patientDependencies)
+                    {
+                        <div class="patient-dependency-row">
+                            <div class="patient-dependency-details">
+                                <strong>@dependency.Label</strong>
+                                <span>@dependency.Reference</span>
+                                <small>@dependency.Description · @dependency.EventDate.ToString("dd-MMM-yyyy hh:mm tt")</small>
+                            </div>
+                            <button type="button" class="btn patient-dependency-delete" disabled="@deletingDependency" @onclick="() => RequestDependencyDelete(dependency)">
+                                @(deletingDependency && deletingDependencyKey == dependency.Key ? "Deleting..." : "Delete")
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="patient-dependency-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseDependencyModal">Close</button>
+                <button type="button" class="btn btn-delete-profile-final" disabled="@(patientDependencies.Count > 0 || deletingDependency)" @onclick="RequestPatientProfileDeletion">
+                    Delete Patient Profile
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (pendingDependency is not null || confirmingProfileDeletion)
+{
+    <div class="patient-action-backdrop" @onclick="CancelPatientAction">
+        <div class="patient-action-dialog" role="alertdialog" aria-modal="true" aria-labelledby="patient-action-title" @onclick:stopPropagation>
+            <div class="patient-action-icon">!</div>
+            <div class="patient-action-content">
+                <h3 id="patient-action-title">@(confirmingProfileDeletion ? "Delete patient profile?" : "Delete dependent record?")</h3>
+
+                @if (pendingDependency is not null)
+                {
+                    <p>This record will be permanently deleted and cannot be recovered.</p>
+                    <div class="patient-action-record">
+                        <strong>@pendingDependency.Label</strong>
+                        <span>@pendingDependency.Reference</span>
+                        <small>@pendingDependency.Description</small>
+                    </div>
+
+                    @if (DependencyRequiresReason(pendingDependency))
+                    {
+                        <label class="patient-action-reason-label" for="patient-delete-reason">Reversal reason <span>*</span></label>
+                        <textarea id="patient-delete-reason" class="patient-action-reason" rows="3" maxlength="300"
+                                  @bind="actionDialogReason" @bind:event="oninput"
+                                  placeholder="Enter why this financial record is being deleted"></textarea>
+                    }
+                }
+                else
+                {
+                    <p>This will permanently delete the patient profile. This action cannot be undone.</p>
+                    <div class="patient-action-record">
+                        <strong>@editor.Name</strong>
+                        <span>Patient ID: @editor.PatientID</span>
+                        <small>All dependent records have been cleared.</small>
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(actionDialogError))
+                {
+                    <div class="patient-action-error">@actionDialogError</div>
+                }
+
+                <div class="patient-action-buttons">
+                    <button type="button" class="btn btn-secondary" disabled="@deletingDependency" @onclick="CancelPatientAction">Cancel</button>
+                    <button type="button" class="btn patient-action-confirm"
+                            disabled="@(deletingDependency || (pendingDependency is not null && DependencyRequiresReason(pendingDependency) && string.IsNullOrWhiteSpace(actionDialogReason)))"
+                            @onclick="ConfirmPatientActionAsync">
+                        @(deletingDependency ? "Deleting..." : "Yes, Delete")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (editor.ID > 0)
+{
+    <!-- Printable Patient CR80 Card (85.60mm x 53.98mm, Corner Radius: 3.18mm) -->
+    <div id="patient-print" class="print-document" style="display:none;">
+        <div class="patient-id-card-wrapper">
+            <div class="patient-cr80-card">
+                <!-- Header: Hospital Name & Logo (11.5mm) -->
+                <div class="card-header">
+                    <div class="card-brand">
+                        @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                        {
+                            <img src="@Branding.LogoData" alt="Logo" class="card-logo" />
+                        }
+                        else
+                        {
+                            <div class="card-logo-fallback">🏥</div>
+                        }
+                        <div class="card-title-group">
+                            <div class="card-hospital-name">@Branding.HospitalName</div>
+                            <div class="card-doc-type">PATIENT IDENTIFICATION CARD</div>
+                        </div>
+                    </div>
+                    <div class="card-header-badge">
+                        <span class="badge-label">PID</span>
+                        <span class="badge-value">@editor.PatientID</span>
+                    </div>
+                </div>
+
+                <!-- Body: Patient Details & QR Code (28mm) -->
+                <div class="card-body">
+                    <div class="card-info-col">
+                        <div class="card-patient-name" title="@editor.Name">@editor.Name</div>
+                        
+                        <div class="card-grid">
+                            <div class="card-field">
+                                <span class="field-lbl">Age:</span>
+                                <span class="field-val"><strong>@FormattedAge</strong></span>
+                            </div>
+                            <div class="card-field">
+                                <span class="field-lbl">Gender:</span>
+                                <span class="field-val">@editor.Sex</span>
+                            </div>
+                            <div class="card-field">
+                                <span class="field-lbl">Blood Group:</span>
+                                <span class="field-val blood-highlight">🩸 @(string.IsNullOrWhiteSpace(editor.BloodGroup) ? "N/A" : editor.BloodGroup)</span>
+                            </div>
+                            <div class="card-field">
+                                <span class="field-lbl">Reg Date:</span>
+                                <span class="field-val">@editor.TransDate.ToString("dd-MMM-yy")</span>
+                            </div>
+                            <div class="card-field span-2">
+                                <span class="field-lbl">Contact No:</span>
+                                <span class="field-val">📞 @(string.IsNullOrWhiteSpace(editor.Contact) ? "N/A" : editor.Contact)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-qr-col">
+                        <div class="card-qr-box">
+                            @((MarkupString)BarcodeQr.GenerateQrSvg(BarcodeQr.GeneratePatientQrPayload(editor.ID, editor.PatientID, editor.Name, editor.Contact), pixelsPerModule: 2))
+                        </div>
+                        <div class="card-qr-sub">SCAN QR</div>
+                    </div>
+                </div>
+
+                <!-- Footer: 1D Barcode with Patient ID (13.5mm) -->
+                <div class="card-footer">
+                    <div class="card-barcode-wrap">
+                        @((MarkupString)BarcodeQr.GenerateBarcodeSvg(editor.PatientID, barHeight: 18, includeText: true))
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (showCardPreview && editor.ID > 0)
+{
+    <div class="patient-card-modal-backdrop" @onclick="() => showCardPreview = false">
+        <div class="patient-card-modal-content" @onclick:stopPropagation>
+            <div class="patient-card-modal-header">
+                <div>
+                    <h3 style="margin:0; font-size:15px; font-weight:800; color:#0f172a;">🪪 @I18n.T("Patient ID Card Preview")</h3>
+                    <p style="margin:2px 0 0; font-size:11px; color:#64748b;">Standard CR80 &bull; 85.60 mm &times; 53.98 mm &bull; Corner Radius: 3.18 mm</p>
+                </div>
+                <button type="button" class="btn-close-modal" @onclick="() => showCardPreview = false">&times;</button>
+            </div>
+            <div class="patient-card-modal-body">
+                <div id="patient-preview-card" class="patient-cr80-card">
+                    <!-- Header: Hospital Name & Logo (11.5mm) -->
+                    <div class="card-header">
+                        <div class="card-brand">
+                            @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                            {
+                                <img src="@Branding.LogoData" alt="Logo" class="card-logo" />
+                            }
+                            else
+                            {
+                                <div class="card-logo-fallback">🏥</div>
+                            }
+                            <div class="card-title-group">
+                                <div class="card-hospital-name">@Branding.HospitalName</div>
+                                <div class="card-doc-type">PATIENT IDENTIFICATION CARD</div>
+                            </div>
+                        </div>
+                        <div class="card-header-badge">
+                            <span class="badge-label">PID</span>
+                            <span class="badge-value">@editor.PatientID</span>
+                        </div>
+                    </div>
+
+                    <!-- Body: Patient Details & QR Code (28mm) -->
+                    <div class="card-body">
+                        <div class="card-info-col">
+                            <div class="card-patient-name" title="@editor.Name">@editor.Name</div>
+                            
+                            <div class="card-grid">
+                                <div class="card-field">
+                                    <span class="field-lbl">Age:</span>
+                                    <span class="field-val"><strong>@FormattedAge</strong></span>
+                                </div>
+                                <div class="card-field">
+                                    <span class="field-lbl">Gender:</span>
+                                    <span class="field-val">@editor.Sex</span>
+                                </div>
+                                <div class="card-field">
+                                    <span class="field-lbl">Blood Group:</span>
+                                    <span class="field-val blood-highlight">🩸 @(string.IsNullOrWhiteSpace(editor.BloodGroup) ? "N/A" : editor.BloodGroup)</span>
+                                </div>
+                                <div class="card-field">
+                                    <span class="field-lbl">Reg Date:</span>
+                                    <span class="field-val">@editor.TransDate.ToString("dd-MMM-yy")</span>
+                                </div>
+                                <div class="card-field span-2">
+                                    <span class="field-lbl">Contact No:</span>
+                                    <span class="field-val">📞 @(string.IsNullOrWhiteSpace(editor.Contact) ? "N/A" : editor.Contact)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card-qr-col">
+                            <div class="card-qr-box">
+                                @((MarkupString)BarcodeQr.GenerateQrSvg(BarcodeQr.GeneratePatientQrPayload(editor.ID, editor.PatientID, editor.Name, editor.Contact), pixelsPerModule: 2))
+                            </div>
+                            <div class="card-qr-sub">SCAN QR</div>
+                        </div>
+                    </div>
+
+                    <!-- Footer: 1D Barcode with Patient ID (13.5mm) -->
+                    <div class="card-footer">
+                        <div class="card-barcode-wrap">
+                            @((MarkupString)BarcodeQr.GenerateBarcodeSvg(editor.PatientID, barHeight: 18, includeText: true))
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="patient-card-modal-footer">
+                <button type="button" class="btn btn-ghost" @onclick="() => showCardPreview = false">@I18n.T("Close")</button>
+                <div class="modal-footer-spacer"></div>
+                <button type="button" class="btn btn-secondary" @onclick="DownloadPngAsync" title="@I18n.T("Download PNG Image (300+ DPI)")">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    PNG
+                </button>
+                <button type="button" class="btn btn-secondary" @onclick="DownloadPdfAsync" title="@I18n.T("Download CR80 PDF")">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="12" y1="18" x2="12" y2="12"></line>
+                        <line x1="9" y1="15" x2="15" y2="15"></line>
+                    </svg>
+                    PDF
+                </button>
+                <button type="button" class="btn btn-primary" @onclick="PrintCardAsync" title="@I18n.T("Print CR80 Card")">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                        <rect x="6" y="14" width="12" height="8"></rect>
+                    </svg>
+                    @I18n.T("Print")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private static readonly string[] bloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    private Registration editor = NewPatient();
+    private string idInput = string.Empty;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+    private bool sameAddress = true;
+    private bool showDependencyModal;
+    private bool deletingDependency;
+    private string? deletingDependencyKey;
+    private string dependencyMessage = string.Empty;
+    private bool dependencyMessageIsError;
+    private List<PatientDependencyItem> patientDependencies = [];
+    private PatientDependencyItem? pendingDependency;
+    private bool confirmingProfileDeletion;
+    private string actionDialogReason = string.Empty;
+    private string actionDialogError = string.Empty;
+    private DotNetObjectReference<Patients>? shortcutReference;
+
+    private int ageYears;
+    private int ageMonths;
+    private int ageDays;
+    private int ageHours;
+
+    // Live suggestion lists
+    private List<Registration> idSuggestions = new();
+    private bool showIdSuggestions = false;
+    private List<Registration> phoneSuggestions = new();
+    private bool showPhoneSuggestions = false;
+    private bool showCardPreview = false;
+
+    private string FormattedAge
+    {
+        get
+        {
+            if (ageYears > 0) return $"{ageYears} Y";
+            if (ageMonths > 0) return $"{ageMonths} M";
+            if (ageDays > 0) return $"{ageDays} D";
+            if (ageHours > 0) return $"{ageHours} H";
+            return "0 Y";
+        }
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        CalculateAgeFromDob(editor.DateOfBirth);
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        shortcutReference = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.attachPatientShortcuts", shortcutReference);
+        }
+        catch
+        {
+            // Defensive guard against circuit interruption or JS loading delay
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandlePatientShortcut(string action)
+    {
+        if (saving || deletingDependency) return;
+
+        switch (action)
+        {
+            case "print":
+                if (editor.ID > 0)
+                {
+                    showCardPreview = true;
+                    await InvokeAsync(StateHasChanged);
+                }
+                else
+                {
+                    messageClass = "danger";
+                    message = "Please select or register a patient first to print the card.";
+                    await InvokeAsync(StateHasChanged);
+                }
+                break;
+
+            case "save":
+                if (editor.ID > 0)
+                {
+                    messageClass = "danger";
+                    message = "This is an existing patient. Press Ctrl+U to update the profile.";
+                    return;
+                }
+                await JS.InvokeVoidAsync("hpm.clickElementById", "btn-save-profile");
+                break;
+
+            case "update":
+                if (editor.ID <= 0)
+                {
+                    messageClass = "danger";
+                    message = "Search and load a patient before using Ctrl+U.";
+                    return;
+                }
+                await JS.InvokeVoidAsync("hpm.clickElementById", "btn-save-profile");
+                break;
+
+            case "clear":
+                if (showCardPreview)
+                {
+                    showCardPreview = false;
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+                CancelPatientAction();
+                showDependencyModal = false;
+                dependencyMessage = string.Empty;
+                Reset();
+                await InvokeAsync(StateHasChanged);
+                await JS.InvokeVoidAsync("hpm.focusElementById", "input-patient-id");
+                break;
+        }
+    }
+
+    [JSInvokable]
+    public async Task HandlePatientClickOutside(bool outsideId, bool outsidePhone)
+    {
+        bool changed = false;
+        if (outsideId && showIdSuggestions)
+        {
+            showIdSuggestions = false;
+            changed = true;
+        }
+        if (outsidePhone && showPhoneSuggestions)
+        {
+            showPhoneSuggestions = false;
+            changed = true;
+        }
+        if (changed)
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnDobChangedAfter()
+    {
+        CalculateAgeFromDob(editor.DateOfBirth);
+    }
+
+    private void OnAgeChanged(string part, ChangeEventArgs e)
+    {
+        var value = int.TryParse(e.Value?.ToString(), out var parsed) ? parsed : 0;
+        switch (part)
+        {
+            case "years":
+                ageYears = Math.Clamp(value, 0, 150);
+                break;
+            case "months":
+                ageMonths = Math.Clamp(value, 0, 11);
+                break;
+            case "days":
+                ageDays = Math.Clamp(value, 0, 30);
+                break;
+            case "hours":
+                ageHours = Math.Clamp(value, 0, 23);
+                break;
+        }
+
+        editor.DateOfBirth = DateTime.Now
+            .AddYears(-ageYears)
+            .AddMonths(-ageMonths)
+            .AddDays(-ageDays)
+            .AddHours(-ageHours);
+    }
+
+    private void OnSameAddressCheckboxChanged(ChangeEventArgs e)
+    {
+        sameAddress = (bool)(e.Value ?? false);
+        if (sameAddress)
+        {
+            editor.PermanentVillage = editor.PresentVillage;
+            editor.PermanentPO = editor.PresentPO;
+            editor.PermanentPS = editor.PresentPS;
+            editor.PermanentDistrict = editor.PresentDistrict;
+        }
+    }
+
+    private void OnPresentVillageInput(ChangeEventArgs e)
+    {
+        editor.PresentVillage = e.Value?.ToString();
+        if (sameAddress) editor.PermanentVillage = editor.PresentVillage;
+    }
+
+    private void OnPresentPOInput(ChangeEventArgs e)
+    {
+        editor.PresentPO = e.Value?.ToString();
+        if (sameAddress) editor.PermanentPO = editor.PresentPO;
+    }
+
+    private void OnPresentPSInput(ChangeEventArgs e)
+    {
+        editor.PresentPS = e.Value?.ToString();
+        if (sameAddress) editor.PermanentPS = editor.PresentPS;
+    }
+
+    private void OnPresentDistrictInput(ChangeEventArgs e)
+    {
+        editor.PresentDistrict = e.Value?.ToString();
+        if (sameAddress) editor.PermanentDistrict = editor.PresentDistrict;
+    }
+
+    private void CalculateAgeFromDob(DateTime dob)
+    {
+        var today = DateTime.Today;
+        if (dob > today) dob = today;
+        
+        var years = today.Year - dob.Year;
+        var months = today.Month - dob.Month;
+        var days = today.Day - dob.Day;
+
+        if (days < 0)
+        {
+            months--;
+            days += DateTime.DaysInMonth(today.Year, (today.Month == 1 ? 12 : today.Month - 1));
+        }
+        if (months < 0)
+        {
+            years--;
+            months += 12;
+        }
+        if (years < 0) years = 0;
+
+        ageYears = years;
+        ageMonths = months;
+        ageDays = days;
+        ageHours = 0;
+    }
+
+    private async Task OnIdInput(ChangeEventArgs e)
+    {
+        idInput = e.Value?.ToString() ?? string.Empty;
+        await FilterIdSuggestionsAsync();
+    }
+
+    private async Task FilterIdSuggestionsAsync()
+    {
+        var term = (idInput ?? string.Empty).Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (string.IsNullOrWhiteSpace(term) || term.Equals("AUTO", StringComparison.OrdinalIgnoreCase))
+            {
+                idSuggestions = await db.Registrations.AsNoTracking()
+                    .OrderByDescending(x => x.ID)
+                    .Take(6)
+                    .ToListAsync();
+            }
+            else
+            {
+                // Fast indexed query using StartsWith
+                idSuggestions = await db.Registrations.AsNoTracking()
+                    .Where(x => x.PatientID.StartsWith(term))
+                    .OrderByDescending(x => x.ID)
+                    .Take(6)
+                    .ToListAsync();
+
+                if (idSuggestions.Count == 0 && term.Length >= 3)
+                {
+                    idSuggestions = await db.Registrations.AsNoTracking()
+                        .Where(x => x.Name != null && x.Name.StartsWith(term))
+                        .OrderByDescending(x => x.ID)
+                        .Take(6)
+                        .ToListAsync();
+                }
+            }
+            showIdSuggestions = idSuggestions.Count > 0;
+        }
+        catch
+        {
+            idSuggestions.Clear();
+            showIdSuggestions = false;
+        }
+    }
+
+    private async Task OnPhoneInput(ChangeEventArgs e)
+    {
+        editor.Contact = e.Value?.ToString() ?? string.Empty;
+        await FilterPhoneSuggestionsAsync();
+    }
+
+    private async Task FilterPhoneSuggestionsAsync()
+    {
+        var term = (editor.Contact ?? string.Empty).Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (string.IsNullOrWhiteSpace(term))
+            {
+                phoneSuggestions = await db.Registrations.AsNoTracking()
+                    .Where(x => x.Contact != null && x.Contact != "")
+                    .OrderByDescending(x => x.ID)
+                    .Take(6)
+                    .ToListAsync();
+            }
+            else
+            {
+                // Fast indexed query using StartsWith
+                phoneSuggestions = await db.Registrations.AsNoTracking()
+                    .Where(x => x.Contact != null && x.Contact.StartsWith(term))
+                    .OrderByDescending(x => x.ID)
+                    .Take(6)
+                    .ToListAsync();
+
+                if (phoneSuggestions.Count == 0 && term.Length >= 4)
+                {
+                    phoneSuggestions = await db.Registrations.AsNoTracking()
+                        .Where(x => x.Contact != null && x.Contact.EndsWith(term))
+                        .OrderByDescending(x => x.ID)
+                        .Take(6)
+                        .ToListAsync();
+                }
+            }
+            showPhoneSuggestions = phoneSuggestions.Count > 0;
+        }
+        catch
+        {
+            phoneSuggestions.Clear();
+            showPhoneSuggestions = false;
+        }
+    }
+
+    private void SelectSuggestion(Registration p)
+    {
+        showIdSuggestions = false;
+        showPhoneSuggestions = false;
+        Select(p);
+        messageClass = "success";
+        message = $"Loaded patient {p.PatientID} - {p.Name}";
+    }
+
+    private async Task HandleIdKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Tab")
+        {
+            showIdSuggestions = false;
+            if (e.ShiftKey)
+            {
+                await JS.InvokeVoidAsync("hpm.focusElementById", "btn-save-profile");
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            showIdSuggestions = false;
+            idInput = string.Empty;
+            if (editor.ID > 0) Reset();
+            message = string.Empty;
+        }
+        else if (e.Key == "Enter")
+        {
+            showIdSuggestions = false;
+            await SearchByIdAsync();
+        }
+    }
+
+    private async Task HandlePhoneKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Tab")
+        {
+            showPhoneSuggestions = false;
+        }
+        else if (e.Key == "Escape")
+        {
+            showPhoneSuggestions = false;
+            editor.Contact = string.Empty;
+            if (editor.ID > 0) Reset();
+            message = string.Empty;
+        }
+        else if (e.Key == "Enter")
+        {
+            showPhoneSuggestions = false;
+            await SearchByPhoneAsync();
+        }
+    }
+
+    private async Task HandleSaveButtonKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Tab" && !e.ShiftKey)
+        {
+            // Loop back to first input
+            await JS.InvokeVoidAsync("hpm.focusElementById", "input-patient-id");
+        }
+    }
+
+    private async Task SearchByIdAsync()
+    {
+        showIdSuggestions = false;
+        if (string.IsNullOrWhiteSpace(idInput) || idInput.Trim().Equals("AUTO", StringComparison.OrdinalIgnoreCase))
+        {
+            Reset();
+            return;
+        }
+
+        var term = idInput.Trim();
+        if (term.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(term, @"REG:([^|]+)");
+            if (match.Success) term = match.Groups[1].Value;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            
+            // 1. Direct index lookup on PatientID
+            var patient = await db.Registrations.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.PatientID == term);
+
+            // 2. Direct lookup on numeric ID
+            if (patient == null && long.TryParse(term, out var numId))
+            {
+                patient = await db.Registrations.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.ID == numId);
+            }
+
+            // 3. Direct lookup on Contact Mobile
+            if (patient == null)
+            {
+                patient = await db.Registrations.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Contact == term);
+            }
+
+            if (patient != null)
+            {
+                Select(patient);
+                messageClass = "success";
+                message = $"Loaded patient {patient.PatientID} - {patient.Name}";
+            }
+            else
+            {
+                messageClass = "danger";
+                message = $"No patient record found for ID / mobile: '{term}'";
+            }
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Search error: {ex.GetBaseException().Message}";
+        }
+    }
+
+    private async Task SearchByPhoneAsync()
+    {
+        showPhoneSuggestions = false;
+        if (string.IsNullOrWhiteSpace(editor.Contact)) return;
+        var phone = editor.Contact.Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var patient = await db.Registrations.AsNoTracking()
+                .Where(x => x.Contact == phone)
+                .OrderByDescending(x => x.ID)
+                .FirstOrDefaultAsync();
+
+            if (patient == null && phone.StartsWith("0") && phone.Length == 11)
+            {
+                var noZero = phone.Substring(1);
+                patient = await db.Registrations.AsNoTracking()
+                    .Where(x => x.Contact != null && x.Contact.EndsWith(noZero))
+                    .OrderByDescending(x => x.ID)
+                    .FirstOrDefaultAsync();
+            }
+
+            if (patient != null)
+            {
+                Select(patient);
+                messageClass = "success";
+                message = $"Loaded patient {patient.PatientID} - {patient.Name}";
+            }
+            else
+            {
+                messageClass = "danger";
+                message = $"No patient found with mobile number '{phone}'";
+            }
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Search error: {ex.GetBaseException().Message}";
+        }
+    }
+
+    private void Select(Registration p)
+    {
+        editor = new Registration
+        {
+            ID = p.ID,
+            PatientID = p.PatientID,
+            Name = p.Name,
+            DateOfBirth = p.DateOfBirth,
+            Sex = p.Sex,
+            BloodGroup = p.BloodGroup,
+            FatherName = p.FatherName,
+            MotherName = p.MotherName,
+            CareOf = p.CareOf,
+            Contact = p.Contact,
+            Email = p.Email,
+            Occupation = p.Occupation,
+            PresentVillage = p.PresentVillage,
+            PresentPO = p.PresentPO,
+            PresentPS = p.PresentPS,
+            PresentDistrict = p.PresentDistrict,
+            PermanentVillage = p.PermanentVillage,
+            PermanentPO = p.PermanentPO,
+            PermanentPS = p.PermanentPS,
+            PermanentDistrict = p.PermanentDistrict,
+            EnteredBy = p.EnteredBy,
+            TransDate = p.TransDate
+        };
+        sameAddress = string.Equals(p.PresentVillage, p.PermanentVillage, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(p.PresentPO, p.PermanentPO, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(p.PresentPS, p.PermanentPS, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(p.PresentDistrict, p.PermanentDistrict, StringComparison.OrdinalIgnoreCase);
+        idInput = p.PatientID;
+        CalculateAgeFromDob(editor.DateOfBirth);
+        if (sameAddress)
+        {
+            editor.PermanentVillage = editor.PresentVillage;
+            editor.PermanentPO = editor.PresentPO;
+            editor.PermanentPS = editor.PresentPS;
+            editor.PermanentDistrict = editor.PresentDistrict;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        message = string.Empty;
+        try
+        {
+            if (sameAddress)
+            {
+                editor.PermanentVillage = editor.PresentVillage;
+                editor.PermanentPO = editor.PresentPO;
+                editor.PermanentPS = editor.PresentPS;
+                editor.PermanentDistrict = editor.PresentDistrict;
+            }
+
+            if (editor.ID <= 0)
+            {
+                await CreatePatientAsync();
+            }
+            else
+            {
+                await UpdatePatientAsync();
+            }
+
+            messageClass = "success";
+            message = $"Patient profile {editor.PatientID} saved successfully.";
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Could not save patient: {ex.GetBaseException().Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task CreatePatientAsync()
+    {
+        await using var strategyDb = await DbFactory.CreateDbContextAsync();
+        var strategy = strategyDb.Database.CreateExecutionStrategy();
+        Registration? created = null;
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+
+            await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:PatientID");
+            var next = (await db.Registrations.MaxAsync(x => (long?)x.ID) ?? 0) + 1;
+            var generatedPatientId = $"{DateTime.Today.Year}{next:00000}";
+            if (generatedPatientId.Length > 11)
+                throw new InvalidOperationException("Patient number capacity has been reached for the current format.");
+
+            var entity = new Registration
+            {
+                PatientID = generatedPatientId,
+                Name = editor.Name?.Trim() ?? string.Empty,
+                DateOfBirth = editor.DateOfBirth,
+                Sex = editor.Sex,
+                BloodGroup = editor.BloodGroup,
+                FatherName = editor.FatherName,
+                MotherName = editor.MotherName,
+                CareOf = editor.CareOf,
+                PresentVillage = editor.PresentVillage,
+                PresentPO = editor.PresentPO,
+                PresentPS = editor.PresentPS,
+                PresentDistrict = editor.PresentDistrict,
+                PermanentVillage = editor.PermanentVillage,
+                PermanentPO = editor.PermanentPO,
+                PermanentPS = editor.PermanentPS,
+                PermanentDistrict = editor.PermanentDistrict,
+                Contact = editor.Contact,
+                Email = editor.Email,
+                Occupation = editor.Occupation,
+                EnteredBy = editor.EnteredBy <= 0 ? 1 : editor.EnteredBy,
+                TransDate = DateTime.Now
+            };
+
+            db.Registrations.Add(entity);
+            await db.SaveChangesAsync();
+            await transaction.CommitAsync();
+            created = entity;
+        });
+
+        if (created is null)
+            throw new InvalidOperationException("Patient profile could not be created.");
+
+        editor.ID = created.ID;
+        editor.PatientID = created.PatientID;
+        editor.TransDate = created.TransDate;
+        idInput = created.PatientID;
+    }
+
+    private async Task UpdatePatientAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Registrations.FindAsync(editor.ID);
+        if (entity is null)
+            throw new InvalidOperationException($"Patient record #{editor.ID} was not found to update.");
+
+        entity.Name = editor.Name?.Trim() ?? string.Empty;
+        entity.DateOfBirth = editor.DateOfBirth;
+        entity.Sex = editor.Sex;
+        entity.BloodGroup = editor.BloodGroup;
+        entity.FatherName = editor.FatherName;
+        entity.MotherName = editor.MotherName;
+        entity.CareOf = editor.CareOf;
+        entity.PresentVillage = editor.PresentVillage;
+        entity.PresentPO = editor.PresentPO;
+        entity.PresentPS = editor.PresentPS;
+        entity.PresentDistrict = editor.PresentDistrict;
+        entity.PermanentVillage = editor.PermanentVillage;
+        entity.PermanentPO = editor.PermanentPO;
+        entity.PermanentPS = editor.PermanentPS;
+        entity.PermanentDistrict = editor.PermanentDistrict;
+        entity.Contact = editor.Contact;
+        entity.Email = editor.Email;
+        entity.Occupation = editor.Occupation;
+
+        await db.SaveChangesAsync();
+        editor.PatientID = entity.PatientID;
+        editor.TransDate = entity.TransDate;
+        idInput = entity.PatientID;
+    }
+
+    private void Reset()
+    {
+        editor = NewPatient();
+        idInput = string.Empty;
+        sameAddress = true;
+        showIdSuggestions = false;
+        showPhoneSuggestions = false;
+        showCardPreview = false;
+        CalculateAgeFromDob(editor.DateOfBirth);
+        message = string.Empty;
+    }
+
+    private static Registration NewPatient() => new() { PatientID = "AUTO", DateOfBirth = DateTime.Today, TransDate = DateTime.Now };
+    private Task PrintAsync() => JS.InvokeVoidAsync("hpm.printPatientCard", "patient-print", $"Patient Card - {editor.PatientID}").AsTask();
+    private Task PrintCardAsync() => JS.InvokeVoidAsync("hpm.printPatientCard", "patient-preview-card", $"Patient Card - {editor.PatientID}").AsTask();
+    private Task DownloadPngAsync() => JS.InvokeVoidAsync("hpm.downloadPatientCardPng", "patient-preview-card", $"PatientCard_{editor.PatientID}").AsTask();
+    private Task DownloadPdfAsync() => JS.InvokeVoidAsync("hpm.downloadPatientCardPdf", "patient-preview-card", $"PatientCard_{editor.PatientID}").AsTask();
+
+    private async Task DeleteAsync()
+    {
+        if (editor.ID == 0) return;
+
+        await LoadPatientDependenciesAsync();
+        if (patientDependencies.Count > 0)
+        {
+            dependencyMessage = string.Empty;
+            dependencyMessageIsError = false;
+            showDependencyModal = true;
+            return;
+        }
+
+        RequestPatientProfileDeletion();
+    }
+
+    private void RequestPatientProfileDeletion()
+    {
+        if (editor.ID == 0 || patientDependencies.Count > 0) return;
+        pendingDependency = null;
+        actionDialogReason = string.Empty;
+        actionDialogError = string.Empty;
+        confirmingProfileDeletion = true;
+    }
+
+    private async Task DeletePatientProfileConfirmedAsync()
+    {
+        if (editor.ID == 0) return;
+
+        await LoadPatientDependenciesAsync();
+        if (patientDependencies.Count > 0)
+        {
+            dependencyMessageIsError = true;
+            dependencyMessage = "New dependent records were found. Delete every listed record before deleting the patient profile.";
+            showDependencyModal = true;
+            confirmingProfileDeletion = false;
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Registrations.FindAsync(editor.ID);
+        if (entity is not null)
+        {
+            db.Registrations.Remove(entity);
+            await db.SaveChangesAsync();
+        }
+
+        showDependencyModal = false;
+        confirmingProfileDeletion = false;
+        Reset();
+        messageClass = "success";
+        message = "Patient profile deleted.";
+    }
+
+    private async Task LoadPatientDependenciesAsync()
+    {
+        var patientId = editor.PatientID;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var items = new List<PatientDependencyItem>();
+
+        var appointments = await db.DoctorAppointments.AsNoTracking().Where(x => x.PatientID == patientId).ToListAsync();
+        items.AddRange(appointments.Select(x => new PatientDependencyItem("appointment", x.ID, "Doctor appointment", $"Appointment #{x.ID}", $"Status: {x.Status}; Serial: {x.ApptSLNO}", x.ApptDate, 70)));
+
+        var tickets = await db.OPDTickets.AsNoTracking().Where(x => x.RegNo == patientId).ToListAsync();
+        items.AddRange(tickets.Select(x => new PatientDependencyItem("ticket", x.ID, "OPD ticket", $"Ticket #{x.ID}", $"Amount: {x.Total:N2}; Doctor ID: {x.DoctorID}", x.TransDate, 70)));
+
+        var encounters = await db.PatientEncounters.AsNoTracking().Where(x => x.PatientID == patientId).ToListAsync();
+        items.AddRange(encounters.Select(x => new PatientDependencyItem("encounter", x.ID, "Clinical encounter", $"Encounter #{x.ID}", $"{x.VisitType}; Status: {x.Status}", x.CheckedInAt, 60)));
+
+        var prescriptions = await db.Prescriptions.AsNoTracking().Where(x => x.PatientID == patientId).ToListAsync();
+        items.AddRange(prescriptions.Select(x => new PatientDependencyItem("prescription", x.ID, "Prescription", $"Prescription #{x.ID}", $"Status: {x.Status}", x.SignedAt ?? x.VisitDate ?? DateTime.MinValue, 20)));
+
+        var diagnosticOrders = await db.DiagnosticOrders.AsNoTracking().Where(x => x.PatientID == patientId).ToListAsync();
+        items.AddRange(diagnosticOrders.Select(x => new PatientDependencyItem("diagnostic-order", x.ID, "Diagnostic order", $"Order #{x.ID}", $"Status: {x.Status}", x.OrderedAt, 10)));
+
+        var emergencyMemos = await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.PatientID == patientId || x.RegNo == patientId).ToListAsync();
+        items.AddRange(emergencyMemos.Select(x => new PatientDependencyItem("emergency-memo", x.ID, "Cash memo / diagnostic bill", $"Memo #{x.ID}", $"Total: {x.Total:N2}; Paid: {x.Paid:N2}", x.TransDate, 30)));
+
+        var otMemos = await db.OTCashMemos.AsNoTracking()
+            .Where(x => x.PatientID == patientId || x.RegNo == patientId).ToListAsync();
+        items.AddRange(otMemos.Select(x => new PatientDependencyItem("ot-memo", x.ID, "OT cash memo", $"Memo #{x.ID}", $"Total: {x.Total:N2}; Discount: {x.Discount:N2}", x.TransDate, 30)));
+
+        var admissions = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patientId).ToListAsync();
+        foreach (var admission in admissions)
+        {
+            var regNo = admission.RegNo;
+
+            var finalBills = await db.IpdFinalBills.AsNoTracking().Where(x => x.AdmissionID == admission.ID || x.RegNo == regNo).ToListAsync();
+            items.AddRange(finalBills.Select(x => new PatientDependencyItem("ipd-final-bill", x.BillNo, "IPD final bill", $"Bill #{x.BillNo} / {regNo}", $"Net: {x.NetAmount:N2}; {x.SettlementStatus}", x.GeneratedAt, 10)));
+
+            var dischargeOrders = await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x => x.AdmissionID == admission.ID).ToListAsync();
+            items.AddRange(dischargeOrders.Select(x => new PatientDependencyItem("ipd-discharge", x.ID, "IPD discharge order", $"Order #{x.ID} / {regNo}", $"Status: {x.Status}; Outcome: {x.Outcome}", x.OrderedAt, 20)));
+
+            var receipts = await db.IpdMoneyReceipts.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(receipts.Select(x => new PatientDependencyItem("ipd-receipt", x.ID, "IPD money receipt", $"Receipt #{x.ID} / {regNo}", $"{x.Against}: {x.Amount:N2}", x.TransDate, 30)));
+
+            var payments = await db.PatientPayments.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(payments.Select(x => new PatientDependencyItem("ipd-payment", x.ID, "IPD patient payment", $"Payment #{x.ID} / {regNo}", $"Amount: {x.Amount:N2}", x.TransDate, 30)));
+
+            var services = await db.IpdPatientServiceItems.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(services.Select(x => new PatientDependencyItem("ipd-service", x.ID, "IPD service item", $"Service #{x.ID} / {regNo}", $"{x.ServiceName}: {x.Total:N2}", x.ServiceDate, 30)));
+
+            var bedTransactions = await db.BedCabinTransactions.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(bedTransactions.Select(x => new PatientDependencyItem("ipd-bed-transaction", x.ID, "IPD bed transaction", $"Bed transaction #{x.ID} / {regNo}", $"Bed ID: {x.BedCabinID}; Rate: {x.Rate:N2}", x.StartDate, 30)));
+
+            var bedTurnovers = await db.BedTurnovers.AsNoTracking().Where(x => x.AdmissionID == admission.ID || x.RegNo == regNo).ToListAsync();
+            items.AddRange(bedTurnovers.Select(x => new PatientDependencyItem("ipd-bed-turnover", x.ID, "IPD bed turnover", $"Turnover #{x.ID} / {regNo}", $"Bed ID: {x.BedCabinID}; Status: {x.Status}", x.RequestedAt, 30)));
+
+            var transactions = await db.PatientTransactions.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(transactions.Select(x => new PatientDependencyItem("ipd-transaction", x.ID, "IPD service transaction", $"Transaction #{x.ID} / {regNo}", $"Amount: {(x.ServiceRate * x.Quantity):N2}", x.TransDate, 30)));
+
+            var packageTransactions = await db.PatientPackageTransactions.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(packageTransactions.Select(x => new PatientDependencyItem("ipd-package", x.ID, "IPD package transaction", $"Package transaction #{x.ID} / {regNo}", $"Amount: {(x.ServiceRate * x.Quantity):N2}", x.TransDate, 30)));
+
+            var extensions = await db.AdmissionExtensions.AsNoTracking().Where(x => x.RegNo == regNo).ToListAsync();
+            items.AddRange(extensions.Select(x => new PatientDependencyItem("ipd-extension", x.ID, "IPD admission extension", $"Extension #{x.ID} / {regNo}", $"Service: {x.ServiceCharge:N2}; Food: {x.Food:N2}", admission.AdmissionDate ?? DateTime.MinValue, 30)));
+
+            items.Add(new PatientDependencyItem("admission", admission.ID, "IPD admission", $"Admission #{admission.ID} / {regNo}", admission.IsAdmitted == true ? "Currently admitted" : "Released", admission.AdmissionDate ?? admission.TransDate ?? DateTime.MinValue, 90));
+        }
+
+        patientDependencies = items.OrderBy(x => x.DeleteOrder).ThenByDescending(x => x.EventDate).ToList();
+    }
+
+    private void RequestDependencyDelete(PatientDependencyItem dependency)
+    {
+        if (deletingDependency) return;
+        pendingDependency = dependency;
+        confirmingProfileDeletion = false;
+        actionDialogReason = string.Empty;
+        actionDialogError = string.Empty;
+    }
+
+    private async Task ConfirmPatientActionAsync()
+    {
+        if (confirmingProfileDeletion)
+        {
+            deletingDependency = true;
+            actionDialogError = string.Empty;
+            try
+            {
+                await DeletePatientProfileConfirmedAsync();
+            }
+            catch (Exception ex)
+            {
+                actionDialogError = $"Could not delete patient profile: {ex.GetBaseException().Message}";
+            }
+            finally
+            {
+                deletingDependency = false;
+            }
+            return;
+        }
+
+        if (pendingDependency is not { } dependency) return;
+        if (DependencyRequiresReason(dependency) && string.IsNullOrWhiteSpace(actionDialogReason)) return;
+        await DeleteDependencyConfirmedAsync(dependency, actionDialogReason.Trim());
+    }
+
+    private async Task DeleteDependencyConfirmedAsync(PatientDependencyItem dependency, string reversalReason)
+    {
+        deletingDependency = true;
+        deletingDependencyKey = dependency.Key;
+        dependencyMessage = string.Empty;
+        dependencyMessageIsError = false;
+        actionDialogError = string.Empty;
+
+        try
+        {
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                var currentUserId = await CurrentUserIdAsync();
+
+                switch (dependency.Type)
+                {
+                    case "diagnostic-order": await RemoveAsync(db.DiagnosticOrders, dependency.ID); break;
+                    case "prescription": await RemoveAsync(db.Prescriptions, dependency.ID); break;
+                    case "emergency-memo": await DeleteEmergencyMemoDependencyAsync(db, dependency.ID, reversalReason, currentUserId); break;
+                    case "ot-memo": await DeleteOtMemoDependencyAsync(db, dependency.ID, reversalReason, currentUserId); break;
+                    case "encounter": await RemoveAsync(db.PatientEncounters, dependency.ID); break;
+                    case "appointment": await RemoveAsync(db.DoctorAppointments, checked((int)dependency.ID)); break;
+                    case "ticket": await DeleteTicketDependencyAsync(db, dependency.ID, reversalReason, currentUserId); break;
+                    case "ipd-final-bill": await RemoveAsync(db.IpdFinalBills, dependency.ID); break;
+                    case "ipd-discharge": await RemoveAsync(db.IpdMedicalDischargeOrders, dependency.ID); break;
+                    case "ipd-receipt": await RemoveAsync(db.IpdMoneyReceipts, dependency.ID); break;
+                    case "ipd-payment": await RemoveAsync(db.PatientPayments, dependency.ID); break;
+                    case "ipd-service": await RemoveAsync(db.IpdPatientServiceItems, dependency.ID); break;
+                    case "ipd-bed-transaction": await RemoveAsync(db.BedCabinTransactions, dependency.ID); break;
+                    case "ipd-bed-turnover": await RemoveAsync(db.BedTurnovers, dependency.ID); break;
+                    case "ipd-transaction": await RemoveAsync(db.PatientTransactions, dependency.ID); break;
+                    case "ipd-package": await RemoveAsync(db.PatientPackageTransactions, dependency.ID); break;
+                    case "ipd-extension": await RemoveAsync(db.AdmissionExtensions, dependency.ID); break;
+                    case "admission": await DeleteAdmissionAsync(db, dependency.ID); break;
+                    default: throw new InvalidOperationException("Unknown dependent record type.");
+                }
+
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+            });
+
+            dependencyMessageIsError = false;
+            dependencyMessage = $"{dependency.Label} deleted successfully.";
+            pendingDependency = null;
+            actionDialogReason = string.Empty;
+            actionDialogError = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            dependencyMessageIsError = true;
+            dependencyMessage = $"Could not delete {dependency.Label}: {ex.GetBaseException().Message}";
+            actionDialogError = dependencyMessage;
+        }
+        finally
+        {
+            deletingDependency = false;
+            deletingDependencyKey = null;
+            await LoadPatientDependenciesAsync();
+        }
+    }
+
+    private static bool DependencyRequiresReason(PatientDependencyItem dependency)
+        => dependency.Type is "ticket" or "emergency-memo" or "ot-memo";
+
+    private void CancelPatientAction()
+    {
+        if (deletingDependency) return;
+        pendingDependency = null;
+        confirmingProfileDeletion = false;
+        actionDialogReason = string.Empty;
+        actionDialogError = string.Empty;
+    }
+
+    private static async Task RemoveAsync<TEntity, TKey>(DbSet<TEntity> set, TKey id) where TEntity : class
+    {
+        var entity = await set.FindAsync(id);
+        if (entity is not null) set.Remove(entity);
+    }
+
+    private static async Task DeleteTicketDependencyAsync(HpmDbContext db, long ticketId, string reason, int userId)
+    {
+        var entity = await db.OPDTickets.FindAsync(ticketId);
+        if (entity is null) return;
+
+        if (await db.PatientEncounters.AnyAsync(x => x.TicketID == ticketId))
+            throw new InvalidOperationException("Delete the listed clinical encounter first.");
+
+        await OperationalAccounting.ReverseRevenueAsync(db, "OPD Ticket", $"OPD-TICKET:{entity.ID}", entity.ID,
+            entity.Total, entity.TransDate, userId, reason, AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
+        db.OPDTickets.Remove(entity);
+    }
+
+    private static async Task DeleteEmergencyMemoDependencyAsync(HpmDbContext db, long memoId, string reason, int userId)
+    {
+        var entity = await db.EmergencyMemos.FindAsync(memoId);
+        if (entity is null) return;
+
+        if (await db.DiagnosticOrders.AnyAsync(x => x.BilledMemoID == memoId))
+            throw new InvalidOperationException("Delete the listed diagnostic order first.");
+
+        var isDiagnostic = entity.ModuleID == 2;
+        var entityType = isDiagnostic ? "Diagnostic Memo" : "Emergency Memo";
+        var reference = $"{(isDiagnostic ? "DIAGNOSTIC" : "EMERGENCY")}:{entity.ID}";
+        var moduleFlag = isDiagnostic ? AccountingPosting.ModuleFlags.Diagnostic : AccountingPosting.ModuleFlags.Emergency;
+        await OperationalAccounting.ReverseRevenueAsync(db, entityType, reference, entity.ID,
+            Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason, AccountingPosting.Cash, moduleFlag);
+
+        var samples = await db.LabSampleCollections.Where(x => x.MemoID == memoId).ToListAsync();
+        var results = await db.LabTestResults.Where(x => x.MemoID == memoId).ToListAsync();
+        db.LabSampleCollections.RemoveRange(samples);
+        db.LabTestResults.RemoveRange(results);
+        db.EmergencyMemos.Remove(entity);
+    }
+
+    private static async Task DeleteOtMemoDependencyAsync(HpmDbContext db, long memoId, string reason, int userId)
+    {
+        var entity = await db.OTCashMemos.FindAsync(memoId);
+        if (entity is null) return;
+
+        var debitAccount = entity.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+        await OperationalAccounting.ReverseRevenueAsync(db, "OT Memo", $"OT-MEMO:{entity.ID}", entity.ID,
+            Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason,
+            debitAccount, entity.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null);
+        db.OTCashMemos.Remove(entity);
+    }
+
+    private static async Task DeleteAdmissionAsync(HpmDbContext db, long admissionId)
+    {
+        var admission = await db.PatientAdmissions.FindAsync(admissionId);
+        if (admission is null) return;
+
+        var hasChildren = await db.IpdFinalBills.AnyAsync(x => x.AdmissionID == admissionId || x.RegNo == admission.RegNo)
+            || await db.IpdMedicalDischargeOrders.AnyAsync(x => x.AdmissionID == admissionId)
+            || await db.IpdMoneyReceipts.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.PatientPayments.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.IpdPatientServiceItems.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.BedCabinTransactions.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.BedTurnovers.AnyAsync(x => x.AdmissionID == admissionId || x.RegNo == admission.RegNo)
+            || await db.PatientTransactions.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.PatientPackageTransactions.AnyAsync(x => x.RegNo == admission.RegNo)
+            || await db.AdmissionExtensions.AnyAsync(x => x.RegNo == admission.RegNo);
+
+        if (hasChildren)
+            throw new InvalidOperationException("Delete the listed IPD records for this admission first.");
+
+        if (admission.BedCabinID is int bedId)
+        {
+            var bed = await db.BedCabins.FindAsync(bedId);
+            var usedByAnotherAdmission = await db.PatientAdmissions.AnyAsync(x => x.ID != admissionId && x.BedCabinID == bedId && x.IsAdmitted == true);
+            if (bed is not null && !usedByAnotherAdmission)
+            {
+                bed.IsAllocated = false;
+                bed.Status = BedStatuses.Available;
+            }
+        }
+
+        db.PatientAdmissions.Remove(admission);
+    }
+
+    private void CloseDependencyModal()
+    {
+        if (deletingDependency) return;
+        showDependencyModal = false;
+        dependencyMessage = string.Empty;
+        dependencyMessageIsError = false;
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private static string Address(params string?[] parts) => string.Join(", ", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+    public async ValueTask DisposeAsync()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        if (shortcutReference != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.detachPatientShortcuts");
+            }
+            catch
+            {
+                // The circuit is already closed or statically rendered.
+            }
+            shortcutReference.Dispose();
+            shortcutReference = null;
+        }
+    }
+
+    private sealed record PatientDependencyItem(
+        string Type,
+        long ID,
+        string Label,
+        string Reference,
+        string Description,
+        DateTime EventDate,
+        int DeleteOrder)
+    {
+        public string Key => $"{Type}:{ID}";
+    }
+}
