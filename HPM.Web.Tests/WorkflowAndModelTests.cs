@@ -35,6 +35,60 @@ public sealed class WorkflowAndModelTests
     }
 
     [Fact]
+    public void Module_navigation_permissions_match_operational_roles()
+    {
+        var doctor = Principal(RoleNames.Doctor);
+        Assert.False(ModuleAccess.CanView(doctor, ModuleAccess.PatientRegistration));
+        Assert.False(ModuleAccess.CanView(doctor, ModuleAccess.Appointments));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.DoctorQueue));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.DiagnosticResults));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.PharmacyPrescriptions));
+
+        var reception = Principal(RoleNames.Reception);
+        Assert.True(ModuleAccess.CanView(reception, ModuleAccess.PatientRegistration));
+        Assert.True(ModuleAccess.CanView(reception, ModuleAccess.Appointments));
+        Assert.False(ModuleAccess.CanView(reception, ModuleAccess.Accounts));
+        Assert.False(ModuleAccess.CanView(reception, ModuleAccess.PharmacyPos));
+
+        var lab = Principal(RoleNames.LabTechnician);
+        Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticWorklist));
+        Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticResults));
+        Assert.False(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticBilling));
+
+        var pharmacy = Principal(RoleNames.PharmacyOperator);
+        Assert.True(ModuleAccess.CanView(pharmacy, ModuleAccess.PharmacyPos));
+        Assert.True(ModuleAccess.CanView(pharmacy, ModuleAccess.PharmacyStock));
+        Assert.False(ModuleAccess.CanView(pharmacy, ModuleAccess.PatientRegistration));
+
+        var cashier = Principal(RoleNames.Cashier);
+        Assert.True(ModuleAccess.CanView(cashier, ModuleAccess.Accounts));
+        Assert.True(ModuleAccess.CanView(cashier, ModuleAccess.DiagnosticBilling));
+        Assert.False(ModuleAccess.CanView(cashier, ModuleAccess.PatientRegistration));
+
+        var emergency = Principal(RoleNames.EmergencyOperator);
+        Assert.True(ModuleAccess.CanView(emergency, ModuleAccess.EmergencyServices));
+        Assert.False(ModuleAccess.CanView(emergency, ModuleAccess.OpdTickets));
+
+        var ot = Principal(RoleNames.OTOperator);
+        Assert.True(ModuleAccess.CanView(ot, ModuleAccess.OtCashMemos));
+        Assert.False(ModuleAccess.CanView(ot, ModuleAccess.EmergencyServices));
+
+        var ipd = Principal(RoleNames.IPDOperator);
+        Assert.True(ModuleAccess.CanView(ipd, ModuleAccess.IpdAdmissions));
+        Assert.True(ModuleAccess.CanView(ipd, ModuleAccess.IpdBilling));
+        Assert.False(ModuleAccess.CanView(ipd, ModuleAccess.PatientRegistration));
+
+        var nurse = Principal(RoleNames.Nurse);
+        Assert.True(ModuleAccess.CanView(nurse, ModuleAccess.DoctorQueue));
+        Assert.False(ModuleAccess.CanView(nurse, ModuleAccess.IpdBilling));
+
+        var administrator = Principal(RoleNames.Administrator);
+        Assert.All(
+            new[] { ModuleAccess.PatientRegistration, ModuleAccess.IpdBilling, ModuleAccess.DiagnosticWorklist, ModuleAccess.PharmacyStock, ModuleAccess.Accounts },
+            roles => Assert.True(ModuleAccess.CanView(administrator, roles)));
+    }
+
+    [Fact]
     public void Model_enforces_per_test_samples_and_batch_trace_uniqueness()
     {
         var options = new DbContextOptionsBuilder<HpmDbContext>()
@@ -128,4 +182,7 @@ public sealed class WorkflowAndModelTests
         public override Task<AuthenticationState> GetAuthenticationStateAsync() =>
             Task.FromResult(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
     }
+
+    private static ClaimsPrincipal Principal(string role) =>
+        new(new ClaimsIdentity([new Claim(ClaimTypes.Name, "test"), new Claim(ClaimTypes.Role, role)], "Test"));
 }

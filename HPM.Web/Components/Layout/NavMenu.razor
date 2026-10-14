@@ -8,7 +8,7 @@
             {
                 <div class="legacy-menu-backdrop" @onclick="CloseMenus"></div>
             }
-            @foreach (var group in MenuGroups.Where(group => CanView(auth.User, group.Roles)))
+            @foreach (var group in MenuGroups.Where(group => CanViewGroup(auth.User, group)))
             {
                 var isGroupActive = IsGroupActive(group);
                 var isOpen = openMenu == group.Key;
@@ -38,7 +38,7 @@
                         @if (isOpen)
                         {
                             <div class="legacy-menu-dropdown">
-                                @foreach (var item in group.Items.Where(item => CanView(auth.User, item.Roles)))
+                                @foreach (var item in group.Items.Where(item => CanViewItem(auth.User, item)))
                                 {
                                     @if (item.IsSeparator)
                                     {
@@ -57,7 +57,7 @@
                                             @if (isSubOpen)
                                             {
                                                 <div class="legacy-menu-submenu">
-                                                    @foreach (var child in item.Children.Where(child => CanView(auth.User, child.Roles)))
+                                                    @foreach (var child in item.Children.Where(child => CanViewItem(auth.User, child)))
                                                     {
                                                         <NavLink class="legacy-menu-entry" href="@child.Href" Match="NavLinkMatch.All" @onclick="CloseMenus">@child.Label</NavLink>
                                                     }
@@ -90,48 +90,53 @@
     private string? openMenu;
     private string? openSubmenu;
 
-    private static readonly string[] Admin = [RoleNames.Administrator];
-    private static readonly string[] Opd = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier, RoleNames.EmergencyOperator, RoleNames.OTOperator, RoleNames.Doctor, RoleNames.Nurse];
-    private static readonly string[] Diagnostic = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier, RoleNames.LabTechnician, RoleNames.Doctor];
-    private static readonly string[] Ipd = [RoleNames.Administrator, RoleNames.Reception, RoleNames.IPDOperator, RoleNames.Doctor, RoleNames.Cashier, RoleNames.Nurse];
-    private static readonly string[] Pharmacy = [RoleNames.Administrator, RoleNames.PharmacyOperator, RoleNames.Cashier, RoleNames.Doctor, RoleNames.Nurse];
-    private static readonly string[] Finance = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
-
     private static readonly IReadOnlyList<MenuGroup> MenuGroups =
     [
-        Link("patient-registration", "Patient Registration", "/patients", Opd),
-        Link("doctor-appointment", "Doctor Appointment", "/appointments", Opd),
+        Link("patient-registration", "Patient Registration", "/patients", ModuleAccess.PatientRegistration),
+        Link("doctor-appointment", "Doctor Appointment", "/appointments", ModuleAccess.Appointments),
 
-        Group("opd", "OPD & Emergency", Opd,
-            Item("OPD Ticket", "/tickets"), Item("OPD & Emergency Service", "/emergency-services"),
-            Item("OT Cash Memo", "/ot-cash-memos")),
+        Group("opd", "OPD & Emergency", ModuleAccess.OpdGroup,
+            Item("OPD Ticket", "/tickets", ModuleAccess.OpdTickets),
+            Item("OPD & Emergency Service", "/emergency-services", ModuleAccess.EmergencyServices),
+            Item("OT Cash Memo", "/ot-cash-memos", ModuleAccess.OtCashMemos)),
 
-        Group("ipd", "IPD Services", Ipd,
-            Item("Patient Admission", "/ipd/admissions"),
-            Item("Money Receipt", "/ipd/advance-receipts"), Item("Patient Service", "/ipd/patient-services"),
-            Legacy("Patient Transfer", "IPD Services"), Item("Billing System", "/ipd/discharge-billing"),
-            Item("Patient Discharge", "/ipd/medical-discharge-orders"), Item("Billing System General", "/ipd/discharge-billing?mode=general")),
+        Group("ipd", "IPD Services", ModuleAccess.IpdGroup,
+            Item("Patient Admission", "/ipd/admissions", ModuleAccess.IpdAdmissions),
+            Item("Money Receipt", "/ipd/advance-receipts", ModuleAccess.IpdMoneyReceipts),
+            Item("Patient Service", "/ipd/patient-services", ModuleAccess.IpdPatientServices),
+            Legacy("Patient Transfer", "IPD Services", ModuleAccess.IpdOccupancy),
+            Item("Billing System", "/ipd/discharge-billing", ModuleAccess.IpdBilling),
+            Item("Patient Discharge", "/ipd/medical-discharge-orders", ModuleAccess.IpdMedicalDischarge),
+            Item("Billing System General", "/ipd/discharge-billing?mode=general", ModuleAccess.IpdBilling)),
 
-        Group("investigation", "Investigation", Diagnostic,
-            Item("OPD Cash Memo", "/diagnostic/billing?patientType=OPD"),
-            Item("IPD Cash Memo", "/diagnostic/billing?patientType=IPD"), Item("Cash Memo Return", "/diagnostic/cash-memo-return")),
+        Group("investigation", "Investigation", ModuleAccess.DiagnosticGroup,
+            Item("OPD Cash Memo", "/diagnostic/billing?patientType=OPD", ModuleAccess.DiagnosticBilling),
+            Item("IPD Cash Memo", "/diagnostic/billing?patientType=IPD", ModuleAccess.DiagnosticBilling),
+            Item("Cash Memo Return", "/diagnostic/cash-memo-return", ModuleAccess.DiagnosticBilling)),
 
-        Group("pathology-imaging", "Pathology & Imaging", Diagnostic,
-            Item("Lab Worklist", "/diagnostic/worklist"),
-            Item("Results & Report", "/diagnostic/results"),
-            Item("Diagnostic Masters", "/diagnostic/masters")),
+        Group("pathology-imaging", "Pathology & Imaging", ModuleAccess.DiagnosticGroup,
+            Item("Lab Worklist", "/diagnostic/worklist", ModuleAccess.DiagnosticWorklist),
+            Item("Results & Report", "/diagnostic/results", ModuleAccess.DiagnosticResults),
+            Item("Diagnostic Masters", "/diagnostic/masters", ModuleAccess.AdministratorOnly)),
 
-        Group("reports", "Reports", Finance, Item("Financial Reports", "/reports?type=financial"), Item("MIS Reports", "/reports?type=mis")),
+        Group("reports", "Reports", ModuleAccess.Reports,
+            Item("Financial Reports", "/reports?type=financial", ModuleAccess.Reports),
+            Item("MIS Reports", "/reports?type=mis", ModuleAccess.Reports)),
 
-        Group("medical", "Medical Services", Opd,
-            Legacy("Operation List", "Medical Services"), Legacy("OT Note", "Medical Services"),
-            Item("Treatment Followup", "/clinical/doctor-queue"),
-            Parent("nurse-desk", "Nurse's Desk", Legacy("Sticker/Forms", "Nurse's Desk"),
-                Item("Indent Medicine", "/pharmacy/prescriptions?view=ipd-indent"), Item("IPD Investigation", "/diagnostic/billing?patientType=IPD")),
-            Item("Doctor Prescription", "/pharmacy/prescriptions"),
-            Parent("certificates", "Certificates & Others", Legacy("Birth Certificate", "Certificates & Others"),
-                Legacy("Death Certificate", "Certificates & Others"), Legacy("Fitness Certificate", "Certificates & Others"),
-                Legacy("Discharge Certificate", "Certificates & Others")))
+        Group("medical", "Medical Services", ModuleAccess.MedicalGroup,
+            Legacy("Operation List", "Medical Services", ModuleAccess.OtCashMemos),
+            Legacy("OT Note", "Medical Services", ModuleAccess.OtCashMemos),
+            Item("Treatment Followup", "/clinical/doctor-queue", ModuleAccess.DoctorQueue),
+            Parent("nurse-desk", "Nurse's Desk",
+                Legacy("Sticker/Forms", "Nurse's Desk", ModuleAccess.DoctorQueue),
+                Item("Indent Medicine", "/pharmacy/prescriptions?view=ipd-indent", ModuleAccess.PharmacyPrescriptions),
+                Item("IPD Investigation", "/diagnostic/billing?patientType=IPD", ModuleAccess.DiagnosticBilling)),
+            Item("Doctor Prescription", "/pharmacy/prescriptions", ModuleAccess.PharmacyPrescriptions),
+            Parent("certificates", "Certificates & Others",
+                Legacy("Birth Certificate", "Certificates & Others", ModuleAccess.DoctorQueue),
+                Legacy("Death Certificate", "Certificates & Others", ModuleAccess.DoctorQueue),
+                Legacy("Fitness Certificate", "Certificates & Others", ModuleAccess.DoctorQueue),
+                Legacy("Discharge Certificate", "Certificates & Others", ModuleAccess.DoctorQueue)))
     ];
 
     protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
@@ -170,17 +175,18 @@
         return false;
     }
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e) { CloseMenus(); InvokeAsync(StateHasChanged); }
-    private static bool CanView(System.Security.Claims.ClaimsPrincipal user, IReadOnlyList<string> roles) => roles.Count == 0 || roles.Any(user.IsInRole);
+    private static bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, MenuGroup group) =>
+        ModuleAccess.CanView(user, group.Roles) && (group.Items.Count == 0 || group.Items.Any(item => CanViewItem(user, item)));
+    private static bool CanViewItem(System.Security.Claims.ClaimsPrincipal user, MenuItem item) =>
+        ModuleAccess.CanView(user, item.Roles) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child)));
     private static MenuGroup Group(string key, string label, params MenuItem[] items) => new(key, label, string.Empty, [], items);
     private static MenuGroup Group(string key, string label, string[] roles, params MenuItem[] items) => new(key, label, string.Empty, roles, items);
     private static MenuGroup Link(string key, string label, string href, string[] roles) => new(key, label, href, roles, []);
-    private static MenuItem Item(string label, string href) => new(Key(label), label, href, [], [], false, false);
+    private static MenuItem Item(string label, string href, string[] roles) => new(Key(label), label, href, roles, [], false, false);
     private static MenuItem Logout(string label) => new(Key(label), label, string.Empty, [], [], false, true);
     private static MenuItem Separator() => new(Guid.NewGuid().ToString("N"), string.Empty, string.Empty, [], [], true, false);
     private static MenuItem Parent(string key, string label, params MenuItem[] children) => new(key, label, string.Empty, [], children, false, false);
-    private static MenuItem ReportItem(string label) => Item(label, $"/diagnostic/results?report={Uri.EscapeDataString(label)}");
-    private static MenuItem ImagingItem(string label) => Item(label, $"/diagnostic/results?modality={Uri.EscapeDataString(label)}");
-    private static MenuItem Legacy(string label, string module) => Item(label, $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(label)}");
+    private static MenuItem Legacy(string label, string module, string[] roles) => Item(label, $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(label)}", roles);
     private static string Key(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("&", "and").Replace("'", string.Empty);
     public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
     private sealed record MenuGroup(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Items);
