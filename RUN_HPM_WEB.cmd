@@ -4,7 +4,7 @@ title HPM Web Launcher
 cd /d "%~dp0"
 
 set "HPM_URL=http://localhost:5180"
-set "HPM_SQL_SERVICE=MSSQL$HPMDB"
+set "HPM_SQL_SERVICE=MSSQL$SQLEXPRESS"
 
 rem SQL Server must be running for login, reports and live data.
 powershell -NoProfile -Command "$s=Get-Service -Name '%HPM_SQL_SERVICE%' -ErrorAction SilentlyContinue; if($null -eq $s){exit 2}; if($s.Status -eq 'Running'){exit 0}else{exit 1}"
@@ -72,7 +72,7 @@ echo Press Ctrl+C to stop HPM Web.
 echo.
 
 set "ASPNETCORE_ENVIRONMENT=Development"
-dotnet run --project "HPM.Web\HPM.Web.csproj" --launch-profile http --no-build
+dotnet run --project "HPM.Web\HPM.Web.csproj" --launch-profile http
 
 if errorlevel 1 (
     echo.
