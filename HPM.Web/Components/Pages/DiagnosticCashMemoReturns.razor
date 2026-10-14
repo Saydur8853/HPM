@@ -190,10 +190,10 @@
         if (memo is null || selected.Count == 0 || string.IsNullOrWhiteSpace(reason)) { Fail(I18n.T("Select at least one investigation and enter a return reason.")); return; }
         if (selected.Any(x => x.Quantity <= 0 || x.Quantity > x.Remaining)) { Fail(I18n.T("Return quantity must be within the remaining quantity.")); return; }
         saving = true;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         try
         {
+            var result = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var source = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == memo.ID && x.ModuleID == 2);
             foreach (var line in selected)
             {
@@ -252,14 +252,16 @@
             AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
             if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            savedReturn = header;
-            priorAdjustment += adjustment;
-            priorRefund += refund;
-            Success(I18n.T($"Return voucher #{header.ID} posted successfully."));
-            recent = await db.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+            return (Header: header, Adjustment: adjustment, Refund: refund);
+            }, IsolationLevel.Serializable);
+            savedReturn = result.Header;
+            priorAdjustment += result.Adjustment;
+            priorRefund += result.Refund;
+            Success(I18n.T($"Return voucher #{result.Header.ID} posted successfully."));
+            await using var refreshDb = await DbFactory.CreateDbContextAsync();
+            recent = await refreshDb.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
         }
-        catch (Exception ex) { await tx.RollbackAsync(); Fail(ex.GetBaseException().Message); }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
         finally { saving = false; }
     }
 

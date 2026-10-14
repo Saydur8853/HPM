@@ -389,16 +389,22 @@
     private async Task ReverseVoucherAsync(AccountVoucher row)
     {
         if (!isAdministrator || string.IsNullOrWhiteSpace(actionReason)) { Fail(I18n.IsBangla ? "প্রথমে রিভার্সালের কারণ লিখুন।" : "Enter a reversal reason first."); return; }
-        await using var db = await DbFactory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync();
         try
         {
-            var uid = await CurrentUserIdAsync(); await FinancialControl.EnsurePostingAllowedAsync(db, DateTime.Today, uid);
-            var x = await db.AccountVouchers.SingleAsync(x => x.ID == row.ID);
-            var reversal = await AccountingPosting.ReversePostedVoucherAsync(db, x, actionReason, uid, DateTime.Now);
-            await db.SaveChangesAsync(); await tx.CommitAsync();
+            AccountVoucher x = null!;
+            AccountVoucher reversal = null!;
+            var uid = await CurrentUserIdAsync();
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                await FinancialControl.EnsurePostingAllowedAsync(db, DateTime.Today, uid);
+                x = await db.AccountVouchers.SingleAsync(x => x.ID == row.ID);
+                reversal = await AccountingPosting.ReversePostedVoucherAsync(db, x, actionReason, uid, DateTime.Now);
+                await db.SaveChangesAsync();
+                return true;
+            });
             actionReason = ""; Success(I18n.IsBangla ? $"{x.VoucherNo} রিভার্সাল {reversal.VoucherNo} এর মাধ্যমে বাতিল করা হয়েছে।" : $"{x.VoucherNo} cancelled through reversal {reversal.VoucherNo}."); await LoadAsync();
         }
-        catch (Exception ex) { await tx.RollbackAsync(); Fail(ex.GetBaseException().Message); }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
     }
 
     private async Task SelectVoucherAsync(AccountVoucher row)
@@ -462,10 +468,12 @@
     private async Task BackfillOperationalJournalsAsync()
     {
         if (!isAdministrator) return;
-        await using var db = await DbFactory.CreateDbContextAsync(); await using var tx = await db.Database.BeginTransactionAsync();
         try
         {
-            var uid = await CurrentUserIdAsync(); var end = toDate.Date.AddDays(1);
+            var uid = await CurrentUserIdAsync();
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            var end = toDate.Date.AddDays(1);
             var opd = await db.OPDTickets.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
             foreach (var x in opd) await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
             var memos = await db.EmergencyMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && (x.ModuleID == 11 || x.ModuleID == 2)).ToListAsync();
@@ -495,9 +503,12 @@
                         (AccountingPosting.Cash, x.Amount, 0), (credit, 0, x.Amount));
                 }
             }
-            await db.SaveChangesAsync(); await tx.CommitAsync(); Success(I18n.IsBangla ? "অপারেশনাল জার্নাল ব্যাকফিল সম্পন্ন হয়েছে।" : "Operational journal backfill completed. Review the reconciliation variance."); await LoadAsync();
+            await db.SaveChangesAsync();
+            return true;
+            });
+            Success(I18n.IsBangla ? "অপারেশনাল জার্নাল ব্যাকফিল সম্পন্ন হয়েছে।" : "Operational journal backfill completed. Review the reconciliation variance."); await LoadAsync();
         }
-        catch (Exception ex) { await tx.RollbackAsync(); Fail($"Backfill failed: {ex.GetBaseException().Message}"); }
+        catch (Exception ex) { Fail($"Backfill failed: {ex.GetBaseException().Message}"); }
     }
 
     private async Task SaveAccountAsync()

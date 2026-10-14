@@ -77,31 +77,34 @@
     private async Task SaveAsync()
     {
         if(encounter is null||items.Count==0){Fail(I18n.T("Select at least one diagnostic test."));return;}
-        await using var db=await DbFactory.CreateDbContextAsync();
-        await using var tx=await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
         try
         {
+            var target = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var current=await db.PatientEncounters.SingleAsync(x=>x.ID==encounter.ID);
             if(!isAdministrator&&current.DoctorID!=currentDoctorProfileId)throw new InvalidOperationException("This encounter belongs to another doctor.");
             if(current.Status!=EncounterStatuses.InConsultation)throw new InvalidOperationException(I18n.T("Diagnostic orders can be placed only during an active consultation."));
-            DiagnosticOrder target;
+            DiagnosticOrder savedOrder;
             if(order is null)
             {
-                target=new DiagnosticOrder{EncounterID=current.ID,PatientID=current.PatientID,PatientName=current.PatientName,DoctorID=current.DoctorID,Status="Pending",OrderedBy=await CurrentUserIdAsync(),OrderedAt=DateTime.Now};
-                db.DiagnosticOrders.Add(target);
+                savedOrder=new DiagnosticOrder{EncounterID=current.ID,PatientID=current.PatientID,PatientName=current.PatientName,DoctorID=current.DoctorID,Status="Pending",OrderedBy=await CurrentUserIdAsync(),OrderedAt=DateTime.Now};
+                db.DiagnosticOrders.Add(savedOrder);
             }
             else
             {
-                target=await db.DiagnosticOrders.Include(x=>x.Items).SingleAsync(x=>x.ID==order.ID);
-                if(target.Status!="Pending")throw new InvalidOperationException(I18n.T("Only pending orders can be edited."));
-                db.DiagnosticOrderItems.RemoveRange(target.Items);
+                savedOrder=await db.DiagnosticOrders.Include(x=>x.Items).SingleAsync(x=>x.ID==order.ID);
+                if(savedOrder.Status!="Pending")throw new InvalidOperationException(I18n.T("Only pending orders can be edited."));
+                db.DiagnosticOrderItems.RemoveRange(savedOrder.Items);
             }
-            target.ClinicalNotes=clinicalNotes?.Trim();
-            target.Items=items.Select(x=>new DiagnosticOrderItem{ServiceID=x.ServiceID}).ToList();
-            await db.SaveChangesAsync();await tx.CommitAsync();order=target;
+            savedOrder.ClinicalNotes=clinicalNotes?.Trim();
+            savedOrder.Items=items.Select(x=>new DiagnosticOrderItem{ServiceID=x.ServiceID}).ToList();
+            await db.SaveChangesAsync();
+            return savedOrder;
+            }, System.Data.IsolationLevel.Serializable);
+            order=target;
             Success(I18n.IsBangla?"ডায়াগনস্টিক অর্ডার বিলিং কাউন্টারে পাঠানো হয়েছে।":$"Diagnostic order #{target.ID} sent to billing.");
         }
-        catch(Exception ex){await tx.RollbackAsync();Fail(ex.GetBaseException().Message);}
+        catch(Exception ex){Fail(ex.GetBaseException().Message);}
     }
     private async Task<int> CurrentUserIdAsync(){var p=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
     private string ServiceName(int id)=>services.FirstOrDefault(x=>x.ID==id)?.Name??"—";

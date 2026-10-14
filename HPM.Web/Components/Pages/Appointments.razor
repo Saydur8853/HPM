@@ -683,23 +683,26 @@
 
     private async Task CheckInAsync(DoctorAppointment appointment)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
         try
         {
-            var entity = await db.DoctorAppointments.SingleAsync(x => x.ID == appointment.ID);
             var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
             var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
-            var encounter = await ClinicalEncounterWorkflow.CheckInAppointmentAsync(db, entity, userId);
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
+            var result = await ResilientTransaction.ExecuteAsync(
+                DbFactory,
+                async db =>
+                {
+                    var entity = await db.DoctorAppointments.SingleAsync(x => x.ID == appointment.ID);
+                    var encounter = await ClinicalEncounterWorkflow.CheckInAppointmentAsync(db, entity, userId);
+                    await db.SaveChangesAsync();
+                    return (entity.Name, encounter.QueueNo);
+                },
+                System.Data.IsolationLevel.Serializable);
             messageClass = "success";
-            message = $"Checked in: {entity.Name} • Queue #{encounter.QueueNo}";
+            message = $"Checked in: {result.Name} • Queue #{result.QueueNo}";
             await LoadAppointmentsAsync();
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync();
             messageClass = "danger";
             message = ex.GetBaseException().Message;
         }

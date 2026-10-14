@@ -319,7 +319,69 @@
     private void StockChanged(){var x=stocks.FirstOrDefault(x=>x.ID==stockId);selectedBalance=x?.Balance??0;enteredQuantity=adjustmentType=="Count Correction"?selectedBalance:0;}
     private void SelectionContextChanged(){stockId=0;selectedBalance=0;enteredQuantity=0;lines=[];}
     private void AddLine(){var stock=stocks.FirstOrDefault(x=>x.ID==stockId);if(stock==null){Fail(I18n.IsBangla ? "ঔষধ ব্যাচ নির্বাচন করুন।" : "Select a medicine batch.");return;}if(lines.Any(x=>x.StockBalanceID==stock.ID)){Fail(I18n.IsBangla ? "এই ব্যাচটি ইতিমধ্যে যোগ করা হয়েছে।" : "This batch is already added.");return;}var change=CalculatedChange;if(change==0){Fail(I18n.IsBangla ? "সমন্বয়ের পরিমাণ শূন্য হতে পারে না।" : "Adjustment change cannot be zero.");return;}if(stock.Balance+change<0){Fail(I18n.IsBangla ? "বাতিলের পরিমাণ বর্তমান স্টকের চেয়ে বেশি।" : "Disposal quantity exceeds current balance.");return;}if(adjustmentType=="Expired Disposal"&&stock.ExpireDate>=DateTime.Today){Fail(I18n.IsBangla ? "শুধুমাত্র মেয়াদোত্তীর্ণ ব্যাচ মেয়াদোত্তীর্ণ বাতিলে ব্যবহার করা যাবে।" : "Only an expired batch can use Expired Disposal.");return;}var cost=stockUnitCosts.TryGetValue(stock.ID,out var unitCost)?unitCost:0;lines.Add(new AdjustmentLine(stock.ID,stock.ServiceID,stock.BatchNo,stock.ExpireDate,stock.Balance,change,stock.Balance+change,cost));stockId=0;selectedBalance=0;enteredQuantity=0;message="";}
-    private async Task PostAsync(){if(storeId<=0||lines.Count==0||string.IsNullOrWhiteSpace(reason)){Fail(I18n.IsBangla ? "স্টোর, ব্যাচ সমন্বয় এবং কারণ আবশ্যক।" : "Store, batch adjustment and reason are required.");return;}isSaving=true;await using var db=await DbFactory.CreateDbContextAsync();await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);try{var uid=await CurrentUserIdAsync();var header=new MedicineStockAdjustment{StoreID=storeId,AdjustmentType=adjustmentType,Reason=reason.Trim(),IsPosted=true,EnteredBy=uid,TransDate=DateTime.Now};db.MedicineStockAdjustments.Add(header);await db.SaveChangesAsync();foreach(var line in lines){var stock=await db.MedicineStoreBalances.SingleAsync(x=>x.ID==line.StockBalanceID);if(stock.MedicineStoreID!=storeId||stock.Balance!=line.BeforeQuantity)throw new InvalidOperationException($"Stock changed for {MedicineName(line.ServiceID)}; reload before posting.");if(adjustmentType=="Expired Disposal"&&stock.ExpireDate>=DateTime.Today)throw new InvalidOperationException("A selected batch is not expired.");stock.Balance=line.AfterQuantity;db.MedicineStockAdjustmentItems.Add(new MedicineStockAdjustmentItem{AdjustmentID=header.ID,StockBalanceID=stock.ID,ServiceID=line.ServiceID,BatchNo=line.BatchNo,ExpireDate=line.ExpireDate,BeforeQuantity=line.BeforeQuantity,ChangeQuantity=line.ChangeQuantity,AfterQuantity=line.AfterQuantity,UnitCost=line.UnitCost});}await db.SaveChangesAsync();await tx.CommitAsync();savedAdjustment=header;Success(I18n.IsBangla ? $"স্টক সমন্বয় #{header.ID} পোস্ট হয়েছে।" : $"Stock adjustment #{header.ID} posted.");await LoadAsync();}catch(Exception ex){await tx.RollbackAsync();Fail(I18n.IsBangla ? $"সমন্বয় ব্যর্থ হয়েছে: {ex.Message}" : $"Adjustment failed: {ex.Message}");}finally{isSaving=false;}}
+    private async Task PostAsync()
+    {
+        if (storeId <= 0 || lines.Count == 0 || string.IsNullOrWhiteSpace(reason))
+        {
+            Fail(I18n.IsBangla ? "স্টোর, ব্যাচ সমন্বয় এবং কারণ আবশ্যক।" : "Store, batch adjustment and reason are required.");
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var uid = await CurrentUserIdAsync();
+            var header = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var adjustment = new MedicineStockAdjustment
+                {
+                    StoreID = storeId,
+                    AdjustmentType = adjustmentType,
+                    Reason = reason.Trim(),
+                    IsPosted = true,
+                    EnteredBy = uid,
+                    TransDate = DateTime.Now
+                };
+                db.MedicineStockAdjustments.Add(adjustment);
+                await db.SaveChangesAsync();
+
+                foreach (var line in lines)
+                {
+                    var stock = await db.MedicineStoreBalances.SingleAsync(x => x.ID == line.StockBalanceID);
+                    if (stock.MedicineStoreID != storeId || stock.Balance != line.BeforeQuantity)
+                        throw new InvalidOperationException($"Stock changed for {MedicineName(line.ServiceID)}; reload before posting.");
+                    if (adjustmentType == "Expired Disposal" && stock.ExpireDate >= DateTime.Today)
+                        throw new InvalidOperationException("A selected batch is not expired.");
+
+                    stock.Balance = line.AfterQuantity;
+                    db.MedicineStockAdjustmentItems.Add(new MedicineStockAdjustmentItem
+                    {
+                        AdjustmentID = adjustment.ID,
+                        StockBalanceID = stock.ID,
+                        ServiceID = line.ServiceID,
+                        BatchNo = line.BatchNo,
+                        ExpireDate = line.ExpireDate,
+                        BeforeQuantity = line.BeforeQuantity,
+                        ChangeQuantity = line.ChangeQuantity,
+                        AfterQuantity = line.AfterQuantity,
+                        UnitCost = line.UnitCost
+                    });
+                }
+
+                await db.SaveChangesAsync();
+                return adjustment;
+            }, IsolationLevel.Serializable);
+
+            savedAdjustment = header;
+            Success(I18n.IsBangla ? $"স্টক সমন্বয় #{header.ID} পোস্ট হয়েছে।" : $"Stock adjustment #{header.ID} posted.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? $"সমন্বয় ব্যর্থ হয়েছে: {ex.Message}" : $"Adjustment failed: {ex.Message}");
+        }
+        finally { isSaving = false; }
+    }
     private async Task OpenAdjustment(long id){await using var db=await DbFactory.CreateDbContextAsync();savedAdjustment=await db.MedicineStockAdjustments.AsNoTracking().Include(x=>x.Items).SingleAsync(x=>x.ID==id);storeId=savedAdjustment.StoreID;adjustmentType=savedAdjustment.AdjustmentType;reason=savedAdjustment.Reason;lines=savedAdjustment.Items.Select(x=>new AdjustmentLine(x.StockBalanceID,x.ServiceID,x.BatchNo,x.ExpireDate,x.BeforeQuantity,x.ChangeQuantity,x.AfterQuantity,x.UnitCost)).ToList();}
     private async Task LoadAuditAsync(HpmDbContext db){var openings=await db.MedicineStockOpenings.AsNoTracking().ToListAsync();var purchaseHeaders=await db.MedicineReceivingChallans.AsNoTracking().ToListAsync();var purchaseItems=await db.MedicineReceivingChallanItems.AsNoTracking().ToListAsync();var saleHeaders=await db.PharmacyCashMemos.AsNoTracking().ToListAsync();var saleItems=await db.PharmacyCashMemoItems.AsNoTracking().ToListAsync();var supplierHeaders=await db.MedicineReturns.AsNoTracking().ToListAsync();var supplierItems=await db.MedicineReturnItems.AsNoTracking().ToListAsync();var customerHeaders=await db.PharmacySalesReturns.AsNoTracking().Where(x=>x.IsPosted).ToListAsync();var customerItems=await db.PharmacySalesReturnItems.AsNoTracking().Where(x=>x.IsRestocked).ToListAsync();var adjustmentHeaders=await db.MedicineStockAdjustments.AsNoTracking().Where(x=>x.IsPosted).ToListAsync();var adjustmentItems=await db.MedicineStockAdjustmentItems.AsNoTracking().ToListAsync();var keys=stocks.Select(x=>(x.MedicineStoreID,x.ServiceID)).Concat(openings.Select(x=>(x.StoreID,x.ServiceID))).Distinct().ToList();audit=[];foreach(var key in keys){var opening=openings.FirstOrDefault(x=>x.StoreID==key.Item1&&x.ServiceID==key.Item2);var captured=opening?.CapturedAt??DateTime.MinValue;var purchaseIds=purchaseHeaders.Where(x=>x.StoreID==key.Item1&&x.IsPosted&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var received=purchaseItems.Where(x=>x.ServiceID==key.Item2&&purchaseIds.Contains(x.ChallanNo)).Sum(x=>x.Quantity);var saleIds=saleHeaders.Where(x=>x.BufferStore==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var sold=saleItems.Where(x=>x.ServiceID==key.Item2&&saleIds.Contains(x.BillNo)).Sum(x=>x.Quantity??0);var supplierIds=supplierHeaders.Where(x=>x.StoreID==key.Item1&&x.IsPosted&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var supplierReturn=supplierItems.Where(x=>x.ServiceID==key.Item2&&supplierIds.Contains(x.MedicineReturnID)).Sum(x=>x.Quantity);var customerIds=customerHeaders.Where(x=>x.StoreID==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var customerRestock=customerItems.Where(x=>x.ServiceID==key.Item2&&customerIds.Contains(x.SalesReturnID)).Sum(x=>x.Quantity);var adjustmentIds=adjustmentHeaders.Where(x=>x.StoreID==key.Item1&&x.TransDate>=captured).Select(x=>x.ID).ToHashSet();var adjustments=adjustmentItems.Where(x=>x.ServiceID==key.Item2&&adjustmentIds.Contains(x.AdjustmentID)).Sum(x=>x.ChangeQuantity);var actual=stocks.Where(x=>x.MedicineStoreID==key.Item1&&x.ServiceID==key.Item2).Sum(x=>x.Balance);var expected=(opening?.OpeningBalance??0)+received-sold-supplierReturn+customerRestock+adjustments;audit.Add(new AuditRow(MedicineName(key.Item2),StoreName(key.Item1),opening?.OpeningBalance??0,received,sold,supplierReturn,customerRestock,adjustments,expected,actual,actual-expected,captured));}audit=audit.OrderBy(x=>x.MedicineName).ThenBy(x=>x.StoreName).ToList();}
     private async Task LoadBatchTraceAsync(HpmDbContext db){batchSales=await(from allocation in db.PharmacySaleBatchAllocations.AsNoTracking() join item in db.PharmacyCashMemoItems.AsNoTracking() on allocation.CashMemoItemID equals item.ID join memo in db.PharmacyCashMemos.AsNoTracking() on item.BillNo equals memo.ID join medicine in db.Services.AsNoTracking() on item.ServiceID equals medicine.ID join stock in db.MedicineStoreBalances.AsNoTracking() on allocation.StockBalanceID equals stock.ID join store in db.MedicineStores.AsNoTracking() on stock.MedicineStoreID equals store.ID orderby memo.TransDate descending select new BatchSaleRow(memo.ID,memo.TransDate,medicine.Name??$"Medicine #{medicine.ID}",store.Name,allocation.BatchNo,allocation.ExpireDate,allocation.Quantity,allocation.BuyRate)).Take(1000).ToListAsync();}

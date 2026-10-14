@@ -180,15 +180,17 @@
         isSaving = true;
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
-            var turnover = await db.BedTurnovers.SingleOrDefaultAsync(x => x.ID == row.Turnover!.ID && x.Status == expectedStatus)
-                ?? throw new InvalidOperationException(I18n.T("This turnover was already updated. Refresh and try again."));
-            var bed = await db.BedCabins.FindAsync(turnover.BedCabinID)
-                ?? throw new InvalidOperationException(I18n.T("Bed was not found."));
-            await update(turnover, bed, await CurrentUserIdAsync());
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
+            var userId = await CurrentUserIdAsync();
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var turnover = await db.BedTurnovers.SingleOrDefaultAsync(x => x.ID == row.Turnover!.ID && x.Status == expectedStatus)
+                    ?? throw new InvalidOperationException(I18n.T("This turnover was already updated. Refresh and try again."));
+                var bed = await db.BedCabins.FindAsync(turnover.BedCabinID)
+                    ?? throw new InvalidOperationException(I18n.T("Bed was not found."));
+                await update(turnover, bed, userId);
+                await db.SaveChangesAsync();
+                return true;
+            }, System.Data.IsolationLevel.Serializable);
             Success(success);
             await LoadAsync();
         }

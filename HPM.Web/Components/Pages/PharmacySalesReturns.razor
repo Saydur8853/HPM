@@ -399,10 +399,10 @@
             return;
         }
         isSaving=true;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         try
         {
+            var result = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var source=await db.PharmacyCashMemos.Include(x=>x.Items).ThenInclude(x=>x.BatchAllocations).SingleAsync(x=>x.ID==memo.ID);
             foreach(var group in lines.GroupBy(x=>x.CashMemoSubID))
             {
@@ -459,14 +459,15 @@
             if(source.PatientType=="1")db.CentralCashCollections.Add(new CentralCashCollection{Amount=-refund,ModuleFlag=4,HeadID=4,EnteredBy=uid,TransDate=now,TransDateCL=now,ReferenceID=header.ID});
             AccountingPosting.AddPostedVoucher(db,"Sales Return",now,$"Pharmacy sales return for memo #{source.ID}",$"PHARMACY-SALES-RETURN:{header.ID}",uid,(AccountingPosting.PharmacySales,refund,0),(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,0,refund));
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            savedReturn=header;
-            priorRefund+=refund;
-            Success(I18n.IsBangla ? $"বিক্রয় ফেরত #{header.ID} সফলভাবে সংরক্ষিত ও রিফান্ড সম্পন্ন হয়েছে।" : $"Sales return #{header.ID} posted with original-batch control, refund and accounting reversal.");
-            recent=await db.PharmacySalesReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(100).ToListAsync();
+            return (Header: header, Refund: refund);
+            }, IsolationLevel.Serializable);
+            savedReturn=result.Header;
+            priorRefund+=result.Refund;
+            Success(I18n.IsBangla ? $"বিক্রয় ফেরত #{result.Header.ID} সফলভাবে সংরক্ষিত ও রিফান্ড সম্পন্ন হয়েছে।" : $"Sales return #{result.Header.ID} posted with original-batch control, refund and accounting reversal.");
+            await using var refreshDb=await DbFactory.CreateDbContextAsync();
+            recent=await refreshDb.PharmacySalesReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(100).ToListAsync();
         }
         catch(Exception ex){
-            await tx.RollbackAsync();
             Fail(I18n.IsBangla ? $"বিক্রয় ফেরত ব্যর্থ: {ex.Message}" : $"Sales return failed: {ex.Message}");
         }
         finally{isSaving=false;}

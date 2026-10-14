@@ -157,45 +157,47 @@ public sealed class HospitalSetupService(
         if (name.Length is < 2 or > 150)
             return HospitalSetupResult.Fail("Hospital name must be between 2 and 150 characters.");
 
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<HpmDbContext>();
-        await EnsureSchemaAsync(db, cancellationToken);
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            System.Data.IsolationLevel.ReadCommitted, cancellationToken);
         try
         {
-            var profile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
-            if (profile is null)
-            {
-                profile = new HospitalProfile
+            var profile = await ResilientTransaction.ExecuteScopedAsync(
+                scopeFactory,
+                async (_, db) =>
                 {
-                    ID = 1,
-                    IsSetupComplete = true,
-                    SetupCompletedAt = DateTime.UtcNow,
-                    SetupBy = updatedBy
-                };
-                db.HospitalProfiles.Add(profile);
-            }
+                    await EnsureSchemaAsync(db, cancellationToken);
+                    var savedProfile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
+                    if (savedProfile is null)
+                    {
+                        savedProfile = new HospitalProfile
+                        {
+                            ID = 1,
+                            IsSetupComplete = true,
+                            SetupCompletedAt = DateTime.UtcNow,
+                            SetupBy = updatedBy
+                        };
+                        db.HospitalProfiles.Add(savedProfile);
+                    }
 
-            profile.HospitalName = name;
-            profile.Tagline = input.Tagline?.Trim() ?? "";
-            profile.Address = input.Address?.Trim() ?? "";
-            profile.CityDistrict = input.CityDistrict?.Trim() ?? "";
-            profile.Phone = input.Phone?.Trim() ?? "";
-            profile.Hotline = input.Hotline?.Trim() ?? "";
-            profile.EmergencyContact = input.EmergencyContact?.Trim() ?? "";
-            profile.Email = input.Email?.Trim() ?? "";
-            profile.Website = input.Website?.Trim() ?? "";
-            profile.LicenseNo = input.LicenseNo?.Trim() ?? "";
-            profile.LogoData = input.LogoData?.Trim() ?? "";
-            profile.LabHeaderDept = input.LabHeaderDept?.Trim() ?? "Department of Pathology, Diagnostic & Laboratory Medicine";
-            profile.ReceiptHeaderNote = input.ReceiptHeaderNote?.Trim() ?? "";
-            profile.ReceiptFooterNote = input.ReceiptFooterNote?.Trim() ?? "Computer generated clinical document. Valid without physical signature.";
-            profile.UpdatedAt = DateTime.UtcNow;
-            profile.UpdatedBy = updatedBy;
+                    savedProfile.HospitalName = name;
+                    savedProfile.Tagline = input.Tagline?.Trim() ?? "";
+                    savedProfile.Address = input.Address?.Trim() ?? "";
+                    savedProfile.CityDistrict = input.CityDistrict?.Trim() ?? "";
+                    savedProfile.Phone = input.Phone?.Trim() ?? "";
+                    savedProfile.Hotline = input.Hotline?.Trim() ?? "";
+                    savedProfile.EmergencyContact = input.EmergencyContact?.Trim() ?? "";
+                    savedProfile.Email = input.Email?.Trim() ?? "";
+                    savedProfile.Website = input.Website?.Trim() ?? "";
+                    savedProfile.LicenseNo = input.LicenseNo?.Trim() ?? "";
+                    savedProfile.LogoData = input.LogoData?.Trim() ?? "";
+                    savedProfile.LabHeaderDept = input.LabHeaderDept?.Trim() ?? "Department of Pathology, Diagnostic & Laboratory Medicine";
+                    savedProfile.ReceiptHeaderNote = input.ReceiptHeaderNote?.Trim() ?? "";
+                    savedProfile.ReceiptFooterNote = input.ReceiptFooterNote?.Trim() ?? "Computer generated clinical document. Valid without physical signature.";
+                    savedProfile.UpdatedAt = DateTime.UtcNow;
+                    savedProfile.UpdatedBy = updatedBy;
 
-            await db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+                    await db.SaveChangesAsync(cancellationToken);
+                    return savedProfile;
+                },
+                cancellationToken: cancellationToken);
 
             ApplyProfile(profile);
             OnSettingsChanged?.Invoke();
@@ -204,7 +206,6 @@ public sealed class HospitalSetupService(
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
             return HospitalSetupResult.Fail($"Failed to save hospital settings: {ex.GetBaseException().Message}");
         }
     }
@@ -225,53 +226,56 @@ public sealed class HospitalSetupService(
         if (!string.Equals(password, confirmPassword, StringComparison.Ordinal))
             return HospitalSetupResult.Fail("Password and confirmation do not match.");
 
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<HpmDbContext>();
-        var users = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
-        var roles = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
-        await using var transaction = await db.Database.BeginTransactionAsync(
-            System.Data.IsolationLevel.Serializable, cancellationToken);
         try
         {
-            await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:FirstRunSetup", cancellationToken);
-            var profile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
-            if (profile != null && (profile.IsSetupComplete || await db.Users.AnyAsync(cancellationToken)))
-                return HospitalSetupResult.Fail("Hospital setup has already been completed.");
-
-            foreach (var roleName in RoleNames.All)
-            {
-                if (!await roles.RoleExistsAsync(roleName))
+            var profile = await ResilientTransaction.ExecuteScopedAsync(
+                scopeFactory,
+                async (services, db) =>
                 {
-                    var roleResult = await roles.CreateAsync(new IdentityRole<int>(roleName));
-                    if (!roleResult.Succeeded) return HospitalSetupResult.Fail(Errors(roleResult));
-                }
-            }
+                    var users = services.GetRequiredService<UserManager<AppUser>>();
+                    var roles = services.GetRequiredService<RoleManager<IdentityRole<int>>>();
+                    await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:FirstRunSetup", cancellationToken);
+                    var savedProfile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
+                    if (savedProfile != null && (savedProfile.IsSetupComplete || await db.Users.AnyAsync(cancellationToken)))
+                        throw new InvalidOperationException("Hospital setup has already been completed.");
 
-            var admin = new AppUser
-            {
-                UserName = userName,
-                DisplayName = "Super Administrator",
-                IsActive = true,
-                MustChangePassword = false,
-                CreatedAt = DateTime.UtcNow
-            };
-            var createResult = await users.CreateAsync(admin, password);
-            if (!createResult.Succeeded) return HospitalSetupResult.Fail(Errors(createResult));
-            var roleAssignment = await users.AddToRoleAsync(admin, RoleNames.Administrator);
-            if (!roleAssignment.Succeeded) return HospitalSetupResult.Fail(Errors(roleAssignment));
+                    foreach (var roleName in RoleNames.All)
+                    {
+                        if (!await roles.RoleExistsAsync(roleName))
+                        {
+                            var roleResult = await roles.CreateAsync(new IdentityRole<int>(roleName));
+                            if (!roleResult.Succeeded) throw new InvalidOperationException(Errors(roleResult));
+                        }
+                    }
 
-            if (profile is null)
-            {
-                profile = new HospitalProfile { ID = 1 };
-                db.HospitalProfiles.Add(profile);
-            }
+                    var admin = new AppUser
+                    {
+                        UserName = userName,
+                        DisplayName = "Super Administrator",
+                        IsActive = true,
+                        MustChangePassword = false,
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    var createResult = await users.CreateAsync(admin, password);
+                    if (!createResult.Succeeded) throw new InvalidOperationException(Errors(createResult));
+                    var roleAssignment = await users.AddToRoleAsync(admin, RoleNames.Administrator);
+                    if (!roleAssignment.Succeeded) throw new InvalidOperationException(Errors(roleAssignment));
 
-            profile.HospitalName = hospitalName;
-            profile.IsSetupComplete = true;
-            profile.SetupCompletedAt = DateTime.UtcNow;
-            profile.SetupBy = userName;
-            await db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+                    if (savedProfile is null)
+                    {
+                        savedProfile = new HospitalProfile { ID = 1 };
+                        db.HospitalProfiles.Add(savedProfile);
+                    }
+
+                    savedProfile.HospitalName = hospitalName;
+                    savedProfile.IsSetupComplete = true;
+                    savedProfile.SetupCompletedAt = DateTime.UtcNow;
+                    savedProfile.SetupBy = userName;
+                    await db.SaveChangesAsync(cancellationToken);
+                    return savedProfile;
+                },
+                System.Data.IsolationLevel.Serializable,
+                cancellationToken);
 
             ApplyProfile(profile);
             OnSettingsChanged?.Invoke();
@@ -279,7 +283,6 @@ public sealed class HospitalSetupService(
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync(cancellationToken);
             return HospitalSetupResult.Fail($"Setup could not be completed. {ex.GetBaseException().Message}");
         }
     }

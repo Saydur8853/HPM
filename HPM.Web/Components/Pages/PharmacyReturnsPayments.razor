@@ -375,10 +375,10 @@
             return;
         }
         isSaving=true;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         try
         {
+            var h = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var uid=await CurrentUserIdAsync();
             var now=DateTime.Now;
             var h=new MedicineReturn{SupplierID=returnSupplierId,StoreID=returnStoreId,IsPosted=true,EnteredBy=uid,TransDate=now};
@@ -396,13 +396,13 @@
             db.SupplierLedgers.Add(new SupplierLedger{SupplierID=returnSupplierId,ChallanNo=-h.ID,Debit=ReturnTotal,Credit=0,Balance=previous-ReturnTotal,TransDate=now});
             AccountingPosting.AddPostedVoucher(db,"Purchase Return",now,$"Medicine return to {SupplierName(returnSupplierId)}",$"PHARMACY-RETURN:{h.ID}",uid,(AccountingPosting.SupplierPayable,ReturnTotal,0),(AccountingPosting.MedicinePurchase,0,ReturnTotal));
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
+            return h;
+            }, IsolationLevel.Serializable);
             savedReturn=h;
             Success(I18n.IsBangla ? $"ক্রয় ফেরত #{h.ID} পোস্ট করা হয়েছে; স্টক ও লেজার আপডেট হয়েছে।" : $"Purchase return #{h.ID} posted; stock, supplier ledger and accounts updated.");
             await RefreshAfterPostAsync();
         }
         catch(Exception ex){
-            await tx.RollbackAsync();
             Fail(I18n.IsBangla ? $"ফেরত প্রক্রিয়া ব্যর্থ: {ex.Message}" : $"Return failed: {ex.Message}");
         }
         finally{isSaving=false;}
@@ -421,10 +421,10 @@
             return;
         }
         isSaving=true;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        await using var tx=await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         try
         {
+            var result = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var payable=await db.SupplierLedgers.Where(x=>x.SupplierID==paymentSupplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
             if(paymentAmount>payable)throw new InvalidOperationException(I18n.IsBangla ? $"পেমেন্টের পরিমাণ বর্তমান দেনা {I18n.FormatCurrency(payable)}-এর বেশি।" : $"Payment exceeds current payable of ৳{payable:N2}.");
             var uid=await CurrentUserIdAsync();
@@ -435,14 +435,14 @@
             db.SupplierLedgers.Add(new SupplierLedger{SupplierID=paymentSupplierId,SupplierPaymentID=p.ID,Debit=paymentAmount,Credit=0,Balance=payable-paymentAmount,TransDate=now});
             AccountingPosting.AddPostedVoucher(db,"Payment",now,$"Supplier payment to {SupplierName(paymentSupplierId)}",$"SUPPLIER-PAYMENT:{p.ID}",uid,(AccountingPosting.SupplierPayable,paymentAmount,0),(AccountingPosting.Cash,0,paymentAmount));
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            savedPayment=p;
-            paymentPayable=payable-paymentAmount;
-            Success(I18n.IsBangla ? $"সরবরাহকারী পেমেন্ট #{p.ID} লেজার ও অ্যাকাউন্টে পোস্ট করা হয়েছে।" : $"Supplier payment #{p.ID} posted to ledger and accounts.");
+            return (Payment: p, Remaining: payable-paymentAmount);
+            }, IsolationLevel.Serializable);
+            savedPayment=result.Payment;
+            paymentPayable=result.Remaining;
+            Success(I18n.IsBangla ? $"সরবরাহকারী পেমেন্ট #{result.Payment.ID} লেজার ও অ্যাকাউন্টে পোস্ট করা হয়েছে।" : $"Supplier payment #{result.Payment.ID} posted to ledger and accounts.");
             await RefreshAfterPostAsync();
         }
         catch(Exception ex){
-            await tx.RollbackAsync();
             Fail(I18n.IsBangla ? $"পেমেন্ট ব্যর্থ: {ex.Message}" : $"Payment failed: {ex.Message}");
         }
         finally{isSaving=false;}
