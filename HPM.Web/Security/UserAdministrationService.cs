@@ -16,25 +16,30 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
         int? doctorProfileId;
         try { doctorProfileId = await ValidateDoctorProfileAsync(db, command); }
         catch (Exception ex) { return UserAdminResult.Fail(ex.Message); }
-        await using var transaction = await db.Database.BeginTransactionAsync();
+        UserAdminResult? result = null;
         try
         {
-            var user = new AppUser
+            var strategy = db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
             {
-                UserName = command.UserName.Trim(), Email = command.Email?.Trim(), DisplayName = command.DisplayName.Trim(),
-                EmailConfirmed = true, IsActive = true, MustChangePassword = true, CreatedAt = DateTime.UtcNow,
-                DoctorProfileID = doctorProfileId
-            };
-            Ensure(await users.CreateAsync(user, command.Password));
-            Ensure(await users.AddToRoleAsync(user, command.Role));
-            AddAudit(db, actorId, actorName, "Create", user.Id, $"User account; Role={command.Role}; DoctorProfileID={doctorProfileId}; TemporaryPassword=True");
-            await db.SaveChangesAsync();
-            await transaction.CommitAsync();
-            return UserAdminResult.Ok(user.Id);
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                var user = new AppUser
+                {
+                    UserName = command.UserName.Trim(), Email = command.Email?.Trim(), DisplayName = command.DisplayName.Trim(),
+                    EmailConfirmed = true, IsActive = true, MustChangePassword = true, CreatedAt = DateTime.UtcNow,
+                    DoctorProfileID = doctorProfileId
+                };
+                Ensure(await users.CreateAsync(user, command.Password));
+                Ensure(await users.AddToRoleAsync(user, command.Role));
+                AddAudit(db, actorId, actorName, "Create", user.Id, $"User account; Role={command.Role}; DoctorProfileID={doctorProfileId}; TemporaryPassword=True");
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+                result = UserAdminResult.Ok(user.Id);
+            });
+            return result ?? UserAdminResult.Fail("Unknown error.");
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync();
             return UserAdminResult.Fail(ex.Message);
         }
     }
@@ -50,37 +55,42 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
         int? doctorProfileId;
         try { doctorProfileId = await ValidateDoctorProfileAsync(db, command); }
         catch (Exception ex) { return UserAdminResult.Fail(ex.Message); }
-        await using var transaction = await db.Database.BeginTransactionAsync();
+        UserAdminResult? result = null;
         try
         {
-            var user = await users.FindByIdAsync(command.ID.ToString()) ?? throw new InvalidOperationException("User account was not found.");
-            user.DisplayName = command.DisplayName.Trim();
-            user.Email = command.Email?.Trim();
-            user.IsActive = command.IsActive;
-            user.DoctorProfileID = doctorProfileId;
-            Ensure(await users.UpdateAsync(user));
-            var existingRoles = await users.GetRolesAsync(user);
-            if (existingRoles.Count > 0) Ensure(await users.RemoveFromRolesAsync(user, existingRoles));
-            Ensure(await users.AddToRoleAsync(user, command.Role));
-            var passwordReset = !string.IsNullOrWhiteSpace(command.Password);
-            if (passwordReset)
+            var strategy = db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
             {
-                var token = await users.GeneratePasswordResetTokenAsync(user);
-                Ensure(await users.ResetPasswordAsync(user, token, command.Password));
-                user.MustChangePassword = true;
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                var user = await users.FindByIdAsync(command.ID.ToString()) ?? throw new InvalidOperationException("User account was not found.");
+                user.DisplayName = command.DisplayName.Trim();
+                user.Email = command.Email?.Trim();
+                user.IsActive = command.IsActive;
+                user.DoctorProfileID = doctorProfileId;
                 Ensure(await users.UpdateAsync(user));
-            }
-            // Invalidate all existing cookies after role, status or password
-            // changes. This makes deactivation effective for signed-in users.
-            Ensure(await users.UpdateSecurityStampAsync(user));
-            AddAudit(db, actorId, actorName, "Update", user.Id, $"User account; Role={command.Role}; DoctorProfileID={doctorProfileId}; Active={command.IsActive}; PasswordReset={passwordReset}");
-            await db.SaveChangesAsync();
-            await transaction.CommitAsync();
-            return UserAdminResult.Ok(user.Id);
+                var existingRoles = await users.GetRolesAsync(user);
+                if (existingRoles.Count > 0) Ensure(await users.RemoveFromRolesAsync(user, existingRoles));
+                Ensure(await users.AddToRoleAsync(user, command.Role));
+                var passwordReset = !string.IsNullOrWhiteSpace(command.Password);
+                if (passwordReset)
+                {
+                    var token = await users.GeneratePasswordResetTokenAsync(user);
+                    Ensure(await users.ResetPasswordAsync(user, token, command.Password));
+                    user.MustChangePassword = true;
+                    Ensure(await users.UpdateAsync(user));
+                }
+                // Invalidate all existing cookies after role, status or password
+                // changes. This makes deactivation effective for signed-in users.
+                Ensure(await users.UpdateSecurityStampAsync(user));
+                AddAudit(db, actorId, actorName, "Update", user.Id, $"User account; Role={command.Role}; DoctorProfileID={doctorProfileId}; Active={command.IsActive}; PasswordReset={passwordReset}");
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+                result = UserAdminResult.Ok(user.Id);
+            });
+            return result ?? UserAdminResult.Fail("Unknown error.");
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync();
             return UserAdminResult.Fail(ex.Message);
         }
     }
@@ -90,20 +100,25 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
         await using var scope = scopeFactory.CreateAsyncScope();
         var users = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
         var db = scope.ServiceProvider.GetRequiredService<HpmDbContext>();
-        await using var transaction = await db.Database.BeginTransactionAsync();
+        UserAdminResult? result = null;
         try
         {
-            var user = await users.FindByIdAsync(userId.ToString()) ?? throw new InvalidOperationException("User account was not found.");
-            Ensure(await users.SetLockoutEndDateAsync(user, null));
-            Ensure(await users.ResetAccessFailedCountAsync(user));
-            AddAudit(db, actorId, actorName, "Update", user.Id, "Account unlocked");
-            await db.SaveChangesAsync();
-            await transaction.CommitAsync();
-            return UserAdminResult.Ok(user.Id);
+            var strategy = db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync();
+                var user = await users.FindByIdAsync(userId.ToString()) ?? throw new InvalidOperationException("User account was not found.");
+                Ensure(await users.SetLockoutEndDateAsync(user, null));
+                Ensure(await users.ResetAccessFailedCountAsync(user));
+                AddAudit(db, actorId, actorName, "Update", user.Id, "Account unlocked");
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+                result = UserAdminResult.Ok(user.Id);
+            });
+            return result ?? UserAdminResult.Fail("Unknown error.");
         }
         catch (Exception ex)
         {
-            await transaction.RollbackAsync();
             return UserAdminResult.Fail(ex.Message);
         }
     }
