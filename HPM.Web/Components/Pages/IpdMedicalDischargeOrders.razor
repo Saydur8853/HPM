@@ -8,91 +8,348 @@
 
 <PageTitle>@I18n.T("Medical Discharge Orders") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div><span class="eyebrow">@I18n.T("IPD Clinical Care")</span><h1>@I18n.T("Medical Discharge Orders")</h1><p>@I18n.T("Doctor clinical clearance before final billing and administrative discharge.")</p></div>
-    <button class="btn btn-secondary" @onclick="LoadAsync">↻ @I18n.T("Refresh")</button>
-</div>
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
-
-<div class="workspace-grid compact">
-    <div class="panel list-panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Active Inpatients")</h2><p>@admissions.Count @I18n.T("assigned patient(s)")</p></div></div>
-        <div class="record-list">
-            @if(admissions.Count==0){<div class="empty-state">@I18n.T("No active assigned inpatient.")</div>}
-            @foreach(var admission in admissions)
-            {
-                <button type="button" class="record-card static" style="width:100%;text-align:left;" @onclick="()=>SelectAsync(admission)">
-                    <span class="ticket-no">@admission.RegNo</span><span class="record-main"><strong>@PatientName(admission.PatientID)</strong><small>@DoctorName(admission.Consultant??admission.AdmittedBy) · @admission.AdmissionDate?.ToString("dd MMM yyyy")</small></span><span class="pill">@OrderStatus(admission.ID)</span>
-                </button>
-            }
+<div class="ipd-classic-fit">
+    <div class="ipd-classic-topbar">
+        <div class="ipd-classic-title-group">
+            <span class="ipd-classic-eyebrow">@I18n.T("IPD Clinical Care")</span>
+            <h1 class="ipd-classic-title">@I18n.T("Medical Discharge Orders")</h1>
+            <span class="ipd-classic-subtitle">@I18n.T("Doctor clinical clearance before final billing and administrative discharge.")</span>
+        </div>
+        <div class="ipd-topbar-metrics">
+            <div class="ipd-metric-chip">
+                <span class="ipd-metric-label">@I18n.T("Active Inpatients")</span>
+                <span class="ipd-metric-value">@admissions.Count</span>
+            </div>
+            <div class="ipd-metric-chip">
+                <span class="ipd-metric-label">@I18n.T("Orders Ready")</span>
+                <span class="ipd-metric-value text-success">@orderStatuses.Values.Count(s => s == "Ready")</span>
+            </div>
+        </div>
+        <div class="ipd-topbar-actions">
+            <button class="btn btn-secondary btn-sm" @onclick="LoadAsync">↻ @I18n.T("Refresh")</button>
         </div>
     </div>
 
-    <div class="panel form-panel">
-        @if(selectedAdmission is null){<div class="empty-state">@I18n.T("Select an active inpatient.")</div>}
-        else
-        {
-            <div class="panel-heading"><div><h2>@PatientName(selectedAdmission.PatientID)</h2><p>@selectedAdmission.RegNo · @I18n.T("Admitted") @selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy hh:mm tt")</p></div><span class="badge">@(order?.Status??"NEW")</span></div>
-            <div class="form-grid">
-                <label><span>@I18n.T("Discharging Doctor *")</span><select @bind="doctorId" disabled="@(!isAdministrator)"><option value="0">@I18n.T("Select doctor")</option>@foreach(var doctor in doctors){<option value="@doctor.ID">@DoctorName(doctor.ID)</option>}</select></label>
-                <label><span>@I18n.T("Outcome *")</span><select @bind="outcome" disabled="@(order?.Status=="Completed")"><option value="Cured">Cured / Recovered</option><option value="Improved">Improved</option><option value="Referred">Referred to Higher Centre</option><option value="DOR">Discharge on Request (DOR)</option><option value="DAMA">Discharged Against Medical Advice (DAMA)</option><option value="Expired">Expired</option></select></label>
-                <label class="span-2"><span>@I18n.T("Final Diagnosis *")</span><InputTextArea @bind-Value="finalDiagnosis" disabled="@(order?.Status=="Completed")" /></label>
-                <label class="span-2"><span>@I18n.T("Condition at Discharge")</span><InputTextArea @bind-Value="condition" disabled="@(order?.Status=="Completed")" /></label>
-                <label class="span-2"><span>@I18n.T("Treatment Advice / Medication Instructions *")</span><InputTextArea @bind-Value="advice" disabled="@(order?.Status=="Completed")" /></label>
-                <label class="span-2"><span>@I18n.T("Follow-up Plan")</span><InputTextArea @bind-Value="followUp" disabled="@(order?.Status=="Completed")" /></label>
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @messageClass" style="margin: 0.25rem 0.75rem 0; padding: 0.4rem 0.75rem; font-size: 0.82rem;">
+            @message
+        </div>
+    }
+
+    <div class="ipd-classic-workspace">
+        <!-- Left: Active Inpatient Queue -->
+        <div class="ipd-queue-card" style="flex: 0 0 380px; max-width: 420px;">
+            <div class="ipd-queue-header">
+                <div class="ipd-queue-title-wrap">
+                    <span class="ipd-queue-title">@I18n.T("Active Inpatients")</span>
+                    <span class="ipd-queue-count">@FilteredAdmissions.Count</span>
+                </div>
+                <div class="ipd-queue-search-wrap">
+                    <input type="text" class="form-control ipd-queue-search-input" placeholder="@I18n.T("Search patient or Reg No...")" @bind="searchFilter" @bind:event="oninput" />
+                </div>
             </div>
-            @if(order?.Status!="Completed")
+
+            <div class="ipd-queue-body">
+                @if (FilteredAdmissions.Count == 0)
+                {
+                    <div class="ipd-empty-queue">@I18n.T("No active assigned inpatient.")</div>
+                }
+                else
+                {
+                    <div class="ipd-queue-list">
+                        @foreach (var admission in FilteredAdmissions)
+                        {
+                            var isSelected = selectedAdmission?.ID == admission.ID;
+                            var status = OrderStatus(admission.ID);
+                            <div class="ipd-queue-row @(isSelected ? "selected" : "")" @onclick="() => SelectAsync(admission)">
+                                <div class="ipd-queue-row-top">
+                                    <span class="ipd-reg-badge">@admission.RegNo</span>
+                                    <span class="badge @(status == "Ready" ? "badge-success" : status == "Completed" ? "badge-info" : "badge-secondary")" style="font-size:0.7rem;">@status</span>
+                                </div>
+                                <div class="ipd-queue-patient-name">@PatientName(admission.PatientID)</div>
+                                <div class="ipd-queue-row-meta">
+                                    <span>@DoctorName(admission.Consultant ?? admission.AdmittedBy)</span>
+                                    <span>@admission.AdmissionDate?.ToString("dd MMM yyyy")</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Right: Doctor Clearance Form Card -->
+        <div class="ipd-form-card" style="flex: 1 1 auto;">
+            @if (selectedAdmission is null)
             {
-                <div class="form-actions"><button class="btn btn-primary" @onclick="SaveAsync">@I18n.T("Mark Medically Ready for Discharge")</button>@if(order?.Status=="Ready"){<button class="btn btn-ghost" style="color:#dc2626" @onclick="CancelAsync">@I18n.T("Cancel Medical Order")</button>}</div>
+                <div class="ipd-empty-form">
+                    <div class="ipd-empty-icon">📋</div>
+                    <div class="ipd-empty-title">@I18n.T("No Patient Selected")</div>
+                    <div class="ipd-empty-desc">@I18n.T("Select an active inpatient from the left list to review or prepare medical clearance.")</div>
+                </div>
             }
-        }
+            else
+            {
+                <div class="ipd-form-header">
+                    <div class="ipd-form-title-group">
+                        <span class="ipd-form-title">@PatientName(selectedAdmission.PatientID)</span>
+                        <span class="ipd-form-meta">@selectedAdmission.RegNo · @I18n.T("Admitted"): @selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy hh:mm tt")</span>
+                    </div>
+                    <span class="badge @(order?.Status == "Ready" ? "badge-success" : order?.Status == "Completed" ? "badge-info" : "badge-warning")">
+                        @(order?.Status ?? "NEW")
+                    </span>
+                </div>
+
+                <div class="ipd-form-scrollable-body" style="padding: 0.75rem 1rem;">
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Discharging Doctor *")</label>
+                            <select class="form-select form-select-sm" @bind="doctorId" disabled="@(!isAdministrator)">
+                                <option value="0">@I18n.T("Select doctor")</option>
+                                @foreach (var doctor in doctors)
+                                {
+                                    <option value="@doctor.ID">@DoctorName(doctor.ID)</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Outcome *")</label>
+                            <select class="form-select form-select-sm" @bind="outcome" disabled="@(order?.Status == "Completed")">
+                                <option value="Cured">Cured / Recovered</option>
+                                <option value="Improved">Improved</option>
+                                <option value="Referred">Referred to Higher Centre</option>
+                                <option value="DOR">Discharge on Request (DOR)</option>
+                                <option value="DAMA">Discharged Against Medical Advice (DAMA)</option>
+                                <option value="Expired">Expired</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Final Diagnosis *")</label>
+                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="finalDiagnosis" disabled="@(order?.Status == "Completed")" />
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Condition at Discharge")</label>
+                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="condition" disabled="@(order?.Status == "Completed")" />
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Treatment Advice / Medication Instructions *")</label>
+                            <InputTextArea class="form-control form-control-sm" rows="3" @bind-Value="advice" disabled="@(order?.Status == "Completed")" />
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Follow-up Plan")</label>
+                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="followUp" disabled="@(order?.Status == "Completed")" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ipd-form-actions-footer">
+                    @if (order?.Status != "Completed")
+                    {
+                        <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            @I18n.T("Mark Medically Ready for Discharge")
+                        </button>
+                        @if (order?.Status == "Ready")
+                        {
+                            <button class="btn btn-outline-danger btn-sm" @onclick="CancelAsync" disabled="@isSaving">
+                                @I18n.T("Cancel Medical Order")
+                            </button>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted small">@I18n.T("This discharge order is completed and administratively finalized.")</span>
+                    }
+                </div>
+            }
+        </div>
     </div>
 </div>
 
-@code{
-    private List<PatientAdmission> admissions=[];private List<DoctorsProfile> doctors=[];private Dictionary<string,string> patientNames=new(StringComparer.OrdinalIgnoreCase);private Dictionary<long,string> orderStatuses=[];
-    private PatientAdmission? selectedAdmission;private IpdMedicalDischargeOrder? order;private int doctorId;private int? currentDoctorProfileId;private bool isAdministrator;
-    private string outcome="Improved",finalDiagnosis="",condition="",advice="",followUp="",message="",messageClass="success";
+@code {
+    private List<PatientAdmission> admissions = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<string, string> patientNames = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<long, string> orderStatuses = [];
+    private PatientAdmission? selectedAdmission;
+    private IpdMedicalDischargeOrder? order;
+    private int doctorId;
+    private int? currentDoctorProfileId;
+    private bool isAdministrator;
+    private bool isSaving;
+    private string searchFilter = "";
+    private string outcome = "Improved", finalDiagnosis = "", condition = "", advice = "", followUp = "", message = "", messageClass = "success";
+
+    private List<PatientAdmission> FilteredAdmissions =>
+        string.IsNullOrWhiteSpace(searchFilter)
+            ? admissions
+            : admissions.Where(a =>
+                (a.RegNo?.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (PatientName(a.PatientID).Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
     protected override async Task OnInitializedAsync()
     {
-        var principal=(await AuthStateProvider.GetAuthenticationStateAsync()).User;isAdministrator=principal.IsInRole(RoleNames.Administrator);
-        if(int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim),out var mappedId))currentDoctorProfileId=mappedId;
-        if(!isAdministrator&&!currentDoctorProfileId.HasValue){Fail(I18n.T("This Doctor account is not linked to a Doctors Profile."));return;}
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedId))
+            currentDoctorProfileId = mappedId;
+        if (!isAdministrator && !currentDoctorProfileId.HasValue)
+        {
+            Fail(I18n.T("This Doctor account is not linked to a Doctors Profile."));
+            return;
+        }
         await LoadAsync();
     }
+
     private async Task LoadAsync()
     {
-        await using var db=await DbFactory.CreateDbContextAsync();doctors=await db.Doctors.AsNoTracking().Where(x=>x.Name!=null).OrderBy(x=>x.Name).ToListAsync();
-        var query=db.PatientAdmissions.AsNoTracking().Where(x=>x.IsAdmitted==true);
-        if(currentDoctorProfileId.HasValue)query=query.Where(x=>x.Consultant==currentDoctorProfileId||x.AdmittedBy==currentDoctorProfileId);
-        admissions=await query.OrderBy(x=>x.AdmissionDate).ToListAsync();
-        var ids=admissions.Select(x=>x.ID).ToArray();orderStatuses=ids.Length==0?[]:await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x=>ids.Contains(x.AdmissionID)).ToDictionaryAsync(x=>x.AdmissionID,x=>x.Status);
-        var patientIds=admissions.Where(x=>x.PatientID!=null).Select(x=>x.PatientID!).Distinct().ToArray();patientNames=patientIds.Length==0?new(StringComparer.OrdinalIgnoreCase):await db.Registrations.AsNoTracking().Where(x=>patientIds.Contains(x.PatientID)).ToDictionaryAsync(x=>x.PatientID,x=>x.Name,StringComparer.OrdinalIgnoreCase);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).OrderBy(x => x.Name).ToListAsync();
+        var query = db.PatientAdmissions.AsNoTracking().Where(x => x.IsAdmitted == true);
+        if (currentDoctorProfileId.HasValue)
+            query = query.Where(x => x.Consultant == currentDoctorProfileId || x.AdmittedBy == currentDoctorProfileId);
+        admissions = await query.OrderBy(x => x.AdmissionDate).ToListAsync();
+        var ids = admissions.Select(x => x.ID).ToArray();
+        orderStatuses = ids.Length == 0 ? [] : await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x => ids.Contains(x.AdmissionID)).ToDictionaryAsync(x => x.AdmissionID, x => x.Status);
+        var patientIds = admissions.Where(x => x.PatientID != null).Select(x => x.PatientID!).Distinct().ToArray();
+        patientNames = patientIds.Length == 0 ? new(StringComparer.OrdinalIgnoreCase) : await db.Registrations.AsNoTracking().Where(x => patientIds.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
     }
+
     private async Task SelectAsync(PatientAdmission admission)
     {
-        selectedAdmission=admission;await using var db=await DbFactory.CreateDbContextAsync();order=await db.IpdMedicalDischargeOrders.AsNoTracking().SingleOrDefaultAsync(x=>x.AdmissionID==admission.ID);
-        doctorId=currentDoctorProfileId??order?.DoctorID??admission.Consultant??admission.AdmittedBy??0;outcome=order?.Outcome??"Improved";finalDiagnosis=order?.FinalDiagnosis??admission.Diagnosis??"";condition=order?.ConditionAtDischarge??"";advice=order?.Advice??"";followUp=order?.FollowUp??"";message="";
+        selectedAdmission = admission;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        order = await db.IpdMedicalDischargeOrders.AsNoTracking().SingleOrDefaultAsync(x => x.AdmissionID == admission.ID);
+        doctorId = currentDoctorProfileId ?? order?.DoctorID ?? admission.Consultant ?? admission.AdmittedBy ?? 0;
+        outcome = order?.Outcome ?? "Improved";
+        finalDiagnosis = order?.FinalDiagnosis ?? admission.Diagnosis ?? "";
+        condition = order?.ConditionAtDischarge ?? "";
+        advice = order?.Advice ?? "";
+        followUp = order?.FollowUp ?? "";
+        message = "";
     }
+
     private async Task SaveAsync()
     {
-        if(selectedAdmission is null||doctorId<=0||string.IsNullOrWhiteSpace(finalDiagnosis)||string.IsNullOrWhiteSpace(advice)){Fail(I18n.T("Doctor, final diagnosis and discharge advice are required."));return;}
-        if(!isAdministrator&&doctorId!=currentDoctorProfileId){Fail(I18n.T("A doctor can issue discharge orders only under their own profile."));return;}
-        await using var db=await DbFactory.CreateDbContextAsync();await using var tx=await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+        if (selectedAdmission is null || doctorId <= 0 || string.IsNullOrWhiteSpace(finalDiagnosis) || string.IsNullOrWhiteSpace(advice))
+        {
+            Fail(I18n.T("Doctor, final diagnosis and discharge advice are required."));
+            return;
+        }
+        if (!isAdministrator && doctorId != currentDoctorProfileId)
+        {
+            Fail(I18n.T("A doctor can issue discharge orders only under their own profile."));
+            return;
+        }
+
+        isSaving = true;
         try
         {
-            var admission=await db.PatientAdmissions.SingleAsync(x=>x.ID==selectedAdmission.ID);if(admission.IsAdmitted!=true)throw new InvalidOperationException("Patient is already discharged.");
-            if(!isAdministrator&&admission.Consultant!=currentDoctorProfileId&&admission.AdmittedBy!=currentDoctorProfileId)throw new InvalidOperationException("This inpatient is not assigned to your profile.");
-            var entity=await db.IpdMedicalDischargeOrders.SingleOrDefaultAsync(x=>x.AdmissionID==admission.ID);
-            if(entity?.Status=="Completed")throw new InvalidOperationException("Completed medical discharge order cannot be changed.");
-            entity??=new IpdMedicalDischargeOrder{AdmissionID=admission.ID,RegNo=admission.RegNo};if(entity.ID==0)db.IpdMedicalDischargeOrders.Add(entity);
-            entity.DoctorID=doctorId;entity.Status="Ready";entity.Outcome=outcome;entity.FinalDiagnosis=finalDiagnosis.Trim();entity.ConditionAtDischarge=string.IsNullOrWhiteSpace(condition)?null:condition.Trim();entity.Advice=advice.Trim();entity.FollowUp=string.IsNullOrWhiteSpace(followUp)?null:followUp.Trim();entity.OrderedBy=await CurrentUserIdAsync();entity.OrderedAt=DateTime.Now;
-            await db.SaveChangesAsync();await tx.CommitAsync();order=entity;Success(I18n.IsBangla?"রোগীকে চিকিৎসাগতভাবে ছাড়পত্রের জন্য প্রস্তুত করা হয়েছে।":"Patient marked medically ready for discharge.");await LoadAsync();
-        }catch(Exception ex){await tx.RollbackAsync();Fail(ex.GetBaseException().Message);}
+            var admissionId = selectedAdmission.ID;
+            var curDoctorId = doctorId;
+            var curOutcome = outcome;
+            var curFinalDiagnosis = finalDiagnosis.Trim();
+            var curCondition = string.IsNullOrWhiteSpace(condition) ? null : condition.Trim();
+            var curAdvice = advice.Trim();
+            var curFollowUp = string.IsNullOrWhiteSpace(followUp) ? null : followUp.Trim();
+            var userId = await CurrentUserIdAsync();
+
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            IpdMedicalDischargeOrder? savedOrder = null;
+
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+
+                var admission = await db.PatientAdmissions.SingleAsync(x => x.ID == admissionId);
+                if (admission.IsAdmitted != true) throw new InvalidOperationException("Patient is already discharged.");
+                if (!isAdministrator && admission.Consultant != currentDoctorProfileId && admission.AdmittedBy != currentDoctorProfileId)
+                    throw new InvalidOperationException("This inpatient is not assigned to your profile.");
+
+                var entity = await db.IpdMedicalDischargeOrders.SingleOrDefaultAsync(x => x.AdmissionID == admission.ID);
+                if (entity?.Status == "Completed") throw new InvalidOperationException("Completed medical discharge order cannot be changed.");
+
+                entity ??= new IpdMedicalDischargeOrder { AdmissionID = admission.ID, RegNo = admission.RegNo };
+                if (entity.ID == 0) db.IpdMedicalDischargeOrders.Add(entity);
+
+                entity.DoctorID = curDoctorId;
+                entity.Status = "Ready";
+                entity.Outcome = curOutcome;
+                entity.FinalDiagnosis = curFinalDiagnosis;
+                entity.ConditionAtDischarge = curCondition;
+                entity.Advice = curAdvice;
+                entity.FollowUp = curFollowUp;
+                entity.OrderedBy = userId;
+                entity.OrderedAt = DateTime.Now;
+
+                await db.SaveChangesAsync();
+                await tx.CommitAsync();
+                savedOrder = entity;
+            });
+
+            order = savedOrder;
+            Success(I18n.IsBangla ? "রোগীকে চিকিৎসাগতভাবে ছাড়পত্রের জন্য প্রস্তুত করা হয়েছে।" : "Patient marked medically ready for discharge.");
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+        finally
+        {
+            isSaving = false;
+        }
     }
-    private async Task CancelAsync(){if(order is null||order.Status!="Ready"||!await JS.InvokeAsync<bool>("hpm.confirm",I18n.T("Cancel this medical discharge order?")))return;await using var db=await DbFactory.CreateDbContextAsync();var entity=await db.IpdMedicalDischargeOrders.SingleAsync(x=>x.ID==order.ID);if(!isAdministrator&&entity.DoctorID!=currentDoctorProfileId){Fail(I18n.T("Only the issuing doctor can cancel this order."));return;}entity.Status="Cancelled";await db.SaveChangesAsync();order=entity;Success(I18n.T("Medical discharge order cancelled."));await LoadAsync();}
-    private async Task<int> CurrentUserIdAsync(){var p=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
-    private string PatientName(string? id)=>id!=null&&patientNames.TryGetValue(id,out var name)?name:"—";private string DoctorName(int? id){var d=doctors.FirstOrDefault(x=>x.ID==id);return d is null?"—":$"{d.Title} {d.Name}".Trim();}private string OrderStatus(long id)=>orderStatuses.TryGetValue(id,out var s)?s:"Not Ready";
-    private void Success(string x){messageClass="success";message=x;}private void Fail(string x){messageClass="danger";message=x;}
+
+    private async Task CancelAsync()
+    {
+        if (order is null || order.Status != "Ready" || !await JS.InvokeAsync<bool>("hpm.confirm", I18n.T("Cancel this medical discharge order?"))) return;
+        isSaving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var entity = await db.IpdMedicalDischargeOrders.SingleAsync(x => x.ID == order.ID);
+            if (!isAdministrator && entity.DoctorID != currentDoctorProfileId)
+            {
+                Fail(I18n.T("Only the issuing doctor can cancel this order."));
+                return;
+            }
+            entity.Status = "Cancelled";
+            await db.SaveChangesAsync();
+            order = entity;
+            Success(I18n.T("Medical discharge order cancelled."));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var p = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private string PatientName(string? id) => id != null && patientNames.TryGetValue(id, out var name) ? name : "—";
+    private string DoctorName(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        return d is null ? "—" : $"{d.Title} {d.Name}".Trim();
+    }
+    private string OrderStatus(long id) => orderStatuses.TryGetValue(id, out var s) ? s : "Not Ready";
+    private void Success(string x) { messageClass = "success"; message = x; }
+    private void Fail(string x) { messageClass = "danger"; message = x; }
 }

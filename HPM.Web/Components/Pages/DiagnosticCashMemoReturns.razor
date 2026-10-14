@@ -1,0 +1,295 @@
+@page "/diagnostic/cash-memo-return"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier + "," + RoleNames.Reception)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@implements IDisposable
+@using System.Data
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Cash Memo Return") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">@I18n.T("Investigation")</span>
+        <h1>@I18n.T("Cash Memo Return & Refund")</h1>
+        <p>@I18n.T("Return selected investigations and adjust cash or the IPD patient account.")</p>
+    </div>
+    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New Return")</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass">@message</div>
+}
+
+<div class="module-layout">
+    <div class="panel form-panel">
+        <div class="panel-heading">
+            <div>
+                <h2>@(savedReturn is null ? I18n.T("Find original investigation memo") : $"{I18n.T("Return Voucher")} #{savedReturn.ID}")</h2>
+                <p>@I18n.T("Memo ID or LAB barcode can be used.")</p>
+            </div>
+            @if (savedReturn is not null) { <span class="badge">@I18n.T("POSTED")</span> }
+        </div>
+
+        @if (savedReturn is null)
+        {
+            <div class="form-grid" style="padding-top:16px;">
+                <label>
+                    <span>@I18n.T("Memo ID") *</span>
+                    <input @bind="memoLookup" @bind:event="oninput" @onkeydown="HandleLookupKeyDown" placeholder="LAB-123 or 123" />
+                </label>
+                <label><span>&nbsp;</span><button type="button" class="btn btn-secondary" @onclick="FindMemoAsync">@I18n.T("Load Cash Memo")</button></label>
+            </div>
+        }
+
+        @if (memo is not null)
+        {
+            <div class="print-grid">
+                <div><span>@I18n.T("Memo ID"):</span> <b>#@memo.ID</b></div>
+                <div><span>@I18n.T("Patient Name"):</span> <b>@memo.PatientName</b></div>
+                <div><span>@I18n.T("Patient Type"):</span> <b>@(memo.PatientType == "2" ? $"IPD · {memo.RegNo}" : "OPD")</b></div>
+                <div><span>@I18n.T("Date"):</span> <b>@memo.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+                <div><span>@I18n.T("Original Net"):</span> <b>@I18n.FormatCurrency(originalNet)</b></div>
+                <div><span>@I18n.T("Previously Adjusted"):</span> <b>@I18n.FormatCurrency(priorAdjustment)</b></div>
+            </div>
+
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead><tr><th></th><th>@I18n.T("Investigation / Test")</th><th class="num">@I18n.T("Sold Qty")</th><th class="num">@I18n.T("Returnable")</th><th class="num">@I18n.T("Return Qty")</th><th class="num">@I18n.T("Rate")</th><th class="num">@I18n.T("Amount")</th></tr></thead>
+                    <tbody>
+                        @foreach (var line in lines)
+                        {
+                            <tr>
+                                <td><InputCheckbox @bind-Value="line.Selected" disabled="@(savedReturn is not null || line.Remaining <= 0)" /></td>
+                                <td><b>@ServiceName(line.Item.TestID)</b></td>
+                                <td class="num">@line.Item.Quantity</td>
+                                <td class="num">@line.Remaining</td>
+                                <td class="num"><InputNumber @bind-Value="line.Quantity" min="1" max="@line.Remaining" disabled="@(savedReturn is not null || !line.Selected)" style="width:75px;" /></td>
+                                <td class="num">@I18n.FormatCurrency(line.Item.Rate)</td>
+                                <td class="num">@I18n.FormatCurrency(line.Selected ? line.Item.Rate * line.Quantity : 0)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="form-grid">
+                <label class="span-2">
+                    <span>@I18n.T("Return Reason") *</span>
+                    <textarea @bind="reason" maxlength="500" disabled="@(savedReturn is not null)"></textarea>
+                </label>
+                <label><span>@I18n.T("Bill Adjustment")</span><input value="@I18n.FormatCurrency(estimatedAdjustment)" disabled /></label>
+                <label><span>@I18n.T("Cash Refund")</span><input value="@I18n.FormatCurrency(estimatedCashRefund)" disabled /></label>
+                <label><span>@I18n.T("Due / IPD Adjustment")</span><input value="@I18n.FormatCurrency(estimatedReceivableAdjustment)" disabled /></label>
+            </div>
+
+            <div class="form-actions">
+                @if (savedReturn is null)
+                {
+                    <button class="btn btn-primary" @onclick="PostAsync" disabled="@saving">@(saving ? I18n.T("Saving…") : I18n.T("Post Return & Adjustment"))</button>
+                }
+                else
+                {
+                    <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print Voucher")</button>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="panel">
+        <div class="panel-heading"><div><h2>@I18n.T("Recent Cash Memo Returns")</h2><p>@recent.Count @I18n.T("return(s)")</p></div></div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead><tr><th>@I18n.T("Return")</th><th>@I18n.T("Memo")</th><th>@I18n.T("Date")</th><th>@I18n.T("Reason")</th><th class="num">@I18n.T("Adjustment")</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var entry in recent)
+                    {
+                        <tr><td><b>#@entry.ID</b></td><td>#@entry.MemoID</td><td>@entry.TransDate.ToString("dd MMM yy")</td><td>@entry.Reason</td><td class="num">@I18n.FormatCurrency(entry.AdjustmentAmount)</td><td><button class="icon-btn" @onclick="() => OpenReturnAsync(entry.ID)">@I18n.T("View")</button></td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (savedReturn is not null && memo is not null)
+{
+    <div id="diagnostic-return-print" class="print-sheet panel print-document">
+        <PrintDocumentHeader Title="Investigation Return / Refund Voucher" Subtitle="@Branding.LabHeaderDept" DocNo="@($"RET-{savedReturn.ID}")" DocNoLabel="Return #" BarcodeCode="@($"DRET-{savedReturn.ID}")" />
+        <div class="print-grid">
+            <div><span>@I18n.T("Original Memo"):</span> <b>#@memo.ID</b></div><div><span>@I18n.T("Patient Name"):</span> <b>@memo.PatientName</b></div>
+            <div><span>@I18n.T("Patient Type"):</span> <b>@(memo.PatientType == "2" ? $"IPD · {memo.RegNo}" : "OPD")</b></div><div><span>@I18n.T("Return Date"):</span> <b>@savedReturn.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+        </div>
+        <table class="data-table"><thead><tr><th>@I18n.T("Investigation / Test")</th><th class="num">@I18n.T("Qty")</th><th class="num">@I18n.T("Rate")</th><th class="num">@I18n.T("Amount")</th></tr></thead><tbody>
+            @foreach (var line in lines.Where(x => x.Selected)) { <tr><td>@ServiceName(line.Item.TestID)</td><td class="num">@line.Quantity</td><td class="num">@I18n.FormatCurrency(line.Item.Rate)</td><td class="num">@I18n.FormatCurrency(line.Item.Rate * line.Quantity)</td></tr> }
+        </tbody></table>
+        <div class="print-total"><div><span>@I18n.T("Reason"):</span> <b>@savedReturn.Reason</b></div><div><span>@I18n.T("Due / IPD Adjustment"):</span> <b>@I18n.FormatCurrency(savedReturn.ReceivableAdjustment)</b></div><div class="grand"><span>@I18n.T("Cash Refund"):</span> <b>@I18n.FormatCurrency(savedReturn.RefundAmount)</b></div></div>
+        <PrintDocumentFooter SignTitle1="Patient / Attendant" SignTitle2="Authorized By" SignTitle3="Cashier" />
+    </div>
+}
+
+@code {
+    private List<Service> services = [];
+    private List<DiagnosticCashMemoReturn> recent = [];
+    private List<ReturnLine> lines = [];
+    private CashMemoDInvestigation? memo;
+    private DiagnosticCashMemoReturn? savedReturn;
+    private string memoLookup = "";
+    private string reason = "";
+    private string message = "";
+    private string messageClass = "success";
+    private bool saving;
+    private decimal originalGross;
+    private decimal originalNet;
+    private decimal priorAdjustment;
+    private decimal priorRefund;
+
+    private decimal selectedGross => lines.Where(x => x.Selected).Sum(x => x.Item.Rate * x.Quantity);
+    private decimal estimatedAdjustment => originalGross <= 0 ? 0 : Math.Min(Math.Max(0, originalNet - priorAdjustment), Math.Round(originalNet * selectedGross / originalGross, 2));
+    private decimal originalReceivable => Math.Max(0, originalNet - (memo?.Paid ?? 0));
+    private decimal priorReceivableAdjustment => Math.Max(0, priorAdjustment - priorRefund);
+    private decimal estimatedReceivableAdjustment => Math.Min(estimatedAdjustment, Math.Max(0, originalReceivable - priorReceivableAdjustment));
+    private decimal estimatedCashRefund => Math.Max(0, estimatedAdjustment - estimatedReceivableAdjustment);
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        services = await db.Services.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        recent = await db.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    private async Task HandleLookupKeyDown(KeyboardEventArgs e) { if (e.Key == "Enter") await FindMemoAsync(); }
+
+    private async Task FindMemoAsync()
+    {
+        var raw = memoLookup.Trim();
+        if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase)) raw = raw[4..];
+        if (!long.TryParse(raw, out var id) || id <= 0) { Fail(I18n.T("Enter a valid diagnostic memo ID.")); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        memo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == id && x.ModuleID == 2);
+        if (memo is null) { Fail(I18n.T("Diagnostic cash memo was not found.")); return; }
+        var returned = await db.DiagnosticCashMemoReturnItems.AsNoTracking().Where(x => x.CashMemoItem!.MemoID == id).GroupBy(x => x.CashMemoItemID).ToDictionaryAsync(x => x.Key, x => x.Sum(y => y.Quantity));
+        lines = memo.Items.OrderBy(x => x.SLNo).Select(x => new ReturnLine(x, Math.Max(0, x.Quantity - returned.GetValueOrDefault(x.ID)))).ToList();
+        originalGross = memo.Items.Sum(x => x.Rate * x.Quantity);
+        originalNet = Math.Max(0, memo.Total - memo.Discount);
+        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+        savedReturn = null;
+        reason = "";
+        if (lines.All(x => x.Remaining <= 0)) Fail(I18n.T("All investigations on this memo have already been returned.")); else Success(I18n.T("Diagnostic cash memo loaded."));
+    }
+
+    private async Task PostAsync()
+    {
+        var selected = lines.Where(x => x.Selected).ToList();
+        if (memo is null || selected.Count == 0 || string.IsNullOrWhiteSpace(reason)) { Fail(I18n.T("Select at least one investigation and enter a return reason.")); return; }
+        if (selected.Any(x => x.Quantity <= 0 || x.Quantity > x.Remaining)) { Fail(I18n.T("Return quantity must be within the remaining quantity.")); return; }
+        saving = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        try
+        {
+            var source = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == memo.ID && x.ModuleID == 2);
+            foreach (var line in selected)
+            {
+                var sold = source.Items.Single(x => x.ID == line.Item.ID);
+                var already = await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID).SumAsync(x => (int?)x.Quantity) ?? 0;
+                if (line.Quantity > sold.Quantity - already) throw new InvalidOperationException($"Return quantity exceeded for {ServiceName(sold.TestID)}.");
+                if (await db.LabTestResults.AnyAsync(x => x.MemoID == source.ID && x.ServiceID == sold.TestID && (x.IsVerified || x.ReportedAt != null)))
+                    throw new InvalidOperationException($"{ServiceName(sold.TestID)} already has a reported/verified result and cannot be returned.");
+            }
+
+            var priorTotal = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+            var priorCash = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+            var gross = source.Items.Sum(x => x.Rate * x.Quantity);
+            var net = Math.Max(0, source.Total - source.Discount);
+            var returnGross = selected.Sum(x => x.Item.Rate * x.Quantity);
+            var adjustment = gross <= 0 ? 0 : Math.Min(net - priorTotal, Math.Round(net * returnGross / gross, 2));
+            if (adjustment <= 0) throw new InvalidOperationException("No adjustable amount remains on this memo.");
+            var originalDue = Math.Max(0, net - source.Paid);
+            var priorReceivable = Math.Max(0, priorTotal - priorCash);
+            var receivableAdjustment = Math.Min(adjustment, Math.Max(0, originalDue - priorReceivable));
+            var refund = adjustment - receivableAdjustment;
+            var userId = await CurrentUserIdAsync();
+            var now = DateTime.Now;
+            var header = new DiagnosticCashMemoReturn { MemoID = source.ID, AdjustmentAmount = adjustment, RefundAmount = refund, ReceivableAdjustment = receivableAdjustment, Reason = reason.Trim(), EnteredBy = userId, TransDate = now };
+            db.DiagnosticCashMemoReturns.Add(header);
+            await db.SaveChangesAsync();
+
+            foreach (var line in selected)
+            {
+                var sold = source.Items.Single(x => x.ID == line.Item.ID);
+                db.DiagnosticCashMemoReturnItems.Add(new DiagnosticCashMemoReturnItem { ReturnID = header.ID, CashMemoItemID = sold.ID, ServiceID = sold.TestID, Quantity = line.Quantity, Rate = sold.Rate });
+                if (source.PatientType == "2" && !string.IsNullOrWhiteSpace(source.RegNo))
+                {
+                    db.IpdPatientServiceItems.Add(new IpdPatientServiceItem { RegNo = source.RegNo, PatientID = source.PatientID, ServiceID = sold.TestID, ServiceName = ServiceName(sold.TestID), Rate = sold.Rate, Quantity = -line.Quantity, Total = -(sold.Rate * line.Quantity), DoctorID = source.DoctorID, ServiceDate = now, EnteredBy = userId, Remarks = $"[DIAGNOSTIC-RETURN:{header.ID}:{sold.ID}]" });
+                }
+                var totalReturned = (await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID).SumAsync(x => (int?)x.Quantity) ?? 0) + line.Quantity;
+                if (totalReturned >= sold.Quantity)
+                {
+                    db.LabSampleCollections.RemoveRange(await db.LabSampleCollections.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync());
+                    db.LabTestResults.RemoveRange(await db.LabTestResults.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync());
+                }
+            }
+
+            var originalReference = $"DIAGNOSTIC:{source.ID}";
+            if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
+            {
+                var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
+                if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
+                if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
+                originalLines.Add((AccountingPosting.HospitalRevenue, 0, net));
+                AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
+            }
+            var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (AccountingPosting.HospitalRevenue, adjustment, 0) };
+            if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
+            if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
+            AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
+            if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            savedReturn = header;
+            priorAdjustment += adjustment;
+            priorRefund += refund;
+            Success(I18n.T($"Return voucher #{header.ID} posted successfully."));
+            recent = await db.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+        }
+        catch (Exception ex) { await tx.RollbackAsync(); Fail(ex.GetBaseException().Message); }
+        finally { saving = false; }
+    }
+
+    private async Task OpenReturnAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        savedReturn = await db.DiagnosticCashMemoReturns.AsNoTracking().Include(x => x.Items).SingleAsync(x => x.ID == id);
+        memo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).SingleAsync(x => x.ID == savedReturn.MemoID);
+        memoLookup = memo.ID.ToString();
+        reason = savedReturn.Reason;
+        lines = savedReturn.Items.Select(x => new ReturnLine(memo.Items.Single(i => i.ID == x.CashMemoItemID), x.Quantity) { Selected = true, Quantity = x.Quantity }).ToList();
+        originalGross = memo.Items.Sum(x => x.Rate * x.Quantity);
+        originalNet = Math.Max(0, memo.Total - memo.Discount);
+        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+    }
+
+    private async Task<int> CurrentUserIdAsync() { var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
+    private Task PrintAsync() => JS.InvokeVoidAsync("hpm.printElement", "diagnostic-return-print").AsTask();
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private void Reset() { memo = null; savedReturn = null; memoLookup = ""; reason = ""; lines = []; message = ""; originalGross = originalNet = priorAdjustment = priorRefund = 0; }
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private sealed class ReturnLine(CashMemoSubDInvestigation item, int remaining)
+    {
+        public CashMemoSubDInvestigation Item { get; } = item;
+        public int Remaining { get; } = remaining;
+        public bool Selected { get; set; }
+        public int Quantity { get; set; } = Math.Max(1, remaining);
+    }
+}

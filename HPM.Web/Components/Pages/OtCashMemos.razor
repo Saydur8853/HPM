@@ -5,218 +5,307 @@
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IBarcodeQrService BarcodeQr
+@inject PatientSelectionState PatientSelection
 @implements IDisposable
 @using System.Security.Claims
 @using HPM.Web.Components.Common
 
 <PageTitle>@I18n.T("OT Cash Memo") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Module 05", "Module 05")</span>
-        <h1>@I18n.T("OT Cash Memo")</h1>
-        <p>@I18n.T("Operation theatre billing, surgical team charges and anesthesia memo.", "Operation theatre billing, surgical team charges and anesthesia memo.")</p>
+<div class="ot-classic-fit">
+    <!-- Compact Top Action & Status Bar -->
+    <div class="ot-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>🏥</span>
+                <span>@I18n.T("OT Cash Memo")</span>
+            </h1>
+            <span class="tickets-count-pill">
+                @memos.Count @I18n.T("Memos")
+            </span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass == "success" ? "✓" : "⚠") @message
+                </span>
+            }
+        </div>
+
+        <div class="tickets-top-actions">
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("New OT memo / Reset Form")">
+                + @I18n.T("New OT memo")
+            </button>
+        </div>
     </div>
-    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New OT memo")</button>
-</div>
 
-@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
-
-<div class="billing-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
+    <!-- Main Balanced Workspace Grid: Left Billing Form, Right Recent Memos -->
+    <div class="ot-classic-workspace">
+        <!-- Left Panel: Form Card -->
+        <div class="ot-form-card">
+            <div class="ot-card-header">
                 <h2>@(editor.ID == 0 ? I18n.T("Operation theatre billing") : $"{I18n.T("Edit OT memo")} #{editor.ID}")</h2>
-                <p>@I18n.T("Patient, theatre and consultant information.")</p>
-            </div>
-            <span class="badge teal-badge">@(editor.ID == 0 ? I18n.T("OPERATION THEATRE") : I18n.T("EDIT", "EDIT"))</span>
-        </div>
-        <EditForm Model="editor" OnValidSubmit="SaveAsync">
-            <DataAnnotationsValidator />
-            <ValidationSummary />
-            <div class="form-grid three">
-                <label>
-                    <span>@I18n.T("Patient ID")</span>
-                    <span class="input-action">
-                        <InputText @bind-Value="editor.PatientID" />
-                        <button type="button" @onclick="FindPatientAsync">@I18n.T("Find")</button>
-                    </span>
-                </label>
-                <label>
-                    <span>@I18n.T("Patient name *")</span>
-                    <InputText @bind-Value="editor.PatientName" />
-                </label>
-                <label>
-                    <span>@I18n.T("Contact Mobile", "Contact")</span>
-                    <InputText @bind-Value="editor.Contact" />
-                </label>
-                <label>
-                    <span>@I18n.T("Age")</span>
-                    <InputText @bind-Value="editor.Age" />
-                </label>
-                <label>
-                    <span>@I18n.T("Sex")</span>
-                    <InputSelect @bind-Value="editor.Sex">
-                        <option value="">@I18n.T("Select")</option>
-                        <option value="Male">@I18n.T("Male")</option>
-                        <option value="Female">@I18n.T("Female")</option>
-                        <option value="Other">@I18n.T("Other")</option>
-                    </InputSelect>
-                </label>
-                <label>
-                    <span>@I18n.T("OT room")</span>
-                    <InputSelect @bind-Value="editor.OT">
-                        <option value="1">@I18n.T("Main OT")</option>
-                        <option value="2">@I18n.T("Emergency OT")</option>
-                        <option value="3">@I18n.T("Day-care OT")</option>
-                    </InputSelect>
-                </label>
-                <label class="span-2">
-                    <span>@I18n.T("Referred by")</span>
-                    <InputSelect @bind-Value="editor.DoctorID">
-                        <option value="">@I18n.T("Walk-in / None", "None")</option>
-                        @foreach (var doctor in doctors)
-                        {
-                            <option value="@doctor.ID">@DoctorLabel(doctor)</option>
-                        }
-                    </InputSelect>
-                </label>
+                <span class="ot-badge">
+                    @(editor.ID == 0 ? "🏥 " + I18n.T("OPERATION THEATRE") : $"MEMO #{editor.ID}")
+                </span>
             </div>
 
-            <h3 class="form-section-title">@I18n.T("OT services")</h3>
-            <div class="line-editor ot-lines">
-                <label class="service-field">
-                    <span>@I18n.T("Service Item", "Service")</span>
-                    <select value="@selectedServiceId" @onchange="ServiceChanged">
-                        @foreach (var service in services)
-                        {
-                            <option value="@service.ID">@service.Name</option>
-                        }
-                    </select>
-                </label>
-                <label>
-                    <span>@I18n.T("Assigned doctor")</span>
-                    <select value="@lineDoctorId" @onchange="e => int.TryParse(e.Value?.ToString(), out lineDoctorId)">
-                        <option value="0">@I18n.T("Not assigned")</option>
-                        @foreach (var doctor in doctors)
-                        {
-                            <option value="@doctor.ID">@doctor.Name</option>
-                        }
-                    </select>
-                </label>
-                <label>
-                    <span>@I18n.T("Rate")</span>
-                    <InputNumber @bind-Value="lineRate" />
-                </label>
-                <label>
-                    <span>@I18n.T("Qty")</span>
-                    <InputNumber @bind-Value="lineQuantity" />
-                </label>
-                <button class="btn btn-dark" type="button" @onclick="AddLine">@I18n.T("Add")</button>
-            </div>
+            <EditForm Model="editor" OnValidSubmit="SaveAsync" class="ot-form-wrapper">
+                <DataAnnotationsValidator />
 
-            <div class="line-table">
-                <div class="line-head ot">
-                    <span>#</span>
-                    <span>@I18n.T("Service Item", "Service")</span>
-                    <span>@I18n.T("Doctor")</span>
-                    <span>@I18n.T("Rate × Qty")</span>
-                    <span>@I18n.T("Amount")</span>
-                    <span></span>
+                <div class="ot-form-body">
+                    <!-- Demographic Section -->
+                    <div class="billing-demographics-grid ot">
+                        <label style="grid-column: span 2;">
+                            <span>@I18n.T("Patient ID (Optional)")</span>
+                            <div class="tickets-patient-search-combo">
+                                <input class="classic-input"
+                                       value="@editor.PatientID"
+                                       @oninput="HandlePatientIdInputAsync"
+                                       @onfocus="ShowPatientIdSuggestionsAsync"
+                                       @onblur="HidePatientSuggestionsAsync"
+                                       @onkeydown="HandlePatientIdKeyDown"
+                                       autocomplete="off"
+                                       placeholder="@I18n.T("Patient ID or mobile")"
+                                       title="@I18n.T("Type Patient ID or mobile & press Enter to find")" />
+                                <button type="button" class="btn-find" @onclick="FindPatientAsync" title="@I18n.T("Find Patient (Enter)")">
+                                    @I18n.T("Find")
+                                </button>
+                            </div>
+                            @if (showPatientIdSuggestions && patientIdSuggestions.Count > 0)
+                            {
+                                <div class="appt-patient-suggestions">
+                                    @foreach (var patient in patientIdSuggestions)
+                                    {
+                                        <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatientFromSuggestion(patient)">
+                                            <span class="patient-id">@patient.PatientID</span>
+                                            <span class="patient-name">@patient.Name</span>
+                                            <span class="patient-contact">@patient.Contact</span>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </label>
+                        <label style="grid-column: span 2;">
+                            <span>@I18n.T("Patient name")<span class="req">*</span></span>
+                            <InputText class="classic-input" @bind-Value="editor.PatientName" placeholder="@I18n.T("Full name")" />
+                        </label>
+                        <label style="grid-column: span 2;">
+                            <span>@I18n.T("Contact Mobile")</span>
+                            <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
+                        </label>
+                        <label style="grid-column: span 1;">
+                            <span>@I18n.T("Age")</span>
+                            <InputText class="classic-input" @bind-Value="editor.Age" placeholder="e.g. 40Y" />
+                        </label>
+                        <label style="grid-column: span 1;">
+                            <span>@I18n.T("Sex")</span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.Sex">
+                                <option value="">@I18n.T("Select")</option>
+                                <option value="Male">@I18n.T("Male")</option>
+                                <option value="Female">@I18n.T("Female")</option>
+                                <option value="Other">@I18n.T("Other")</option>
+                            </InputSelect>
+                        </label>
+                        <label style="grid-column: span 2;">
+                            <span>@I18n.T("OT room")</span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.OT">
+                                <option value="1">@I18n.T("Main OT")</option>
+                                <option value="2">@I18n.T("Emergency OT")</option>
+                                <option value="3">@I18n.T("Day-care OT")</option>
+                            </InputSelect>
+                        </label>
+                        <label style="grid-column: span 2;">
+                            <span>@I18n.T("Referred by")</span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.DoctorID">
+                                <option value="">@I18n.T("Walk-in / None", "None")</option>
+                                @foreach (var doctor in doctors)
+                                {
+                                    <option value="@doctor.ID">@DoctorLabel(doctor)</option>
+                                }
+                            </InputSelect>
+                        </label>
+                    </div>
+
+                    <!-- OT Services Line Editor -->
+                    <h3 class="billing-section-heading">🏥 @I18n.T("OT services & Procedures")</h3>
+                    <div class="billing-line-editor ot">
+                        <label>
+                            <span>@I18n.T("Service Item", "Service")</span>
+                            <select class="classic-input tickets-select" value="@selectedServiceId" @onchange="ServiceChanged">
+                                @foreach (var service in services)
+                                {
+                                    <option value="@service.ID">@service.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Assigned doctor")</span>
+                            <select class="classic-input tickets-select" value="@lineDoctorId" @onchange="e => int.TryParse(e.Value?.ToString(), out lineDoctorId)">
+                                <option value="0">@I18n.T("Not assigned")</option>
+                                @foreach (var doctor in doctors)
+                                {
+                                    <option value="@doctor.ID">@doctor.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Rate")</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="lineRate" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Qty")</span>
+                            <InputNumber class="classic-input" @bind-Value="lineQuantity" />
+                        </label>
+                        <button class="btn btn-dark tickets-btn" type="button" @onclick="AddLine">+ @I18n.T("Add")</button>
+                    </div>
+
+                    <!-- Line Table -->
+                    <div class="billing-line-table-wrap">
+                        <div class="billing-line-head ot">
+                            <span>#</span>
+                            <span>@I18n.T("Service Item", "Service")</span>
+                            <span>@I18n.T("Doctor")</span>
+                            <span style="text-align: right;">@I18n.T("Rate × Qty")</span>
+                            <span style="text-align: right;">@I18n.T("Amount")</span>
+                            <span></span>
+                        </div>
+                        <div class="billing-line-rows">
+                            @if (editor.Items.Count == 0)
+                            {
+                                <div class="tickets-queue-empty" style="padding: 1.25rem 1rem;">
+                                    <span>@I18n.T("Add at least one OT service.")</span>
+                                </div>
+                            }
+                            @foreach (var item in editor.Items)
+                            {
+                                <div class="billing-line-row ot">
+                                    <span>@item.SLNO</span>
+                                    <span>@ServiceName(item.ServiceID)</span>
+                                    <span>@DoctorName(item.DoctorID)</span>
+                                    <span style="text-align: right;">@(I18n.FormatCurrency(item.Rate)) × @item.Quantity</span>
+                                    <strong>@(I18n.FormatCurrency(item.Rate * item.Quantity))</strong>
+                                    <button type="button" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">×</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Totals Summary -->
+                    <div class="billing-bottom-summary align-end">
+                        <div class="billing-totals-compact">
+                            <div>
+                                <span>@I18n.T("Sub Total", "Subtotal")</span>
+                                <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                            </div>
+                            <label>
+                                <span>@I18n.T("Discount")</span>
+                                <InputNumber class="classic-input" @bind-Value="editor.Discount" />
+                            </label>
+                            @if (editor.Discount > 0)
+                            {
+                                <label>
+                                    <span>@I18n.T("Authorized By")</span>
+                                    <InputText class="classic-input" @bind-Value="editor.DiscountBy" placeholder="@I18n.T("Required for discount")" />
+                                </label>
+                            }
+                            <div class="grand-due">
+                                <span>@I18n.T("Net Payable", "Net payable")</span>
+                                <strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount)))</strong>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                @if (editor.Items.Count == 0)
+
+                <!-- Footer Actions -->
+                <div class="ot-form-footer">
+                    <button class="btn btn-primary tickets-btn" type="submit" disabled="@saving">
+                        @(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Save OT memo") : I18n.T("Update OT memo"))
+                    </button>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintMemoAsync" title="@I18n.T("Print memo")">
+                                🖨️ @I18n.T("Print memo")
+                            </button>
+                            <button class="btn btn-ghost tickets-btn" type="button" @onclick="DeleteSelectedAsync" style="color: #dc2626;" title="@I18n.T("Delete")">
+                                @I18n.T("Delete")
+                            </button>
+                        }
+                        <button class="btn btn-ghost tickets-btn" type="button" @onclick="Reset">
+                            @I18n.T("Clear")
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Right Panel: Recent OT Memos Queue Card -->
+        <div class="ot-queue-card">
+            <div class="ot-queue-top">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Recent OT memos")</h2>
+                    <span style="font-size:11.5px; color:#64748b; font-weight:600;">
+                        (@DateTime.Today.ToString("dd MMMM yyyy"))
+                    </span>
+                </div>
+                <span class="pill" style="font-size:11px; font-weight:700;">
+                    @FilteredMemos.Count() @I18n.T("Listed")
+                </span>
+            </div>
+
+            <!-- Barcode & QR Scanner Bar -->
+            <div class="tickets-scanner-bar">
+                <div class="tickets-scanner-input-wrap">
+                    <span class="tickets-scanner-icon" title="Barcode / QR Scanner Active">📷</span>
+                    <input type="text"
+                           class="classic-input tickets-scanner-input"
+                           placeholder="@I18n.T("Scan OT Memo Barcode / QR or Patient ID & press Enter...")"
+                           @bind="memoScanQuery"
+                           @bind:event="oninput"
+                           @onkeydown="HandleMemoScanKeyDown" />
+                    @if (!string.IsNullOrWhiteSpace(memoScanQuery))
+                    {
+                        <button type="button" class="tickets-scanner-clear" @onclick="ClearMemoScan" title="Clear">✕</button>
+                    }
+                </div>
+            </div>
+
+            <!-- Queue List with Internal Vertical Scroll -->
+            <div class="billing-queue-list">
+                @if (!FilteredMemos.Any())
                 {
-                    <div class="empty-state small">@I18n.T("Add at least one OT service.")</div>
+                    <div class="tickets-queue-empty">
+                        <span style="font-size: 2rem;">🏥</span>
+                        <span>@I18n.T("No matching OT cash memos found.")</span>
+                    </div>
                 }
-                @foreach (var item in editor.Items)
+                @foreach (var memo in FilteredMemos)
                 {
-                    <div class="line-row ot">
-                        <span>@item.SLNO</span>
-                        <span>@ServiceName(item.ServiceID)</span>
-                        <span>@DoctorName(item.DoctorID)</span>
-                        <span>@I18n.FormatCurrency(item.Rate) × @item.Quantity</span>
-                        <strong>@I18n.FormatCurrency(item.Rate * item.Quantity)</strong>
-                        <button type="button" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">×</button>
+                    <div class="billing-queue-item @(editor.ID == memo.ID ? "active" : "")" @onclick="() => Select(memo)">
+                        <span class="billing-queue-serial">#@memo.ID</span>
+                        <div class="billing-queue-info">
+                            <span class="billing-queue-name">
+                                @memo.PatientName
+                                @if (!string.IsNullOrWhiteSpace(memo.PatientID))
+                                {
+                                    <small class="tickets-queue-reg">(@memo.PatientID)</small>
+                                }
+                            </span>
+                            <span class="billing-queue-meta">
+                                @memo.TransDate.ToString("dd MMM · hh:mm tt") &bull; @memo.Items.Count @I18n.T("item(s)") &bull; @memo.Contact
+                            </span>
+                        </div>
+                        <div class="tickets-queue-badges">
+                            <span class="billing-queue-amount">@(I18n.FormatCurrency(memo.Total))</span>
+                        </div>
+                        <div class="tickets-queue-actions" @onclick:stopPropagation="true">
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("Edit")" @onclick="() => Select(memo)">✏️</button>
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("Print")" @onclick="() => Print(memo)">🖨️</button>
+                            <button type="button" class="tickets-icon-action danger" title="@I18n.T("Delete")" @onclick="() => DeleteAsync(memo)">✕</button>
+                        </div>
                     </div>
                 }
             </div>
-
-            <div class="billing-footer align-end">
-                <div></div>
-                <div class="totals">
-                    <div>
-                        <span>@I18n.T("Sub Total", "Subtotal")</span>
-                        <strong>@I18n.FormatCurrency(editor.Total)</strong>
-                    </div>
-                    <label>
-                        <span>@I18n.T("Discount")</span>
-                        <InputNumber @bind-Value="editor.Discount" />
-                    </label>
-                    <label>
-                        <span>@I18n.T("Discount Authorized By")</span>
-                        <InputText @bind-Value="editor.DiscountBy" placeholder="@I18n.T("Required for discount")" />
-                    </label>
-                    <div class="grand-total">
-                        <span>@I18n.T("Net Payable", "Net payable")</span>
-                        <strong>@I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount))</strong>
-                    </div>
-                </div>
-            </div>
-            <div class="form-actions">
-                <button class="btn btn-primary" type="submit" disabled="@saving">@(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Save OT memo") : I18n.T("Update OT memo"))</button>
-                @if (editor.ID > 0)
-                {
-                    <button class="btn btn-secondary" type="button" @onclick="PrintMemoAsync">@I18n.T("Print memo")</button>
-                    <button class="btn btn-ghost" type="button" @onclick="DeleteSelectedAsync">@I18n.T("Delete")</button>
-                }
-                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
-            </div>
-        </EditForm>
-    </div>
-
-    <div class="panel recent-bills">
-        <div class="panel-heading">
-            <div>
-                <h2>@I18n.T("Recent OT memos")</h2>
-                <p>@I18n.T("Latest theatre transactions")</p>
-            </div>
-        </div>
-
-        <div class="scanner-search-group" style="margin-bottom: 0.85rem;">
-            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
-            <input type="text"
-                   class="scanner-input"
-                   placeholder="@I18n.T("Scan OT Memo Barcode / QR or Patient ID...", "Scan OT Memo Barcode / QR or Patient ID...")"
-                   @bind="memoScanQuery"
-                   @bind:event="oninput"
-                   @onkeydown="HandleMemoScanKeyDown" />
-            @if (!string.IsNullOrWhiteSpace(memoScanQuery))
-            {
-                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearMemoScan">✕</button>
-            }
-        </div>
-
-        <div class="record-list">
-            @if (!FilteredMemos.Any())
-            {
-                <div class="empty-state">@I18n.T("No matching OT cash memos found.")</div>
-            }
-            @foreach (var memo in FilteredMemos)
-            {
-                <div class="bill-card">
-                    <span class="ticket-no">#@memo.ID</span>
-                    <span class="record-main">
-                        <strong>@memo.PatientName</strong>
-                        <small>@memo.TransDate.ToString("dd MMM · hh:mm tt") · @memo.Items.Count @I18n.T("item(s)")</small>
-                    </span>
-                    <strong class="amount">@I18n.FormatCurrency(memo.Total)</strong>
-                    <span class="record-actions">
-                        <button class="icon-btn" @onclick="() => Select(memo)">@I18n.T("Edit")</button>
-                        <button class="icon-btn" @onclick="() => Print(memo)">@I18n.T("Print")</button>
-                        <button class="icon-btn danger" @onclick="() => DeleteAsync(memo)">×</button>
-                    </span>
-                </div>
-            }
         </div>
     </div>
 </div>
@@ -276,6 +365,9 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "patientId")]
+    public string? QueryPatientId { get; set; }
+
     private CashMemoOT editor = NewMemo();
     private List<DoctorsProfile> doctors = [];
     private List<Service> services = [];
@@ -288,6 +380,8 @@
     private string message = string.Empty;
     private string messageClass = "success";
     private bool saving;
+    private bool showPatientIdSuggestions;
+    private List<Registration> patientIdSuggestions = [];
 
     private IEnumerable<CashMemoOT> FilteredMemos => string.IsNullOrWhiteSpace(memoScanQuery)
         ? memos
@@ -309,30 +403,113 @@
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
+    protected override async Task OnParametersSetAsync()
+    {
+        var patientId = QueryPatientId ?? PatientSelection.PatientId;
+        if (!string.IsNullOrWhiteSpace(patientId) && editor.ID == 0)
+        {
+            editor.PatientID = patientId.Trim();
+            await FindPatientAsync();
+        }
+    }
+
     private async Task LoadMemosAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         memos = await db.OTCashMemos.AsNoTracking().Include(x => x.Items).OrderByDescending(x => x.ID).Take(30).ToListAsync();
     }
 
-    private async Task FindPatientAsync()
+    private async Task HandlePatientIdInputAsync(ChangeEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.PatientID.Trim());
-        if (patient is null)
+        editor.PatientID = e.Value?.ToString();
+        await FilterPatientIdSuggestionsAsync();
+    }
+
+    private async Task ShowPatientIdSuggestionsAsync()
+    {
+        await FilterPatientIdSuggestionsAsync();
+    }
+
+    private async Task HidePatientSuggestionsAsync()
+    {
+        await Task.Delay(200);
+        showPatientIdSuggestions = false;
+    }
+
+    private async Task FilterPatientIdSuggestionsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID) || editor.PatientID.Trim().Length < 2)
         {
-            messageClass = "danger";
-            message = I18n.IsBangla ? "পেশেন্ট আইডি পাওয়া যায়নি। আপনি ম্যানুয়ালি রোগীর নাম লিখে কাজ করতে পারেন।" : "Patient ID was not found. You can still enter a walk-in patient.";
+            patientIdSuggestions.Clear();
+            showPatientIdSuggestions = false;
             return;
         }
+
+        var term = editor.PatientID.Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        patientIdSuggestions = await db.Registrations.AsNoTracking()
+            .Where(x => (x.PatientID != null && x.PatientID.Contains(term)) || (x.Contact != null && x.Contact.Contains(term)) || (x.Name != null && x.Name.Contains(term)))
+            .OrderByDescending(x => x.ID)
+            .Take(8)
+            .ToListAsync();
+
+        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+    }
+
+    private void SelectPatient(Registration patient)
+    {
+        editor.PatientID = patient.PatientID;
         editor.PatientName = patient.Name;
         editor.Age = Age(patient.DateOfBirth);
         editor.Sex = patient.Sex;
         editor.Contact = patient.Contact;
         editor.RegNo = patient.PatientID;
         editor.PatientType = "2";
-        message = string.Empty;
+        PatientSelection.Select(patient.PatientID);
+        showPatientIdSuggestions = false;
+        messageClass = "success";
+        message = I18n.IsBangla ? $"রোগী {patient.Name} ({patient.PatientID}) লোড করা হয়েছে।" : $"Loaded profile for patient {patient.Name} ({patient.PatientID}).";
+    }
+
+    private void SelectPatientFromSuggestion(Registration patient)
+    {
+        SelectPatient(patient);
+    }
+
+    private async Task HandlePatientIdKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            showPatientIdSuggestions = false;
+            await FindPatientAsync();
+        }
+        else if (e.Key == "Escape")
+        {
+            showPatientIdSuggestions = false;
+        }
+    }
+
+    private async Task FindPatientAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
+        var lookup = editor.PatientID.Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup || x.Contact == lookup);
+        if (patient is null && lookup.StartsWith("0") && lookup.Length >= 10)
+        {
+            var withoutLeadingZero = lookup[1..];
+            patient = await db.Registrations.AsNoTracking()
+                .Where(x => x.Contact != null && x.Contact.EndsWith(withoutLeadingZero))
+                .OrderByDescending(x => x.ID)
+                .FirstOrDefaultAsync();
+        }
+        if (patient is null)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "পেশেন্ট আইডি পাওয়া যায়নি। আপনি ম্যানুয়ালি রোগীর নাম লিখে কাজ করতে পারেন।" : "Patient ID was not found. You can still enter a walk-in patient.";
+            return;
+        }
+        SelectPatient(patient);
     }
 
     private void ServiceChanged(ChangeEventArgs e)
@@ -413,52 +590,65 @@
         }
 
         saving = true;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync();
         try
         {
             var userId = await CurrentUserIdAsync();
             editor.Total = calculatedTotal;
             editor.DiscountBy = string.IsNullOrWhiteSpace(editor.DiscountBy) ? null : editor.DiscountBy.Trim();
-            if (editor.ID == 0)
+            var isNew = editor.ID == 0;
+            if (isNew)
             {
                 editor.TransDate = DateTime.Now;
                 editor.EnteredBy = userId;
-                db.OTCashMemos.Add(editor);
             }
-            else
+
+            long memoId = 0;
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
             {
-                var existing = await db.OTCashMemos.Include(x => x.Items).SingleAsync(x => x.ID == editor.ID);
-                db.OTCashMemoItems.RemoveRange(existing.Items);
-                db.Entry(existing).CurrentValues.SetValues(editor);
-                existing.Items = editor.Items.Select(x => new CashMemoSubOT
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await using var tx = await db.Database.BeginTransactionAsync();
+
+                if (isNew)
                 {
-                    SLNO = x.SLNO,
-                    ServiceID = x.ServiceID,
-                    DoctorID = x.DoctorID,
-                    Rate = x.Rate,
-                    Quantity = x.Quantity
-                }).ToList();
-            }
-            await db.SaveChangesAsync();
+                    db.OTCashMemos.Add(editor);
+                }
+                else
+                {
+                    var existing = await db.OTCashMemos.Include(x => x.Items).SingleAsync(x => x.ID == editor.ID);
+                    db.OTCashMemoItems.RemoveRange(existing.Items);
+                    db.Entry(existing).CurrentValues.SetValues(editor);
+                    existing.Items = editor.Items.Select(x => new CashMemoSubOT
+                    {
+                        SLNO = x.SLNO,
+                        ServiceID = x.ServiceID,
+                        DoctorID = x.DoctorID,
+                        Rate = x.Rate,
+                        Quantity = x.Quantity
+                    }).ToList();
+                }
+                await db.SaveChangesAsync();
 
-            var net = Math.Max(0, editor.Total - editor.Discount);
-            var debitAccount = editor.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
-            await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{editor.ID}", editor.ID,
-                net, editor.TransDate, userId, $"OT cash memo #{editor.ID}",
-                debitAccount, editor.PatientType == "1" ? 13 : null);
+                var net = Math.Max(0, editor.Total - editor.Discount);
+                var debitAccount = editor.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+                await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{editor.ID}", editor.ID,
+                    net, editor.TransDate, userId, $"OT cash memo #{editor.ID}",
+                    debitAccount, editor.PatientType == "1" ? 13 : null);
 
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            var number = editor.ID;
+                await db.SaveChangesAsync();
+                await tx.CommitAsync();
+
+                memoId = editor.ID;
+            });
+
             messageClass = "success";
-            message = I18n.IsBangla ? $"ওটি ক্যাশ মেমো #{number} সফলভাবে সংরক্ষিত হয়েছে।" : $"OT cash memo #{number} saved successfully.";
+            message = I18n.IsBangla ? $"ওটি ক্যাশ মেমো #{memoId} সফলভাবে সংরক্ষিত হয়েছে।" : $"OT cash memo #{memoId} saved successfully.";
             ResetEditor();
             await LoadMemosAsync();
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync();
             messageClass = "danger";
             message = I18n.IsBangla ? $"ওটি মেমো সংরক্ষণ করা যায়নি: {ex.GetBaseException().Message}" : $"Could not save OT memo: {ex.GetBaseException().Message}";
         }
@@ -470,6 +660,8 @@
 
     private void Reset()
     {
+        showPatientIdSuggestions = false;
+        PatientSelection.Clear();
         ResetEditor();
         message = string.Empty;
     }
@@ -523,24 +715,38 @@
         var reason = await JS.InvokeAsync<string?>("hpm.prompt", promptMsg);
         if (string.IsNullOrWhiteSpace(reason)) return;
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync();
-        var entity = await db.OTCashMemos.FindAsync(m.ID);
-        if (entity is not null)
+        try
         {
-            var userId = await CurrentUserIdAsync();
-            var debitAccount = entity.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
-            await OperationalAccounting.ReverseRevenueAsync(db, "OT Memo", $"OT-MEMO:{entity.ID}", entity.ID,
-                Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason,
-                debitAccount, entity.PatientType == "1" ? 13 : null);
-            db.Remove(entity);
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await using var tx = await db.Database.BeginTransactionAsync();
+                var entity = await db.OTCashMemos.FindAsync(m.ID);
+                if (entity is not null)
+                {
+                    var userId = await CurrentUserIdAsync();
+                    var debitAccount = entity.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+                    await OperationalAccounting.ReverseRevenueAsync(db, "OT Memo", $"OT-MEMO:{entity.ID}", entity.ID,
+                        Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason,
+                        debitAccount, entity.PatientType == "1" ? 13 : null);
+                    db.Remove(entity);
+                    await db.SaveChangesAsync();
+                    await tx.CommitAsync();
+                }
+            });
+
+            if (editor.ID == m.ID) ResetEditor();
+            messageClass = "success";
+            message = I18n.IsBangla ? "ওটি মেমো সফলভাবে বাতিল ও মুছে ফেলা হয়েছে।" : "OT memo reversed and deleted.";
+            await LoadMemosAsync();
         }
-        if (editor.ID == m.ID) ResetEditor();
-        messageClass = "success";
-        message = I18n.IsBangla ? "ওটি মেমো সফলভাবে বাতিল ও মুছে ফেলা হয়েছে।" : "OT memo reversed and deleted.";
-        await LoadMemosAsync();
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
     }
 
     private async Task HandleMemoScanKeyDown(KeyboardEventArgs e)

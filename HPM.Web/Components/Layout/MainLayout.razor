@@ -79,6 +79,39 @@
                     </svg>
                     <span>@DateTime.Today.ToString("ddd, dd MMM yyyy")</span>
                 </div>
+                <AuthorizeView Context="backOfficeAuth">
+                    <Authorized>
+                        <div class="header-module-menus">
+                            @foreach (var group in BackOfficeGroups.Where(group => CanView(backOfficeAuth.User, group.Roles)))
+                            {
+                                var isOpen = openHeaderModule == group.Label;
+                                <div class="header-backoffice-wrapper">
+                                    <button type="button" class="header-backoffice-button @(isOpen ? "open" : string.Empty)"
+                                            @onclick="() => ToggleHeaderModule(group.Label)" aria-expanded="@isOpen" title="@I18n.T(group.Label)">
+                                        <span class="header-backoffice-label">@I18n.T(group.Label)</span>
+                                        <span class="header-backoffice-short">@group.ShortLabel</span>
+                                    </button>
+
+                                    @if (isOpen)
+                                    {
+                                        <div class="header-backoffice-backdrop" @onclick="CloseHeaderModule"></div>
+                                        <div class="header-backoffice-dropdown">
+                                            <div class="header-backoffice-heading">
+                                                <div><strong>@I18n.T(group.Label)</strong></div>
+                                            </div>
+                                            <div class="header-backoffice-list">
+                                                @foreach (var item in group.Items)
+                                                {
+                                                    <NavLink class="header-backoffice-item" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseHeaderModule">@I18n.T(item.Label)</NavLink>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </Authorized>
+                </AuthorizeView>
                 <AuthorizeView Roles="@RoleNames.Administrator">
                     <Authorized>
                         <div class="header-settings-wrapper">
@@ -199,11 +232,14 @@
     private bool isMobileNavOpen = false;
     private bool isUserMenuOpen = false;
     private bool isSettingsMenuOpen = false;
+    private string? openHeaderModule;
 
-    private void ToggleUserMenu() { isSettingsMenuOpen = false; isUserMenuOpen = !isUserMenuOpen; }
+    private void ToggleUserMenu() { isSettingsMenuOpen = false; openHeaderModule = null; isUserMenuOpen = !isUserMenuOpen; }
     private void CloseUserMenu() => isUserMenuOpen = false;
-    private void ToggleSettingsMenu() { isUserMenuOpen = false; isSettingsMenuOpen = !isSettingsMenuOpen; }
+    private void ToggleSettingsMenu() { isUserMenuOpen = false; openHeaderModule = null; isSettingsMenuOpen = !isSettingsMenuOpen; }
     private void CloseSettingsMenu() => isSettingsMenuOpen = false;
+    private void ToggleHeaderModule(string label) { isUserMenuOpen = false; isSettingsMenuOpen = false; openHeaderModule = openHeaderModule == label ? null : label; }
+    private void CloseHeaderModule() => openHeaderModule = null;
 
     protected override async Task OnInitializedAsync()
     {
@@ -234,6 +270,7 @@
         isMobileNavOpen = false;
         isUserMenuOpen = false;
         isSettingsMenuOpen = false;
+        openHeaderModule = null;
         UpdateBreadcrumb(e.Location);
         StateHasChanged();
     }
@@ -270,7 +307,7 @@
         else if (path.StartsWith("tickets"))
         {
             activeSection = "OPD & Emergency";
-            activeTitle = "Consultation Tickets";
+            activeTitle = "OPD Ticket";
         }
         else if (path.StartsWith("emergency-services"))
         {
@@ -442,6 +479,45 @@
         new("Customer Medicine", "/pharmacy/masters?section=customer")
     ];
 
+    private static readonly string[] BackOfficePharmacyRoles = [RoleNames.Administrator, RoleNames.PharmacyOperator, RoleNames.Cashier, RoleNames.Doctor, RoleNames.Nurse];
+    private static readonly string[] BackOfficeFinanceRoles = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
+    private static readonly string[] BackOfficeAdminRoles = [RoleNames.Administrator];
+
+    private static readonly IReadOnlyList<BackOfficeGroup> BackOfficeGroups =
+    [
+        new("Pharmacy", "Rx", BackOfficePharmacyRoles,
+        [
+            new("OPD Cash Memo", "/pharmacy/pos?patientType=OPD"), new("IPD Cash Memo", "/pharmacy/pos?patientType=IPD"),
+            new("Receiving Challan", "/pharmacy/purchases"), new("Return to Supplier", "/pharmacy/returns-payments"),
+            new("Purchase Requisition", "/pharmacy/purchases?view=requisition"), new("Store Requisition", "/pharmacy/stock-control?view=requisition"),
+            new("IPD Indent", "/pharmacy/prescriptions?view=ipd-indent"), new("Issue to Department", "/pharmacy/stock-control?view=department-issue"),
+            new("Supplier Payment", "/pharmacy/returns-payments?view=payments"), new("Customer Payment", "/pharmacy/pos?view=customer-payment")
+        ]),
+        new("Canteen", "C", BackOfficeAdminRoles,
+        [
+            new("Challan", LegacyHref("Canteen", "Challan")), new("Sales", LegacyHref("Canteen", "Sales")), new("Product", LegacyHref("Canteen", "Product"))
+        ]),
+        new("Store", "S", BackOfficeAdminRoles,
+        [
+            new("Challan", LegacyHref("Store", "Challan")), new("Issue", LegacyHref("Store", "Issue")), new("Products", LegacyHref("Store", "Products")),
+            new("Lab Inventory", LegacyHref("Store", "Lab Inventory")), new("Lab Inventory Issue", LegacyHref("Store", "Lab Inventory Issue"))
+        ]),
+        new("Payroll & HRM", "HR", BackOfficeAdminRoles,
+        [
+            new("Employee Holiday", LegacyHref("Payroll & HRM", "Employee Holiday")), new("Employee Info", LegacyHref("Payroll & HRM", "Employee Info")),
+            new("Employee Leave", LegacyHref("Payroll & HRM", "Employee Leave")), new("Employee Shift", LegacyHref("Payroll & HRM", "Employee Shift")),
+            new("Employee Shift Monthly", LegacyHref("Payroll & HRM", "Employee Shift Monthly")), new("Import Attendance Data", LegacyHref("Payroll & HRM", "Import Attn Data")),
+            new("Report", LegacyHref("Payroll & HRM", "Report"))
+        ]),
+        new("Accounts", "A", BackOfficeFinanceRoles,
+        [
+            new("Voucher", "/accounts?view=voucher"), new("Report", "/accounts?view=report"), new("Particulars Head", "/accounts?view=particulars")
+        ])
+    ];
+
+    private static bool CanView(System.Security.Claims.ClaimsPrincipal user, IReadOnlyList<string> roles) => roles.Count == 0 || roles.Any(user.IsInRole);
+    private static string LegacyHref(string module, string name) => $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(name)}";
+
     private static string GetUserRole(System.Security.Claims.ClaimsPrincipal user)
     {
         if (user.IsInRole("Administrator")) return "Admin";
@@ -463,4 +539,6 @@
     }
 
     private sealed record HeaderSettingItem(string Label, string Href);
+    private sealed record BackOfficeGroup(string Label, string ShortLabel, IReadOnlyList<string> Roles, IReadOnlyList<BackOfficeItem> Items);
+    private sealed record BackOfficeItem(string Label, string Href);
 }

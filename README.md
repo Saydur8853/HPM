@@ -1,35 +1,203 @@
-# HPM - Hospital Patient Management (Web Edition)
+# PrimeHPM — Hospital Patient Management
 
-Modern, secure, and performant web-based Hospital Management System built with **ASP.NET Core Blazor (InteractiveServer)**, **Entity Framework Core**, and **SQL Server**.
+PrimeHPM is a web-based hospital management system built with ASP.NET Core Blazor, Entity Framework Core, and SQL Server. It covers patient registration, appointments, OPD and emergency services, IPD, diagnostics, pharmacy, accounts, reporting, user management, and audit logging.
 
----
+## Technology stack
 
-## 🌟 Key Features
-- **Patient Management & Fast Search:** Instant search by Patient ID or Contact Number, live suggestions, and keyboard navigation.
-- **CR80 ID Card Printing & Export:**
-  - Standard CR80 ISO 7810 card size (85.60 mm × 53.98 mm, 3.18 mm corner radius).
-  - High-resolution **PNG download (300+ DPI)** via `html2canvas`.
-  - **PDF card download** via client-side `jspdf`.
-  - Margin-free direct card printing via isolated iframe.
-  - Shortcut `Ctrl + P` opens card export & print preview directly.
-- **Billing & Services:** OPD Tickets, Doctor Appointments, Emergency Services, IPD Admission, Diagnostic Billing.
-- **Reports & Records:** Barcode and QR code generation, patient document tracking, and audit logging.
+- .NET 8 / ASP.NET Core Blazor Web App (Interactive Server)
+- Entity Framework Core 8
+- Microsoft SQL Server
+- ASP.NET Core Identity
+- xUnit
 
----
+## Prerequisites
 
-## 🚀 Getting Started
+Install the following before starting:
 
-### Prerequisites
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- SQL Server LocalDB or full SQL Server instance
+1. [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+2. [SQL Server 2019 or later](https://www.microsoft.com/sql-server/sql-server-downloads) (Developer or Express is suitable for development)
+3. [SQL Server Management Studio](https://learn.microsoft.com/sql/ssms/download-sql-server-management-studio-ssms) (optional, but recommended)
+4. Git
 
-### Run Locally
-```bash
-# Restore and run
-dotnet restore
-dotnet run --project HPM.Web/HPM.Web.csproj
+Confirm that .NET is available:
+
+```powershell
+dotnet --version
 ```
-The application will launch on `http://localhost:5180`.
 
----
-© 2026 HPM Team.
+The reported version should be `8.x`, or a newer SDK capable of targeting .NET 8.
+
+## 1. Clone the repository
+
+```powershell
+git clone https://github.com/Saydur8853/HPM.git
+cd HPM
+```
+
+If you already have the repository, open PowerShell in its root directory—the folder containing `HPM.Web.sln`.
+
+## 2. Configure SQL Server
+
+The checked-in development configuration expects a local named SQL Server instance called `HPMDB` and creates a database named `HPM_Web`. It never targets the legacy `HPM` database.
+
+If your instance is named `HPMDB`, start it from an elevated PowerShell window when necessary:
+
+```powershell
+Start-Service 'MSSQL$HPMDB'
+```
+
+For another SQL Server instance, set the connection string in the current PowerShell session. Examples:
+
+Windows authentication:
+
+```powershell
+$env:ConnectionStrings__HpmDatabase = 'Server=.\SQLEXPRESS;Database=HPM_Web;Trusted_Connection=True;TrustServerCertificate=True'
+```
+
+SQL Server authentication:
+
+```powershell
+$env:ConnectionStrings__HpmDatabase = 'Server=localhost;Database=HPM_Web;User ID=YOUR_USER;Password=YOUR_PASSWORD;TrustServerCertificate=True'
+```
+
+Do not commit real database credentials to `appsettings.json`.
+
+## 3. Restore packages and prepare the database
+
+```powershell
+dotnet restore HPM.Web.sln
+dotnet tool install --global dotnet-ef --version 8.*
+dotnet ef database update --project HPM.Web\HPM.Web.csproj --startup-project HPM.Web\HPM.Web.csproj
+```
+
+If `dotnet-ef` is already installed, keep it on the EF Core 8 major version:
+
+```powershell
+dotnet tool update --global dotnet-ef --version 8.*
+```
+
+The application also checks and applies pending migrations during startup. Running `database update` explicitly is recommended because it reports database or permission errors immediately.
+
+## 4. Run the application
+
+```powershell
+dotnet run --project HPM.Web\HPM.Web.csproj --launch-profile http
+```
+
+Open [http://localhost:5180](http://localhost:5180).
+
+On a new database, visit [http://localhost:5180/setup](http://localhost:5180/setup) and provide:
+
+- the hospital name;
+- the first Superadmin user ID; and
+- a strong password with at least eight characters, including uppercase, lowercase, a number, and a special character.
+
+The setup page can be completed only once. After setup, sign in with the Superadmin account you created.
+
+### Windows quick launcher
+
+After the project has been restored and built at least once, `RUN_HPM_WEB.cmd` can start the `HPMDB` SQL Server service, launch the app, and open it in the browser:
+
+```powershell
+.\RUN_HPM_WEB.cmd
+```
+
+The launcher is specific to the `HPMDB` named instance and uses `--no-build`. Use `dotnet run` for the first run or whenever the code has not been built.
+
+## Development workflow
+
+Build the complete solution:
+
+```powershell
+dotnet build HPM.Web.sln
+```
+
+Run the automated test suite:
+
+```powershell
+dotnet test HPM.Web.Tests\HPM.Web.Tests.csproj
+```
+
+Several repository tests inspect the local `HPMDB` instance and expect the legacy `HPM` database and the development `HPM_Web` database to exist. To run only the database-independent workflow and EF model tests:
+
+```powershell
+dotnet test HPM.Web.Tests\HPM.Web.Tests.csproj --filter FullyQualifiedName~WorkflowAndModelTests
+```
+
+The isolated SQL transaction tests run only when `HPM_TEST_CONNECTION` points to a disposable database whose name ends in `_AutomatedTests`:
+
+```powershell
+$env:HPM_TEST_CONNECTION = 'Server=.\HPMDB;Database=HPM_Web_AutomatedTests;Trusted_Connection=True;TrustServerCertificate=True'
+dotnet test HPM.Web.Tests\HPM.Web.Tests.csproj
+```
+
+These integration tests create, migrate, and remove that dedicated test database. Never point `HPM_TEST_CONNECTION` at development or production data.
+
+### Create a database migration
+
+After changing the EF model:
+
+```powershell
+dotnet ef migrations add MigrationName --project HPM.Web\HPM.Web.csproj --startup-project HPM.Web\HPM.Web.csproj --output-dir Data\Migrations
+dotnet ef database update --project HPM.Web\HPM.Web.csproj --startup-project HPM.Web\HPM.Web.csproj
+```
+
+Commit both migration files and the updated model snapshot.
+
+## Useful URLs
+
+| URL | Purpose |
+| --- | --- |
+| `http://localhost:5180/` | Application |
+| `http://localhost:5180/setup` | One-time hospital and Superadmin setup |
+| `http://localhost:5180/health` | Application and database health check |
+
+## Troubleshooting
+
+### Cannot connect to SQL Server
+
+- Confirm the SQL Server service is running: `Get-Service 'MSSQL$HPMDB'`.
+- Verify the server/instance name in `ConnectionStrings__HpmDatabase`.
+- Confirm that the current Windows account or SQL login can create and update `HPM_Web`.
+- Add `TrustServerCertificate=True` for a local development SQL Server certificate.
+
+### `dotnet ef` is not recognized
+
+Install the EF Core 8 CLI and restart the terminal:
+
+```powershell
+dotnet tool install --global dotnet-ef --version 8.*
+```
+
+### Port 5180 is already in use
+
+Stop the other process, or use another URL:
+
+```powershell
+dotnet run --project HPM.Web\HPM.Web.csproj --urls http://localhost:5190
+```
+
+### HTTPS development certificate error
+
+The `http` launch profile does not require a development certificate. To use the `https` profile, trust the local certificate first:
+
+```powershell
+dotnet dev-certs https --trust
+dotnet run --project HPM.Web\HPM.Web.csproj --launch-profile https
+```
+
+## Publishing
+
+Create a release build:
+
+```powershell
+dotnet publish HPM.Web\HPM.Web.csproj -c Release -o .\publish\HPM.Web
+```
+
+Set `ConnectionStrings__HpmDatabase` in the hosting environment, apply migrations, and host the published output on a machine with the .NET 8 Hosting Bundle. IIS deployment and backup scripts are documented in [`deployment/README.md`](deployment/README.md).
+
+## Additional documentation
+
+- [`USER_MANUAL_BN.md`](USER_MANUAL_BN.md) — Bangla user manual
+- [`HPM.Web/README.md`](HPM.Web/README.md) — module and architecture notes
+- [`deployment/README.md`](deployment/README.md) — IIS, HTTPS, health check, and backup guidance

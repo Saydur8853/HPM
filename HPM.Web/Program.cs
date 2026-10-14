@@ -36,6 +36,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<UserAdministrationService>();
 builder.Services.AddSingleton<HospitalSetupService>();
 builder.Services.AddScoped<I18nService>();
+builder.Services.AddScoped<PatientSelectionState>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
 
 var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")

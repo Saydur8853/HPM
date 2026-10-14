@@ -28,6 +28,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<PatientEncounter> PatientEncounters => Set<PatientEncounter>();
     public DbSet<CashMemoDInvestigation> EmergencyMemos => Set<CashMemoDInvestigation>();
     public DbSet<CashMemoSubDInvestigation> EmergencyMemoItems => Set<CashMemoSubDInvestigation>();
+    public DbSet<DiagnosticCashMemoReturn> DiagnosticCashMemoReturns => Set<DiagnosticCashMemoReturn>();
+    public DbSet<DiagnosticCashMemoReturnItem> DiagnosticCashMemoReturnItems => Set<DiagnosticCashMemoReturnItem>();
     public DbSet<CashMemoOT> OTCashMemos => Set<CashMemoOT>();
     public DbSet<CashMemoSubOT> OTCashMemoItems => Set<CashMemoSubOT>();
     public DbSet<DoctorsProfile> Doctors => Set<DoctorsProfile>();
@@ -99,6 +101,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureTicket(modelBuilder);
         ConfigureClinicalEncounters(modelBuilder);
         ConfigureEmergencyMemo(modelBuilder);
+        ConfigureDiagnosticReturns(modelBuilder);
         ConfigureOtMemo(modelBuilder);
         ConfigureMasters(modelBuilder);
         ConfigureIpd(modelBuilder);
@@ -456,6 +459,36 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         item.Property(x => x.TestID).HasColumnName("Test_ID");
         item.Property(x => x.Rate).HasColumnType("numeric(18,0)");
         item.HasIndex(x => new { x.MemoID, x.SLNo }).IsUnique();
+    }
+
+    private static void ConfigureDiagnosticReturns(ModelBuilder b)
+    {
+        var header = b.Entity<DiagnosticCashMemoReturn>();
+        header.ToTable("Diagnostic_Cash_Memo_Return", table => table.HasCheckConstraint(
+            "CK_Diagnostic_Cash_Memo_Return_Amounts", "[Adjustment_Amount] > 0 AND [Refund_Amount] >= 0 AND [Receivable_Adjustment] >= 0 AND [Refund_Amount] + [Receivable_Adjustment] = [Adjustment_Amount]"));
+        header.HasKey(x => x.ID);
+        header.Property(x => x.MemoID).HasColumnName("Memo_ID");
+        header.Property(x => x.AdjustmentAmount).HasColumnName("Adjustment_Amount").HasColumnType("numeric(18,2)");
+        header.Property(x => x.RefundAmount).HasColumnName("Refund_Amount").HasColumnType("numeric(18,2)");
+        header.Property(x => x.ReceivableAdjustment).HasColumnName("Receivable_Adjustment").HasColumnType("numeric(18,2)");
+        header.Property(x => x.Reason).HasMaxLength(500);
+        header.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        header.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        header.HasOne(x => x.Memo).WithMany().HasForeignKey(x => x.MemoID).OnDelete(DeleteBehavior.Restrict);
+        header.HasMany(x => x.Items).WithOne(x => x.Return).HasForeignKey(x => x.ReturnID).OnDelete(DeleteBehavior.Cascade);
+        header.HasIndex(x => new { x.MemoID, x.TransDate });
+
+        var item = b.Entity<DiagnosticCashMemoReturnItem>();
+        item.ToTable("Diagnostic_Cash_Memo_Return_Sub", table => table.HasCheckConstraint(
+            "CK_Diagnostic_Cash_Memo_Return_Sub_Amounts", "[Quantity] > 0 AND [Rate] >= 0"));
+        item.HasKey(x => x.ID);
+        item.Property(x => x.ReturnID).HasColumnName("Return_ID");
+        item.Property(x => x.CashMemoItemID).HasColumnName("Cash_Memo_Sub_ID");
+        item.Property(x => x.ServiceID).HasColumnName("Service_ID");
+        item.Property(x => x.Rate).HasColumnType("numeric(18,2)");
+        item.HasOne(x => x.CashMemoItem).WithMany().HasForeignKey(x => x.CashMemoItemID).OnDelete(DeleteBehavior.Restrict);
+        item.HasIndex(x => new { x.ReturnID, x.CashMemoItemID }).IsUnique();
+        item.HasIndex(x => x.CashMemoItemID);
     }
 
     private static void ConfigureOtMemo(ModelBuilder b)

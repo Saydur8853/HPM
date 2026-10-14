@@ -950,6 +950,92 @@ namespace HPM.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticCashMemoReturn", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("AdjustmentAmount")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Adjustment_Amount");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<long>("MemoID")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Memo_ID");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<decimal>("ReceivableAdjustment")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Receivable_Adjustment");
+
+                    b.Property<decimal>("RefundAmount")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Refund_Amount");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("MemoID", "TransDate");
+
+                    b.ToTable("Diagnostic_Cash_Memo_Return", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Diagnostic_Cash_Memo_Return_Amounts", "[Adjustment_Amount] > 0 AND [Refund_Amount] >= 0 AND [Receivable_Adjustment] >= 0 AND [Refund_Amount] + [Receivable_Adjustment] = [Adjustment_Amount]");
+                        });
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticCashMemoReturnItem", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<long>("CashMemoItemID")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Cash_Memo_Sub_ID");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Rate")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<long>("ReturnID")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Return_ID");
+
+                    b.Property<int>("ServiceID")
+                        .HasColumnType("int")
+                        .HasColumnName("Service_ID");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("CashMemoItemID");
+
+                    b.HasIndex("ReturnID", "CashMemoItemID")
+                        .IsUnique();
+
+                    b.ToTable("Diagnostic_Cash_Memo_Return_Sub", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Diagnostic_Cash_Memo_Return_Sub_Amounts", "[Quantity] > 0 AND [Rate] >= 0");
+                        });
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticOrder", b =>
                 {
                     b.Property<long>("ID")
@@ -4178,6 +4264,36 @@ namespace HPM.Web.Data.Migrations
                     b.Navigation("Memo");
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticCashMemoReturn", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CashMemoDInvestigation", "Memo")
+                        .WithMany()
+                        .HasForeignKey("MemoID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Memo");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticCashMemoReturnItem", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CashMemoSubDInvestigation", "CashMemoItem")
+                        .WithMany()
+                        .HasForeignKey("CashMemoItemID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.DiagnosticCashMemoReturn", "Return")
+                        .WithMany("Items")
+                        .HasForeignKey("ReturnID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("CashMemoItem");
+
+                    b.Navigation("Return");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticOrder", b =>
                 {
                     b.HasOne("HPM.Web.Data.Entities.CashMemoDInvestigation", null)
@@ -4575,6 +4691,11 @@ namespace HPM.Web.Data.Migrations
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.CashMemoOT", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticCashMemoReturn", b =>
                 {
                     b.Navigation("Items");
                 });
