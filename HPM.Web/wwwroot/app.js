@@ -524,5 +524,157 @@ window.hpm = {
             printWindow.print();
             setTimeout(cleanup, 60000);
         }, 350);
+    },
+
+    downloadFile: function (fileName, contentType, base64Data) {
+        try {
+            const byteCharacters = atob(base64Data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: contentType });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+        } catch (e) {
+            console.error('File download failed:', e);
+        }
+    },
+
+    printDoctorList: function (title, subtitle, metaText, tableHtml) {
+        const frame = document.createElement('iframe');
+        frame.style.position = 'fixed';
+        frame.style.right = '0';
+        frame.style.bottom = '0';
+        frame.style.width = '0';
+        frame.style.height = '0';
+        frame.style.border = '0';
+        document.body.appendChild(frame);
+        const printWindow = frame.contentWindow;
+
+        printWindow.document.write(`<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>${title || 'Doctors Directory'}</title>
+    <style>
+        @page { size: A4 landscape; margin: 8mm 10mm; }
+        * { box-sizing: border-box !important; print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; }
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            color: #0f172a;
+            font-size: 9pt;
+            background: #ffffff;
+        }
+        .print-header {
+            text-align: center;
+            border-bottom: 2px solid #0284c7;
+            padding-bottom: 6px;
+            margin-bottom: 8px;
+        }
+        .print-title {
+            font-size: 15pt;
+            font-weight: 800;
+            color: #0f172a;
+            margin: 0;
+        }
+        .print-sub {
+            font-size: 10pt;
+            color: #0369a1;
+            font-weight: 700;
+            margin: 2px 0 0;
+        }
+        .print-meta-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 8pt;
+            color: #64748b;
+            margin-bottom: 8px;
+            font-weight: 600;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8pt;
+        }
+        th {
+            background: #f1f5f9 !important;
+            color: #1e293b;
+            font-weight: 750;
+            text-align: left;
+            padding: 5px 6px;
+            border: 1px solid #cbd5e1;
+            text-transform: uppercase;
+            font-size: 7.5pt;
+            letter-spacing: 0.3px;
+        }
+        td {
+            padding: 4px 6px;
+            border: 1px solid #e2e8f0;
+            vertical-align: middle;
+        }
+        tr:nth-child(even) td {
+            background: #f8fafc !important;
+        }
+        .text-center { text-align: center; }
+        .badge-perm { color: #0369a1; font-weight: 700; }
+        .badge-res { color: #7e22ce; font-weight: 700; }
+        .badge-cont { color: #92400e; font-weight: 700; }
+        .badge-active { color: #166534; font-weight: 750; }
+        .badge-inactive { color: #dc2626; font-weight: 750; }
+        .priority-star { color: #854d0e; font-weight: 800; }
+        .print-footer {
+            margin-top: 10px;
+            font-size: 7.5pt;
+            color: #94a3b8;
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="print-header">
+        <h1 class="print-title">${title || 'Delta Medical College & Hospital'}</h1>
+        <p class="print-sub">${subtitle || 'Doctors Directory & Priority Schedule'}</p>
+    </div>
+    <div class="print-meta-bar">
+        <span>${metaText || ''}</span>
+        <span>Generated: ${new Date().toLocaleString()}</span>
+    </div>
+    ${tableHtml}
+    <div class="print-footer">
+        <span>Delta Medical College Hospital Information System</span>
+        <span>Page 1</span>
+    </div>
+</body>
+</html>`);
+        printWindow.document.close();
+
+        const cleanup = () => {
+            try {
+                if (document.body.contains(frame)) {
+                    document.body.removeChild(frame);
+                }
+            } catch (e) {}
+        };
+        printWindow.onafterprint = cleanup;
+        setTimeout(() => {
+            printWindow.focus();
+            printWindow.print();
+            setTimeout(cleanup, 60000);
+        }, 350);
     }
 };

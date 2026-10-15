@@ -150,6 +150,8 @@ public sealed class DoctorsProfile
     public DateTime? TransDate { get; set; }
     public string? Address { get; set; }
     public int? ReferralCategoryID { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int? Priority { get; set; }
 }
 
 public sealed class Department

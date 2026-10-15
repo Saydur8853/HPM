@@ -545,6 +545,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         doctor.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
         doctor.Property(x => x.Address).HasMaxLength(200);
         doctor.Property(x => x.ReferralCategoryID).HasColumnName("Referral_Category_ID");
+        doctor.Property(x => x.IsActive).HasColumnName("Is_Active").HasDefaultValue(true);
+        doctor.Property(x => x.Priority).HasColumnName("Priority");
 
         var department = b.Entity<Department>();
         department.ToTable("Department");

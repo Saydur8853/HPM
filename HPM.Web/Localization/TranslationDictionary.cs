@@ -154,6 +154,7 @@ namespace HPM.Web.Localization
             ["Lab Parameters"] = "ল্যাব টেস্ট প্যারামিটার",
             ["Diagnostic Masters"] = "ডায়াগনস্টিক টেস্ট সেটআপ",
             ["Pathology & Imaging"] = "প্যাথলজি ও ইমেজিং",
+            ["Investigation & Pathology"] = "ইনভেস্টিগেশন ও প্যাথলজি",
             ["Users & Roles"] = "ইউজার ও পারমিশন",
             ["User Accounts"] = "ইউজার ও পারমিশন",
             ["System Audit Log"] = "সিস্টেম অডিট লগ",

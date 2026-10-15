@@ -129,6 +129,20 @@ app.MapGet("/health", async (IDbContextFactory<HpmDbContext> dbFactory) =>
     }
 }).AllowAnonymous();
 
+if (app.Environment.IsDevelopment())
+{
+    app.MapGet("/dev-login", async (SignInManager<AppUser> signInManager, UserManager<AppUser> userManager) =>
+    {
+        var user = await userManager.FindByNameAsync("Saydur") ?? await userManager.FindByNameAsync("admin");
+        if (user is not null)
+        {
+            await signInManager.SignInAsync(user, isPersistent: true);
+            return Results.Redirect("/masters/doctors");
+        }
+        return Results.Redirect("/login");
+    }).AllowAnonymous();
+}
+
 app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager) =>
 {
     await antiforgery.ValidateRequestAsync(http);
