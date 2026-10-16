@@ -24,12 +24,24 @@ builder.Services.AddRazorComponents()
         options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(15);
         options.DisconnectedCircuitMaxRetained = 200;
         options.JSInteropDefaultCallTimeout = TimeSpan.FromMinutes(2);
+        options.DetailedErrors = true;
     });
 builder.Services.AddSignalR(options =>
 {
+    options.MaximumReceiveMessageSize = 32 * 1024 * 1024; // 32 MB for image uploads and camera frames
+    options.EnableDetailedErrors = true;
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
     options.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
     options.HandshakeTimeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
+{
+    options.MaximumReceiveMessageSize = 32 * 1024 * 1024; // 32 MB for Blazor ComponentHub
+    options.EnableDetailedErrors = true;
+});
+builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(options =>
+{
+    options.DetailedErrors = true;
 });
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
@@ -108,12 +120,37 @@ await using (var scope = app.Services.CreateAsyncScope())
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<HpmDbContext>>();
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Database.MigrateAsync();
+
+        const string patientColSql = """
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Weight')
+            BEGIN
+                ALTER TABLE [Registration] ADD [Weight] nvarchar(20) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Photo_Data')
+            BEGIN
+                ALTER TABLE [Registration] ADD [Photo_Data] nvarchar(max) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctor_Appointment]') AND name = 'Weight')
+            BEGIN
+                ALTER TABLE [Doctor_Appointment] ADD [Weight] nvarchar(20) NULL;
+            END
+        """;
+        await db.Database.ExecuteSqlRawAsync(patientColSql);
+
+        var branding = app.Services.GetRequiredService<HospitalSetupService>();
+        await branding.LoadAsync();
     }
     catch (Exception ex)
     {
-        Log.Warning(ex, "Database migration check skipped due to startup delay: {Message}", ex.Message);
+        Log.Warning(ex, "Database migration or branding startup check skipped: {Message}", ex.Message);
     }
 }
+
+app.MapGet("/favicon.ico", (HospitalSetupService branding) =>
+{
+    var (bytes, contentType) = branding.GetFaviconBytes();
+    return Results.File(bytes, contentType);
+}).AllowAnonymous();
 
 app.MapGet("/health", async (IDbContextFactory<HpmDbContext> dbFactory) =>
 {

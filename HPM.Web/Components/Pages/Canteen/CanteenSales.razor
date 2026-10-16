@@ -1,0 +1,1105 @@
+@page "/canteen"
+@page "/canteen/sales"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Components.Common
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
+
+<PageTitle>@I18n.T("Canteen Sales & POS") | @Branding.HospitalName</PageTitle>
+
+<div class="canteen-classic-fit">
+    <!-- Compact Top Action & Status Bar -->
+    <div class="canteen-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>🍽️</span>
+                <span>@I18n.T("Canteen Sales & POS")</span>
+            </h1>
+            <span class="tickets-count-pill">
+                @todaySales.Count @I18n.T("Orders Today")
+            </span>
+            <span class="pill" style="font-size:11px; font-weight:750; background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;">
+                @I18n.T("Total"): @(I18n.FormatCurrency(todayTotalRevenue))
+            </span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass == "success" ? "✓" : "⚠") @message
+                </span>
+            }
+        </div>
+
+        <div class="tickets-top-actions">
+            <a href="/canteen/products" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Manage Products & Menu")">
+                🍱 @I18n.T("Products & Menu")
+            </a>
+            <a href="/canteen/challan" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Stock Receiving Challan")">
+                📥 @I18n.T("Stock Challan")
+            </a>
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("New Order / Reset")">
+                + @I18n.T("New Order")
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Balanced Workspace Grid: Left POS Terminal, Right Recent Tokens -->
+    <div class="canteen-classic-workspace">
+        <!-- Left Panel: POS Terminal Card -->
+        <div class="canteen-form-card">
+            <div class="canteen-card-header">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@(editor.ID == 0 ? I18n.T("New Canteen Order") : $"{I18n.T("Order")} #{editor.ID}")</h2>
+                    <span class="canteen-token-badge" title="@I18n.T("Current Token Number")">
+                        🎫 @I18n.T("Token"): @(string.IsNullOrWhiteSpace(editor.TokenNo) ? "—" : editor.TokenNo)
+                    </span>
+                </div>
+                <span class="canteen-badge">
+                    @(editor.ID == 0 ? "⚡ POS TERMINAL" : $"BILL #{editor.ID}")
+                </span>
+            </div>
+
+            <EditForm Model="editor" OnValidSubmit="SaveOrderAsync" class="canteen-form-wrapper">
+                <DataAnnotationsValidator />
+
+                <div class="canteen-form-body">
+                    <!-- Customer Demographics Bar (Compact 4-column) -->
+                    <div class="billing-demographics-grid canteen-grid">
+                        <label>
+                            <span>@I18n.T("Customer Name")</span>
+                            <InputText class="classic-input" @bind-Value="editor.CustomerName" placeholder="@I18n.T("Customer / Staff / Patient name")" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Customer Type")</span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.CustomerType" @bind-Value:after="HandleCustomerTypeChanged">
+                                <option value="Customer">@I18n.T("Walk-in Customer")</option>
+                                <option value="Staff">@I18n.T("Hospital Staff")</option>
+                                <option value="Patient">@I18n.T("Patient / Attendant")</option>
+                                <option value="Credit">@I18n.T("Credit / Debtor")</option>
+                            </InputSelect>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Contact Mobile")</span>
+                            <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
+                        </label>
+                        <div class="canteen-token-input-col">
+                            <span>@I18n.T("Token No")</span>
+                            <div style="display:flex; gap:4px;">
+                                <InputText class="classic-input bold-number" style="font-size:12px; font-weight:800; color:#0284c7; text-align:center;" @bind-Value="editor.TokenNo" placeholder="T-01" />
+                                <button type="button" class="btn btn-secondary tickets-btn" style="padding:0 7px; height:27px;" @onclick="GenerateNextToken" title="@I18n.T("Next Token")">↺</button>
+                            </div>
+                        </div>
+
+                        <!-- Debtor info banner when Credit customer type -->
+                        @if (editor.CustomerType == "Credit")
+                        {
+                            <div class="canteen-debtor-banner" style="grid-column: span 4;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:14px;">🏢</span>
+                                    <span style="font-size:11px; font-weight:700; color:#92400e;">@I18n.T("Debtor Account"):</span>
+                                    @if (selectedDebtor != null)
+                                    {
+                                        <span class="canteen-debtor-pill">
+                                            <strong>@selectedDebtor.Name</strong> (@selectedDebtor.Designation) · @I18n.T("Balance"): @(I18n.FormatCurrency(selectedDebtor.Balance))
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span style="font-size:11px; color:#b45309; font-style:italic;">@I18n.T("Please select debtor account")</span>
+                                    }
+                                </div>
+                                <button type="button" class="btn btn-secondary tickets-btn" style="padding:1px 8px; font-size:10.5px; height:24px;" @onclick="OpenDebtorModal">
+                                    🔍 @(selectedDebtor == null ? I18n.T("Select Debtor") : I18n.T("Change"))
+                                </button>
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Quick Line Item Entry Bar -->
+                    <div class="billing-line-editor canteen-line-editor">
+                        <label style="flex: 2; min-width: 170px;">
+                            <span>@I18n.T("Product / Food Item")</span>
+                            <select class="classic-input tickets-select" value="@selectedProductId" @onchange="ProductChanged">
+                                <option value="0">-- @I18n.T("Select Food / Product Item") --</option>
+                                @foreach (var prod in activeProducts)
+                                {
+                                    <option value="@prod.ID">
+                                        @prod.Name @(prod.Balance.HasValue ? $"({prod.Balance:0.##} {prod.Unit ?? "pcs"})" : "") — ৳@prod.SaleRate
+                                    </option>
+                                }
+                            </select>
+                        </label>
+                        <label style="width: 80px;">
+                            <span>@I18n.T("Rate")</span>
+                            <input type="number" step="0.01" class="classic-input bold-number" @bind="lineRate" />
+                        </label>
+                        <label style="width: 55px;">
+                            <span>@I18n.T("Qty")</span>
+                            <input type="number" min="1" step="1" class="classic-input bold-number" @bind="lineQty" />
+                        </label>
+                        <div class="billing-line-btn-group">
+                            <button class="btn btn-dark tickets-btn btn-add-line" type="button" @onclick="AddLineItem">
+                                + @I18n.T("Add")
+                            </button>
+                            <button class="btn btn-secondary tickets-btn btn-browse-catalog" type="button" @onclick="OpenMenuModal" title="@I18n.T("Browse visual Canteen Menu & Products")">
+                                🔍 @I18n.T("Menu")
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Order Items Table -->
+                    <div class="billing-line-table-wrap canteen-table-wrap">
+                        <div class="canteen-table-head">
+                            <span style="width:24px;">#</span>
+                            <span style="flex:1.5;">@I18n.T("Item Name")</span>
+                            <span style="width:55px; text-align:center;">@I18n.T("Unit")</span>
+                            <span style="width:85px; text-align:right;">@I18n.T("Rate")</span>
+                            <span style="width:50px; text-align:center;">@I18n.T("Qty")</span>
+                            <span style="width:95px; text-align:right;">@I18n.T("Total")</span>
+                            <span style="width:24px;"></span>
+                        </div>
+                        <div class="billing-line-rows">
+                            @if (editor.Items.Count == 0)
+                            {
+                                <div class="tickets-queue-empty" style="padding: 1.2rem;">
+                                    <span style="font-size:1.8rem;">🍽️</span>
+                                    <span>@I18n.T("No items added. Pick an item above or click 'Menu'.")</span>
+                                </div>
+                            }
+                            @foreach (var item in editor.Items)
+                            {
+                                var prod = products.FirstOrDefault(p => p.ID == item.ServiceID);
+                                <div class="canteen-table-row">
+                                    <span style="width:24px; color:#64748b; font-weight:700;">@item.SLNO</span>
+                                    <span style="flex:1.5; font-weight:750; color:#0f172a;">
+                                        @ProductName(item.ServiceID)
+                                    </span>
+                                    <span style="width:55px; text-align:center; font-size:10.5px; color:#64748b;">
+                                        @(prod?.Unit ?? "pcs")
+                                    </span>
+                                    <span style="width:85px; text-align:right;">
+                                        @(I18n.FormatCurrency(item.Rate ?? 0))
+                                    </span>
+                                    <span style="width:50px; text-align:center; font-weight:800;">
+                                        @(item.Quantity ?? 1)
+                                    </span>
+                                    <strong style="width:95px; text-align:right; color:#0f172a;">
+                                        @(I18n.FormatCurrency(item.Total ?? 0))
+                                    </strong>
+                                    <button type="button" class="btn-line-delete" style="width:24px;" title="@I18n.T("Remove Item")" @onclick="() => RemoveLineItem(item)">✕</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Summary & Financials Strip (Permanently Anchored Above Footer) -->
+                <div class="canteen-bottom-panel">
+                    <!-- Left: Item counts & Tokens info -->
+                    <div class="canteen-bottom-info">
+                        <span class="canteen-order-pill">
+                            📦 @editor.Items.Count @I18n.T("Items") (@(editor.Items.Sum(x => x.Quantity ?? 0)) @I18n.T("Qty"))
+                        </span>
+                        @if ((editor.Discount ?? 0) > 0)
+                        {
+                            <span class="canteen-disc-pill" title="Discount Applied">
+                                🏷️ @(I18n.FormatCurrency(editor.Discount ?? 0)) @I18n.T("off")
+                            </span>
+                        }
+                    </div>
+
+                    <!-- Right: Compact Totals Strip -->
+                    <div class="emg-totals-strip">
+                        <div class="emg-stat">
+                            <span class="stat-lbl">@I18n.T("Gross")</span>
+                            <span class="stat-val gross-val">@(I18n.FormatCurrency(editor.Total ?? 0))</span>
+                        </div>
+                        <div class="emg-stat discount-stat" @onclick="OpenDiscountModal" title="@I18n.T("Click to apply concession or discount")">
+                            <div class="stat-lbl-row">
+                                <span class="stat-lbl">@I18n.T("Discount")</span>
+                                <span class="stat-edit-icon">✏️</span>
+                            </div>
+                            <span class="stat-val @((editor.Discount ?? 0) > 0 ? "has-discount" : "")">
+                                @((editor.Discount ?? 0) > 0 ? $"-{I18n.FormatCurrency(editor.Discount ?? 0)}" : "৳ 0")
+                            </span>
+                        </div>
+                        <div class="emg-stat due-stat">
+                            <span class="stat-lbl">@I18n.T("Net")</span>
+                            <span class="stat-val due-amount">@(I18n.FormatCurrency(NetPayable))</span>
+                        </div>
+                        <div class="emg-stat" style="gap:2px;">
+                            <span class="stat-lbl">@I18n.T("Paid")</span>
+                            <input type="number" step="0.01" class="classic-input emg-paid-input"
+                                   value="@editor.Paid"
+                                   @oninput="HandlePaidInput"
+                                   title="@I18n.T("Paid by customer")" />
+                        </div>
+                        @if (editor.Paid.HasValue && editor.Paid.Value > NetPayable)
+                        {
+                            <div class="emg-stat" style="background:#ecfdf5; border:1px solid #a7f3d0; padding:2px 6px; border-radius:4px;">
+                                <span class="stat-lbl" style="color:#059669;">@I18n.T("Change")</span>
+                                <span class="stat-val" style="color:#059669; font-weight:800;">@(I18n.FormatCurrency(editor.Paid.Value - NetPayable))</span>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Footer Action Bar -->
+                <div class="canteen-form-footer">
+                    <button class="btn btn-primary tickets-btn" type="submit" disabled="@saving">
+                        @(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Complete Sale & Print") : I18n.T("Update Order"))
+                    </button>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintCurrentOrderAsync" title="@I18n.T("Print Token / Receipt")">
+                                🖨️ @I18n.T("Print Token")
+                            </button>
+                            <button class="btn btn-ghost tickets-btn" type="button" @onclick="DeleteSelectedOrderAsync" style="color: #dc2626;" title="@I18n.T("Cancel Order")">
+                                @I18n.T("Cancel Order")
+                            </button>
+                        }
+                        <button class="btn btn-ghost tickets-btn" type="button" @onclick="Reset">
+                            @I18n.T("Clear")
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Right Panel: Recent Canteen Orders / Tokens Queue -->
+        <div class="canteen-queue-card">
+            <div class="canteen-queue-top">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Recent Orders & Tokens")</h2>
+                    <span style="font-size:11.5px; color:#64748b; font-weight:600;">
+                        (@DateTime.Today.ToString("dd MMM yyyy"))
+                    </span>
+                </div>
+                <span class="pill" style="font-size:11px; font-weight:700;">
+                    @FilteredSales.Count() @I18n.T("Orders")
+                </span>
+            </div>
+
+            <!-- Search Bar -->
+            <div class="tickets-scanner-bar">
+                <div class="tickets-scanner-input-wrap">
+                    <span class="tickets-scanner-icon" title="Search Orders">🔍</span>
+                    <input type="text"
+                           class="classic-input tickets-scanner-input"
+                           placeholder="@I18n.T("Search Token #, Bill #, Customer Name, or Mobile...")"
+                           @bind="salesSearchQuery"
+                           @bind:event="oninput" />
+                    @if (!string.IsNullOrWhiteSpace(salesSearchQuery))
+                    {
+                        <button type="button" class="tickets-scanner-clear" @onclick="() => salesSearchQuery = string.Empty" title="Clear">✕</button>
+                    }
+                </div>
+            </div>
+
+            <!-- Orders Queue List -->
+            <div class="billing-queue-list">
+                @if (!FilteredSales.Any())
+                {
+                    <div class="tickets-queue-empty">
+                        <span style="font-size: 2rem;">🍽️</span>
+                        <span>@I18n.T("No matching canteen orders found.")</span>
+                    </div>
+                }
+                @foreach (var sale in FilteredSales)
+                {
+                    <div class="billing-queue-item @(editor.ID == sale.ID ? "active" : "")" @onclick="() => SelectSale(sale)">
+                        <div style="display:flex; flex-direction:column; align-items:center; gap:1px; flex-shrink:0;">
+                            <span class="billing-queue-serial">#@sale.ID</span>
+                            <span class="canteen-queue-token">@sale.TokenNo</span>
+                        </div>
+                        <div class="billing-queue-info">
+                            <span class="billing-queue-name">
+                                @sale.CustomerName
+                                <small class="canteen-type-tag">(@sale.CustomerType)</small>
+                            </span>
+                            <span class="billing-queue-meta">
+                                @sale.TransDate.ToString("hh:mm tt") &bull; @sale.Items.Count @I18n.T("item(s)") @(string.IsNullOrWhiteSpace(sale.Contact) ? "" : $"&bull; {sale.Contact}")
+                            </span>
+                        </div>
+                        <div class="tickets-queue-badges">
+                            <span class="billing-queue-amount">@(I18n.FormatCurrency(sale.Total ?? 0))</span>
+                        </div>
+                        <div class="tickets-queue-actions" @onclick:stopPropagation="true">
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("View / Edit")" @onclick="() => SelectSale(sale)">✏️</button>
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("Print Token")" @onclick="() => PrintSale(sale)">🖨️</button>
+                            <button type="button" class="tickets-icon-action danger" title="@I18n.T("Cancel / Reverse")" @onclick="() => DeleteSaleAsync(sale)">✕</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 1. Visual Food / Menu Catalog Modal -->
+@if (isMenuModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseMenuModal">
+        <div class="doctor-modal-dialog canteen-menu-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">🍽️</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Canteen Food & Products Menu")</h3>
+                        <small>@I18n.T("Browse menu items, check stock, and add with 1 click")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseMenuModal" title="@I18n.T("Close")">✕</button>
+            </div>
+
+            <!-- Search Box -->
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="menuSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search food, snack, beverage, sweets...")" />
+                    @if (!string.IsNullOrWhiteSpace(menuSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => menuSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+
+            <!-- Category Filter Chips -->
+            <div class="service-category-chips">
+                <button type="button" class="service-cat-chip @(menuCategoryId == 0 ? "active" : "")" @onclick="() => menuCategoryId = 0">
+                    @I18n.T("All Categories")
+                </button>
+                @foreach (var cat in categories)
+                {
+                    <button type="button" class="service-cat-chip @(menuCategoryId == cat.ID ? "active" : "")" @onclick="() => menuCategoryId = cat.ID">
+                        @cat.Name
+                    </button>
+                }
+            </div>
+
+            <!-- Products Grid List -->
+            <div class="canteen-menu-grid">
+                @if (!FilteredMenuItems.Any())
+                {
+                    <div class="doc-modal-empty" style="grid-column: span 3;">
+                        @I18n.T("No canteen product matches your search.")
+                    </div>
+                }
+                else
+                {
+                    @foreach (var prod in FilteredMenuItems.Take(120))
+                    {
+                        var catName = categories.FirstOrDefault(c => c.ID == prod.CategoryID)?.Name ?? "Item";
+                        var isLowStock = prod.Balance.HasValue && prod.ReorderLevel.HasValue && prod.Balance <= prod.ReorderLevel;
+                        <div class="canteen-menu-card" @onclick="() => AddProductFromMenu(prod)">
+                            <div class="menu-card-top">
+                                <span class="menu-card-cat">@catName</span>
+                                @if (prod.IsKitchenItem == true)
+                                {
+                                    <span class="menu-kitchen-tag">🍳 Kitchen</span>
+                                }
+                            </div>
+                            <span class="menu-card-title">@prod.Name</span>
+                            <div class="menu-card-footer">
+                                <span class="menu-card-price">@(I18n.FormatCurrency(prod.SaleRate ?? 0))</span>
+                                <span class="menu-card-stock @(isLowStock ? "low-stock" : "")">
+                                    @(prod.Balance.HasValue ? $"{prod.Balance:0.##} {prod.Unit ?? "pcs"}" : "—")
+                                </span>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@FilteredMenuItems.Count() @I18n.T("products available")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseMenuModal">@I18n.T("Close")</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 2. Debtor Selection Modal (for Credit sales) -->
+@if (isDebtorModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDebtorModal">
+        <div class="doctor-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);">🏢</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Select Debtor Account")</h3>
+                        <small>@I18n.T("Authorize credit sales to company, doctor, or staff debtor")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDebtorModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="debtorSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search debtor by name, designation...")" />
+                </div>
+            </div>
+            <div class="doctor-modal-list">
+                @foreach (var debtor in FilteredDebtors)
+                {
+                    var isCurrent = selectedDebtor?.ID == debtor.ID;
+                    <div class="doctor-modal-item @(isCurrent ? "active-selected" : "")" @onclick="() => SelectDebtor(debtor)">
+                        <div class="doctor-modal-item-left">
+                            <div class="doc-modal-avatar" style="background:#e0f2fe; color:#0369a1;">🏢</div>
+                            <div class="doc-modal-info">
+                                <span class="doc-modal-name">@debtor.Name</span>
+                                <span class="doc-modal-meta">
+                                    <span>@debtor.Designation</span>
+                                    <span class="doc-modal-dept-badge">@I18n.T("Current Due"): @(I18n.FormatCurrency(debtor.Balance))</span>
+                                </span>
+                            </div>
+                        </div>
+                        <button type="button" class="btn-modal-choose">
+                            @(isCurrent ? "✓ " + I18n.T("Selected") : I18n.T("Select"))
+                        </button>
+                    </div>
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@debtors.Count @I18n.T("debtors listed")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseDebtorModal">@I18n.T("Cancel")</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 3. Discount Modal -->
+@if (isDiscountModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDiscountModal">
+        <div class="doctor-modal-dialog discount-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">🏷️</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Canteen Discount")</h3>
+                        <small>@I18n.T("Apply staff or concession discount to canteen order")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDiscountModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="discount-modal-body">
+                <div class="discount-summary-banner">
+                    <div class="summary-stat">
+                        <span>@I18n.T("Gross Subtotal")</span>
+                        <strong>@(I18n.FormatCurrency(editor.Total ?? 0))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Discount")</span>
+                        <strong style="color:#059669;">-@(I18n.FormatCurrency(tempDiscount))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Net Payable")</span>
+                        <strong style="color:#0284c7;">@(I18n.FormatCurrency(Math.Max(0, (editor.Total ?? 0) - tempDiscount)))</strong>
+                    </div>
+                </div>
+
+                <div class="discount-quick-chips">
+                    <span class="quick-chip-title">@I18n.T("Quick %"):</span>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(0)">0%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(5)">5%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(10)">10%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(15)">15%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(20)">20%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(50)">50%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(100)">100% (Free)</button>
+                </div>
+
+                <div class="discount-form-fields" style="grid-template-columns: 1fr;">
+                    <label>
+                        <span>@I18n.T("Discount Amount (৳)")</span>
+                        <input type="number"
+                               step="0.01"
+                               min="0"
+                               max="@(editor.Total ?? 0)"
+                               class="classic-input bold-number"
+                               value="@tempDiscount"
+                               @oninput="HandleTempDiscountInput" />
+                    </label>
+                </div>
+            </div>
+            <div class="doctor-modal-footer">
+                <button type="button" class="btn btn-ghost tickets-btn" @onclick="RemoveDiscount" style="color: #dc2626;">@I18n.T("Remove")</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn-modal-cancel" @onclick="CloseDiscountModal">@I18n.T("Cancel")</button>
+                    <button type="button" class="btn-primary tickets-btn" @onclick="ApplyDiscount">
+                        @I18n.T("Apply Discount")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Thermal Canteen Token / Receipt Printable Section -->
+<div id="canteen-print" class="print-document">
+    <div class="canteen-token-sheet">
+        <div class="canteen-token-header">
+            <h3>@Branding.HospitalName</h3>
+            <div class="canteen-tagline">CANTEEN & CAFETERIA TOKEN</div>
+            <div class="canteen-token-num">@editor.TokenNo</div>
+            <div class="canteen-token-bill">BILL #@editor.ID &bull; @editor.TransDate.ToString("dd-MMM-yyyy hh:mm tt")</div>
+            <div class="canteen-cust-info">
+                <span>Customer: <b>@editor.CustomerName</b></span>
+                <span>Type: <b>@editor.CustomerType</b></span>
+            </div>
+        </div>
+
+        <div class="canteen-token-divider"></div>
+
+        <table class="canteen-token-table">
+            <thead>
+                <tr>
+                    <th style="text-align:left;">Item</th>
+                    <th style="text-align:center;">Qty</th>
+                    <th style="text-align:right;">Rate</th>
+                    <th style="text-align:right;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var itm in editor.Items)
+                {
+                    <tr>
+                        <td style="text-align:left;">@ProductName(itm.ServiceID)</td>
+                        <td style="text-align:center;">@itm.Quantity</td>
+                        <td style="text-align:right;">@(I18n.FormatCurrency(itm.Rate ?? 0))</td>
+                        <td style="text-align:right;">@(I18n.FormatCurrency(itm.Total ?? 0))</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="canteen-token-divider"></div>
+
+        <div class="canteen-token-totals">
+            <div><span>Gross Total:</span><strong>@I18n.FormatCurrency(editor.Total ?? 0)</strong></div>
+            @if ((editor.Discount ?? 0) > 0)
+            {
+                <div><span>Discount:</span><strong>-@I18n.FormatCurrency(editor.Discount ?? 0)</strong></div>
+            }
+            <div class="grand-line"><span>Net Payable:</span><strong>@I18n.FormatCurrency(NetPayable)</strong></div>
+            <div><span>Paid:</span><strong>@I18n.FormatCurrency(editor.Paid ?? NetPayable)</strong></div>
+            @if ((editor.Paid ?? 0) > NetPayable)
+            {
+                <div><span>Change Returned:</span><strong>@I18n.FormatCurrency((editor.Paid ?? 0) - NetPayable)</strong></div>
+            }
+        </div>
+
+        <div class="canteen-token-footer">
+            <div>Thank you! Please collect your food at the counter.</div>
+            <div style="font-size:9px; color:#64748b; margin-top:3px;">Software by HPM &bull; Cashier: @userName</div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private CanteenSale editor = NewSale();
+    private List<CanteenProduct> products = [];
+    private List<CanteenCategory> categories = [];
+    private List<CanteenDebtor> debtors = [];
+    private List<CanteenSale> todaySales = [];
+    private CanteenDebtor? selectedDebtor;
+
+    private int selectedProductId;
+    private decimal lineRate;
+    private decimal lineQty = 1;
+    private string salesSearchQuery = string.Empty;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+    private string userName = "Cashier";
+
+    // Modals
+    private bool isMenuModalOpen;
+    private string menuSearchQuery = string.Empty;
+    private int menuCategoryId = 0;
+
+    private bool isDebtorModalOpen;
+    private string debtorSearchQuery = string.Empty;
+
+    private bool isDiscountModalOpen;
+    private decimal tempDiscount;
+
+    private IEnumerable<CanteenProduct> activeProducts => products.OrderBy(p => p.Name);
+
+    private IEnumerable<CanteenProduct> FilteredMenuItems
+    {
+        get
+        {
+            var res = products.AsEnumerable();
+            if (menuCategoryId > 0)
+            {
+                res = res.Where(p => p.CategoryID == menuCategoryId);
+            }
+            if (!string.IsNullOrWhiteSpace(menuSearchQuery))
+            {
+                var q = menuSearchQuery.Trim();
+                res = res.Where(p => p.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+            return res.OrderBy(p => p.Name);
+        }
+    }
+
+    private IEnumerable<CanteenDebtor> FilteredDebtors => string.IsNullOrWhiteSpace(debtorSearchQuery)
+        ? debtors
+        : debtors.Where(d => d.Name.Contains(debtorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                          || d.Designation.Contains(debtorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<CanteenSale> FilteredSales => string.IsNullOrWhiteSpace(salesSearchQuery)
+        ? todaySales
+        : todaySales.Where(s => s.ID.ToString().Contains(salesSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                             || (s.TokenNo != null && s.TokenNo.Contains(salesSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+                             || (s.CustomerName != null && s.CustomerName.Contains(salesSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+                             || (s.Contact != null && s.Contact.Contains(salesSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+    private decimal NetPayable => Math.Max(0, (editor.Total ?? 0) - (editor.Discount ?? 0));
+    private decimal todayTotalRevenue => todaySales.Sum(s => Math.Max(0, (s.Total ?? 0) - (s.Discount ?? 0)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        userName = auth.User.Identity?.Name ?? "Cashier";
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.CanteenCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        products = await db.CanteenProducts.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        debtors = await db.CanteenDebtors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+
+        await LoadTodaySalesAsync();
+        GenerateNextToken();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadTodaySalesAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var today = DateTime.Today;
+        todaySales = await db.CanteenSales.AsNoTracking()
+            .Include(x => x.Items)
+            .Where(x => x.TransDate >= today)
+            .OrderByDescending(x => x.ID)
+            .Take(50)
+            .ToListAsync();
+    }
+
+    private void GenerateNextToken()
+    {
+        if (editor.ID > 0) return;
+        var count = todaySales.Count + 1;
+        editor.TokenNo = $"T-{count:D2}";
+    }
+
+    private void ProductChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id) && id > 0)
+        {
+            selectedProductId = id;
+            var prod = products.FirstOrDefault(p => p.ID == id);
+            lineRate = prod?.SaleRate ?? 0;
+            lineQty = 1;
+        }
+        else
+        {
+            selectedProductId = 0;
+            lineRate = 0;
+            lineQty = 1;
+        }
+    }
+
+    private void AddLineItem()
+    {
+        if (selectedProductId <= 0 || lineQty <= 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "একটি পণ্য নির্বাচন করুন এবং পরিমাণ ১ বা তার বেশি লিখুন।" : "Select a product and enter a quantity of 1 or more.";
+            return;
+        }
+
+        var prod = products.FirstOrDefault(p => p.ID == selectedProductId);
+        var existing = editor.Items.FirstOrDefault(i => i.ServiceID == selectedProductId);
+        if (existing != null)
+        {
+            existing.Quantity = (existing.Quantity ?? 0) + lineQty;
+            existing.Total = (existing.Rate ?? 0) * existing.Quantity.Value;
+        }
+        else
+        {
+            editor.Items.Add(new CanteenSaleSub
+            {
+                SLNO = editor.Items.Count + 1,
+                ServiceID = selectedProductId,
+                Rate = lineRate,
+                BuyRate = prod?.BuyRate ?? 0,
+                Quantity = lineQty,
+                Total = lineRate * lineQty
+            });
+        }
+
+        RecalculateTotals();
+        selectedProductId = 0;
+        lineRate = 0;
+        lineQty = 1;
+        message = string.Empty;
+    }
+
+    private void RemoveLineItem(CanteenSaleSub item)
+    {
+        editor.Items.Remove(item);
+        for (var i = 0; i < editor.Items.Count; i++) editor.Items[i].SLNO = i + 1;
+        RecalculateTotals();
+    }
+
+    private void RecalculateTotals()
+    {
+        editor.Total = editor.Items.Sum(x => x.Total ?? 0);
+        editor.Paid = NetPayable;
+    }
+
+    private void HandlePaidInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var val))
+        {
+            editor.Paid = val;
+        }
+        else
+        {
+            editor.Paid = null;
+        }
+    }
+
+    private void HandleCustomerTypeChanged()
+    {
+        if (editor.CustomerType == "Credit")
+        {
+            OpenDebtorModal();
+        }
+        else
+        {
+            selectedDebtor = null;
+        }
+    }
+
+    private async Task SaveOrderAsync()
+    {
+        if (editor.Items.Count == 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "অর্ডার সংরক্ষণ করতে অন্তত একটি খাবার বা পণ্য যোগ করুন।" : "Add at least one item to save the canteen order.";
+            return;
+        }
+
+        if (editor.CustomerType == "Credit" && selectedDebtor == null)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "বাকি অর্ডারের জন্য দেনাদার অ্যাকাউন্ট নির্বাচন আবশ্যক।" : "Debtor account is required for credit sales.";
+            OpenDebtorModal();
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            var isNew = editor.ID == 0;
+            if (isNew)
+            {
+                editor.TransDate = DateTime.Now;
+                editor.EnteredBy = userId;
+            }
+            editor.Total = editor.Items.Sum(x => x.Total ?? 0);
+
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            var strategy = strategyDb.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await using var tx = await db.Database.BeginTransactionAsync();
+
+                if (isNew)
+                {
+                    db.CanteenSales.Add(editor);
+                    await db.SaveChangesAsync();
+
+                    // Deduct inventory balance for each sold item
+                    foreach (var itm in editor.Items)
+                    {
+                        if (itm.ServiceID.HasValue)
+                        {
+                            var p = await db.CanteenProducts.FindAsync(itm.ServiceID.Value);
+                            if (p != null)
+                            {
+                                p.Balance = (p.Balance ?? 0) - (itm.Quantity ?? 0);
+                            }
+                        }
+                    }
+
+                    // If Credit sale, update Debtor and Debtor Ledger
+                    if (editor.CustomerType == "Credit" && selectedDebtor != null)
+                    {
+                        var d = await db.CanteenDebtors.FindAsync(selectedDebtor.ID);
+                        if (d != null)
+                        {
+                            d.Balance += NetPayable;
+                            db.CanteenDebtorLedgers.Add(new CanteenDebtorLedger
+                            {
+                                DebtorID = d.ID,
+                                BillNo = editor.ID,
+                                Debit = NetPayable,
+                                Credit = 0,
+                                Balance = d.Balance,
+                                TransDate = DateTime.Now
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    var existing = await db.CanteenSales.Include(x => x.Items).SingleAsync(x => x.ID == editor.ID);
+                    db.CanteenSaleItems.RemoveRange(existing.Items);
+                    db.Entry(existing).CurrentValues.SetValues(editor);
+                    existing.Items = editor.Items.Select(x => new CanteenSaleSub
+                    {
+                        SLNO = x.SLNO,
+                        ServiceID = x.ServiceID,
+                        Rate = x.Rate,
+                        BuyRate = x.BuyRate,
+                        Quantity = x.Quantity,
+                        Total = x.Total
+                    }).ToList();
+                }
+
+                await db.SaveChangesAsync();
+                await tx.CommitAsync();
+            });
+
+            messageClass = "success";
+            message = I18n.IsBangla ? $"ক্যান্টিন অর্ডার #{editor.ID} (টোকেন {editor.TokenNo}) সফলভাবে সম্পন্ন হয়েছে।" : $"Canteen order #{editor.ID} (Token {editor.TokenNo}) completed successfully.";
+
+            // Trigger printing
+            await PrintCurrentOrderAsync();
+
+            Reset();
+            await LoadTodaySalesAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void SelectSale(CanteenSale s)
+    {
+        editor = new CanteenSale
+        {
+            ID = s.ID,
+            CustomerName = s.CustomerName,
+            CustomerType = s.CustomerType,
+            Contact = s.Contact,
+            Total = s.Total,
+            Discount = s.Discount,
+            Paid = s.Paid,
+            TokenNo = s.TokenNo,
+            TransDate = s.TransDate,
+            EnteredBy = s.EnteredBy,
+            Items = s.Items.OrderBy(x => x.SLNO).Select(x => new CanteenSaleSub
+            {
+                ID = x.ID,
+                BillNo = x.BillNo,
+                SLNO = x.SLNO,
+                ServiceID = x.ServiceID,
+                Rate = x.Rate,
+                BuyRate = x.BuyRate,
+                Quantity = x.Quantity,
+                Total = x.Total
+            }).ToList()
+        };
+        message = string.Empty;
+    }
+
+    private async Task DeleteSaleAsync(CanteenSale s)
+    {
+        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে ক্যান্টিন অর্ডার #{s.ID} (টোকেন {s.TokenNo}) বাতিল করবেন?" : $"Cancel and reverse canteen order #{s.ID} (Token {s.TokenNo})?";
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var entity = await db.CanteenSales.Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == s.ID);
+            if (entity != null)
+            {
+                // Restore stock balances
+                foreach (var itm in entity.Items)
+                {
+                    if (itm.ServiceID.HasValue)
+                    {
+                        var p = await db.CanteenProducts.FindAsync(itm.ServiceID.Value);
+                        if (p != null)
+                        {
+                            p.Balance = (p.Balance ?? 0) + (itm.Quantity ?? 0);
+                        }
+                    }
+                }
+
+                db.CanteenSales.Remove(entity);
+                await db.SaveChangesAsync();
+            }
+
+            if (editor.ID == s.ID) Reset();
+            messageClass = "success";
+            message = I18n.IsBangla ? "ক্যান্টিন অর্ডার সফলভাবে বাতিল করা হয়েছে।" : "Canteen order cancelled and reversed.";
+            await LoadTodaySalesAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+    }
+
+    private Task DeleteSelectedOrderAsync() => DeleteSaleAsync(editor);
+
+    private void Reset()
+    {
+        editor = NewSale();
+        selectedProductId = 0;
+        lineRate = 0;
+        lineQty = 1;
+        selectedDebtor = null;
+        GenerateNextToken();
+        message = string.Empty;
+    }
+
+    private static CanteenSale NewSale() => new()
+    {
+        CustomerName = "Walk-in Customer",
+        CustomerType = "Customer",
+        TransDate = DateTime.Now
+    };
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private string ProductName(int? id) => id is null ? "—" : products.FirstOrDefault(p => p.ID == id)?.Name ?? $"Item #{id}";
+
+    // Modals Handlers
+    private void OpenMenuModal()
+    {
+        menuSearchQuery = string.Empty;
+        menuCategoryId = 0;
+        isMenuModalOpen = true;
+    }
+
+    private void CloseMenuModal() => isMenuModalOpen = false;
+
+    private void AddProductFromMenu(CanteenProduct prod)
+    {
+        selectedProductId = prod.ID;
+        lineRate = prod.SaleRate ?? 0;
+        lineQty = 1;
+        AddLineItem();
+        CloseMenuModal();
+    }
+
+    private void OpenDebtorModal()
+    {
+        debtorSearchQuery = string.Empty;
+        isDebtorModalOpen = true;
+    }
+
+    private void CloseDebtorModal() => isDebtorModalOpen = false;
+
+    private void SelectDebtor(CanteenDebtor d)
+    {
+        selectedDebtor = d;
+        editor.CustomerName = d.Name;
+        CloseDebtorModal();
+    }
+
+    private void OpenDiscountModal()
+    {
+        tempDiscount = editor.Discount ?? 0;
+        isDiscountModalOpen = true;
+    }
+
+    private void CloseDiscountModal() => isDiscountModalOpen = false;
+
+    private void HandleTempDiscountInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var val))
+        {
+            tempDiscount = Math.Clamp(val, 0, editor.Total ?? 0);
+        }
+        else
+        {
+            tempDiscount = 0;
+        }
+    }
+
+    private void SetDiscountPercent(decimal pct)
+    {
+        tempDiscount = Math.Round(((editor.Total ?? 0) * pct) / 100m, 2);
+    }
+
+    private void ApplyDiscount()
+    {
+        editor.Discount = Math.Clamp(tempDiscount, 0, editor.Total ?? 0);
+        RecalculateTotals();
+        CloseDiscountModal();
+    }
+
+    private void RemoveDiscount()
+    {
+        tempDiscount = 0;
+        editor.Discount = 0;
+        RecalculateTotals();
+        CloseDiscountModal();
+    }
+
+    private async Task PrintSale(CanteenSale s)
+    {
+        SelectSale(s);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(60);
+        await JS.InvokeVoidAsync("hpm.printElement", "canteen-print", $"Canteen Token {s.TokenNo}");
+    }
+
+    private Task PrintCurrentOrderAsync() => JS.InvokeVoidAsync("hpm.printElement", "canteen-print", $"Canteen Token {editor.TokenNo}").AsTask();
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

@@ -37,12 +37,22 @@
                         </button>
                         @if (isOpen)
                         {
-                            <div class="legacy-menu-dropdown">
+                            <div class="legacy-menu-dropdown @(group.Key == "diagnostics-lab" ? "mega-diagnostic-dropdown" : "")">
                                 @foreach (var item in group.Items.Where(item => CanViewItem(auth.User, item)))
                                 {
                                     @if (item.IsSeparator)
                                     {
                                         <div class="legacy-menu-separator" role="separator"></div>
+                                    }
+                                    else if (item.IsHeader)
+                                    {
+                                        <div class="legacy-menu-section-header">
+                                            @if (!string.IsNullOrWhiteSpace(item.Icon))
+                                            {
+                                                <span class="legacy-menu-header-icon">@item.Icon</span>
+                                            }
+                                            <span>@I18n.T(item.Label)</span>
+                                        </div>
                                     }
                                     else if (item.Children.Count > 0)
                                     {
@@ -74,7 +84,25 @@
                                     }
                                     else
                                     {
-                                        <NavLink class="legacy-menu-entry" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseMenus">@item.Label</NavLink>
+                                        <NavLink class="@(string.IsNullOrWhiteSpace(item.Description) ? "legacy-menu-entry" : "legacy-menu-entry with-desc")" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseMenus">
+                                            <div class="legacy-menu-entry-main">
+                                                @if (!string.IsNullOrWhiteSpace(item.Icon))
+                                                {
+                                                    <span class="legacy-menu-entry-icon">@item.Icon</span>
+                                                }
+                                                <div class="legacy-menu-entry-text">
+                                                    <span class="legacy-menu-entry-label">@I18n.T(item.Label)</span>
+                                                    @if (!string.IsNullOrWhiteSpace(item.Description))
+                                                    {
+                                                        <span class="legacy-menu-entry-sub">@I18n.T(item.Description)</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                            @if (!string.IsNullOrWhiteSpace(item.Badge))
+                                            {
+                                                <span class="legacy-menu-entry-badge">@item.Badge</span>
+                                            }
+                                        </NavLink>
                                     }
                                 }
                             </div>
@@ -109,14 +137,18 @@
             Item("Patient Discharge", "/ipd/medical-discharge-orders", ModuleAccess.IpdMedicalDischarge),
             Item("Billing System General", "/ipd/discharge-billing?mode=general", ModuleAccess.IpdBilling)),
 
-        Group("investigation-pathology", "Investigation & Pathology", ModuleAccess.DiagnosticGroup,
-            Item("OPD Cash Memo", "/diagnostic/billing?patientType=OPD", ModuleAccess.DiagnosticBilling),
-            Item("IPD Cash Memo", "/diagnostic/billing?patientType=IPD", ModuleAccess.DiagnosticBilling),
-            Item("Cash Memo Return", "/diagnostic/cash-memo-return", ModuleAccess.DiagnosticBilling),
+        Group("diagnostics-lab", "Diagnostics & Lab", ModuleAccess.DiagnosticGroup,
+            Header("Billing & Cashier", "💳"),
+            Item("Investigation Billing", "/diagnostic/billing", ModuleAccess.DiagnosticBilling, "🧾", "OPD/IPD", "Patient diagnostic cash memo, token receipt & barcode"),
+            Item("Cash Memo Return & Refund", "/diagnostic/cash-memo-return", ModuleAccess.DiagnosticBilling, "↩️", "Refund", "Cancel test items & refund cash or adjust IPD ledger"),
             Separator(),
-            Item("Lab Worklist", "/diagnostic/worklist", ModuleAccess.DiagnosticWorklist),
-            Item("Results & Report", "/diagnostic/results", ModuleAccess.DiagnosticResults),
-            Item("Diagnostic Masters", "/diagnostic/masters", ModuleAccess.AdministratorOnly)),
+            Header("Laboratory & Reporting", "🔬"),
+            Item("Specimen & Lab Worklist", "/diagnostic/worklist", ModuleAccess.DiagnosticWorklist, "🧪", "Samples", "Sample collection, tube barcode tracking & test status"),
+            Item("Test Results & Report Entry", "/diagnostic/results", ModuleAccess.DiagnosticResults, "📋", "Reports", "Parameter findings, normal ranges & official print"),
+            Item("Doctor Test Orders", "/clinical/doctor-queue", ModuleAccess.DoctorQueue, "⚡", "Orders", "Pending diagnostic orders requested during consultation"),
+            Separator(),
+            Header("Configuration", "⚙️"),
+            Item("Diagnostic Masters", "/diagnostic/masters", ModuleAccess.AdministratorOnly, "🗂️", "Setup", "Lab test parameter templates & reference ranges")),
 
         Group("reports", "Reports", ModuleAccess.Reports,
             Item("Financial Reports", "/reports?type=financial", ModuleAccess.Reports),
@@ -141,7 +173,7 @@
     protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
     private void ToggleMenu(string key) { openMenu = openMenu == key ? null : key; openSubmenu = null; }
     private void ToggleSubmenu(string key) => openSubmenu = openSubmenu == key ? null : key;
-        private void CloseMenus() { openMenu = null; openSubmenu = null; }
+    private void CloseMenus() { openMenu = null; openSubmenu = null; }
 
     private bool IsGroupActive(MenuGroup group)
     {
@@ -177,11 +209,12 @@
     private static bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, MenuGroup group) =>
         ModuleAccess.CanView(user, group.Roles) && (group.Items.Count == 0 || group.Items.Any(item => CanViewItem(user, item)));
     private static bool CanViewItem(System.Security.Claims.ClaimsPrincipal user, MenuItem item) =>
-        ModuleAccess.CanView(user, item.Roles) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child)));
+        item.IsSeparator || item.IsHeader || (ModuleAccess.CanView(user, item.Roles) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child))));
     private static MenuGroup Group(string key, string label, params MenuItem[] items) => new(key, label, string.Empty, [], items);
     private static MenuGroup Group(string key, string label, string[] roles, params MenuItem[] items) => new(key, label, string.Empty, roles, items);
     private static MenuGroup Link(string key, string label, string href, string[] roles) => new(key, label, href, roles, []);
-    private static MenuItem Item(string label, string href, string[] roles) => new(Key(label), label, href, roles, [], false, false);
+    private static MenuItem Header(string label, string? icon = null) => new(Key(label), label, string.Empty, [], [], false, false, true, icon, null, null);
+    private static MenuItem Item(string label, string href, string[] roles, string? icon = null, string? badge = null, string? desc = null) => new(Key(label), label, href, roles, [], false, false, false, icon, badge, desc);
     private static MenuItem Logout(string label) => new(Key(label), label, string.Empty, [], [], false, true);
     private static MenuItem Separator() => new(Guid.NewGuid().ToString("N"), string.Empty, string.Empty, [], [], true, false);
     private static MenuItem Parent(string key, string label, params MenuItem[] children) => new(key, label, string.Empty, [], children, false, false);
@@ -189,5 +222,5 @@
     private static string Key(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("&", "and").Replace("'", string.Empty);
     public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
     private sealed record MenuGroup(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Items);
-    private sealed record MenuItem(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Children, bool IsSeparator, bool IsLogout);
+    private sealed record MenuItem(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Children, bool IsSeparator, bool IsLogout, bool IsHeader = false, string? Icon = null, string? Badge = null, string? Description = null);
 }

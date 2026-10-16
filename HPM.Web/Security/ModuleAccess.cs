@@ -25,6 +25,7 @@ public static class ModuleAccess
     public static readonly string[] PharmacyReturns = [RoleNames.Administrator, RoleNames.PharmacyOperator, RoleNames.Cashier];
     public static readonly string[] PharmacyPrescriptions = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.PharmacyOperator];
     public static readonly string[] PharmacyStock = [RoleNames.Administrator, RoleNames.PharmacyOperator];
+    public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.Cashier];
     public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
     public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Cashier];
     public static readonly string[] PatientDocuments =
@@ -44,7 +45,8 @@ public static class ModuleAccess
 
     public static IReadOnlyList<string> LegacyModuleRoles(string? module) => module switch
     {
-        "Canteen" or "Store" or "Payroll & HRM" => AdministratorOnly,
+        "Canteen" => Canteen,
+        "Store" or "Payroll & HRM" => AdministratorOnly,
         "IPD Services" => IpdOccupancy,
         "Medical Services" => OtCashMemos,
         "Nurse's Desk" or "Certificates & Others" => DoctorQueue,

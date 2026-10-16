@@ -289,6 +289,98 @@ public sealed class HospitalSetupService(
 
     private static string Errors(IdentityResult result) =>
         string.Join(" ", result.Errors.Select(x => x.Description));
+
+    public string GetAvatarInitials()
+    {
+        var name = HospitalName?.Trim();
+        if (string.IsNullOrWhiteSpace(name) || name.Equals("Hospital", StringComparison.OrdinalIgnoreCase))
+            return "H+";
+
+        var words = name.Split([' ', '-', ',', '.', '&'], StringSplitOptions.RemoveEmptyEntries)
+                        .Where(w => !w.Equals("and", StringComparison.OrdinalIgnoreCase) &&
+                                    !w.Equals("of", StringComparison.OrdinalIgnoreCase) &&
+                                    !w.Equals("the", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+
+        if (words.Length == 0)
+            return "H+";
+
+        if (words.Length == 1)
+        {
+            var word = words[0];
+            return word.Length <= 2 ? word.ToUpperInvariant() : word[..2].ToUpperInvariant();
+        }
+
+        return $"{char.ToUpperInvariant(words[0][0])}{char.ToUpperInvariant(words[1][0])}";
+    }
+
+    public string GetFaviconHref()
+    {
+        if (!string.IsNullOrWhiteSpace(LogoData))
+        {
+            return LogoData;
+        }
+
+        return BuildAvatarSvgDataUri(GetAvatarInitials());
+    }
+
+    public static string BuildAvatarSvgDataUri(string initials)
+    {
+        var svg = BuildAvatarSvg(initials);
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+        return $"data:image/svg+xml;base64,{base64}";
+    }
+
+    public static string BuildAvatarSvg(string initials)
+    {
+        var cleanInitials = System.Security.SecurityElement.Escape(string.IsNullOrWhiteSpace(initials) ? "H+" : initials);
+        var fontSize = cleanInitials.Length > 2 ? "20" : "24";
+        return $"""
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+              <defs>
+                <linearGradient id="hpmFavGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#0284c7" />
+                  <stop offset="100%" stop-color="#0f172a" />
+                </linearGradient>
+              </defs>
+              <rect width="64" height="64" rx="16" fill="url(#hpmFavGrad)" />
+              <rect x="2" y="2" width="60" height="60" rx="14" fill="none" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.5" />
+              <circle cx="50" cy="14" r="5" fill="#10b981" />
+              <text x="32" y="38" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="{fontSize}" font-weight="800" fill="#ffffff" text-anchor="middle" dominant-baseline="central">{cleanInitials}</text>
+            </svg>
+            """;
+    }
+
+    public (byte[] Bytes, string ContentType) GetFaviconBytes()
+    {
+        if (!string.IsNullOrWhiteSpace(LogoData) && LogoData.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var commaIdx = LogoData.IndexOf(',');
+                if (commaIdx > 5)
+                {
+                    var header = LogoData[..commaIdx];
+                    var base64 = LogoData[(commaIdx + 1)..];
+                    var mime = "image/png";
+                    var semiIdx = header.IndexOf(';');
+                    if (semiIdx > 5)
+                    {
+                        mime = header[5..semiIdx];
+                    }
+                    var bytes = Convert.FromBase64String(base64);
+                    return (bytes, mime);
+                }
+            }
+            catch
+            {
+                // Fallback to SVG on parse failure
+            }
+        }
+
+        var svg = BuildAvatarSvg(GetAvatarInitials());
+        return (System.Text.Encoding.UTF8.GetBytes(svg), "image/svg+xml");
+    }
 }
 
 public sealed record HospitalSetupResult(bool Succeeded, string Error)

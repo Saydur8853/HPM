@@ -91,6 +91,16 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<LabTestResult> LabTestResults => Set<LabTestResult>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<HospitalProfile> HospitalProfiles => Set<HospitalProfile>();
+    public DbSet<CanteenCategory> CanteenCategories => Set<CanteenCategory>();
+    public DbSet<CanteenProduct> CanteenProducts => Set<CanteenProduct>();
+    public DbSet<CanteenSale> CanteenSales => Set<CanteenSale>();
+    public DbSet<CanteenSaleSub> CanteenSaleItems => Set<CanteenSaleSub>();
+    public DbSet<CanteenChallan> CanteenChallans => Set<CanteenChallan>();
+    public DbSet<CanteenChallanSub> CanteenChallanItems => Set<CanteenChallanSub>();
+    public DbSet<CanteenDebtor> CanteenDebtors => Set<CanteenDebtor>();
+    public DbSet<CanteenDebtorLedger> CanteenDebtorLedgers => Set<CanteenDebtorLedger>();
+    public DbSet<PathologyGroupHead> PathologyGroupHeads => Set<PathologyGroupHead>();
+    public DbSet<LabConsultant> LabConsultants => Set<LabConsultant>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -111,6 +121,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureAudit(modelBuilder);
         ConfigureLegacyMigration(modelBuilder);
         ConfigureHospitalProfile(modelBuilder);
+        ConfigureCanteen(modelBuilder);
     }
 
     private static void ConfigureAppUser(ModelBuilder b)
@@ -325,6 +336,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.DateOfBirth).HasColumnName("Date_Of_Birth").HasColumnType("datetime");
         e.Property(x => x.Sex).HasMaxLength(10);
         e.Property(x => x.BloodGroup).HasColumnName("Blood_Group").HasMaxLength(10);
+        e.Property(x => x.Weight).HasColumnName("Weight").HasMaxLength(20);
+        e.Property(x => x.PhotoData).HasColumnName("Photo_Data");
         e.Property(x => x.FatherName).HasColumnName("Father_Name").HasMaxLength(100);
         e.Property(x => x.MotherName).HasColumnName("Mother_Name").HasMaxLength(100);
         e.Property(x => x.CareOf).HasColumnName("Care_Of").HasMaxLength(50);
@@ -394,6 +407,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.ApptDate).HasColumnName("Appt_Date").HasColumnType("date");
         e.Property(x => x.Name).HasMaxLength(100);
         e.Property(x => x.Age).HasMaxLength(50);
+        e.Property(x => x.Weight).HasColumnName("Weight").HasMaxLength(20);
         e.Property(x => x.ContactNo).HasColumnName("Contact_No").HasMaxLength(20);
         e.Property(x => x.PatientID).HasColumnName("Patient_ID").HasMaxLength(11);
         e.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Booked");
@@ -1074,6 +1088,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         prescriptionMedicine.Property(x => x.ServiceID).HasColumnName("Service_ID");
         prescriptionMedicine.Property(x => x.Interval).HasColumnType("decimal(18,2)");
         prescriptionMedicine.Property(x => x.Dose).HasColumnType("decimal(18,2)");
+        prescriptionMedicine.Property(x => x.DosagePattern).HasColumnName("DosagePattern").HasMaxLength(50);
+        prescriptionMedicine.Property(x => x.Instruction).HasColumnName("Instruction").HasMaxLength(100);
         prescriptionMedicine.HasOne(x => x.Prescription).WithMany(x => x.Medicines).HasForeignKey(x => x.PrescriptionID).OnDelete(DeleteBehavior.Cascade);
         prescriptionMedicine.HasOne<Service>().WithMany().HasForeignKey(x => x.ServiceID).OnDelete(DeleteBehavior.Restrict);
         prescriptionMedicine.HasIndex(x => new { x.PrescriptionID, x.SLNO }).IsUnique();
@@ -1339,5 +1355,96 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         result.Property(x => x.ReportedBy).HasColumnName("Reported_By");
         result.Property(x => x.IsVerified).HasColumnName("Is_Verified");
         result.HasIndex(x => new { x.MemoID, x.ServiceID });
+    }
+
+    private static void ConfigureCanteen(ModelBuilder b)
+    {
+        var category = b.Entity<CanteenCategory>();
+        category.ToTable("Canteen_Category");
+        category.HasKey(x => x.ID);
+        category.Property(x => x.Name).HasMaxLength(50);
+
+        var product = b.Entity<CanteenProduct>();
+        product.ToTable("Canteen_Products");
+        product.HasKey(x => x.ID);
+        product.Property(x => x.Name).HasMaxLength(100);
+        product.Property(x => x.CategoryID).HasColumnName("Category_ID");
+        product.Property(x => x.SaleRate).HasColumnName("Sale_Rate").HasColumnType("decimal(18,2)");
+        product.Property(x => x.BuyRate).HasColumnName("Buy_Rate").HasColumnType("decimal(18,2)");
+        product.Property(x => x.Balance).HasColumnType("decimal(18,2)");
+        product.Property(x => x.ReorderLevel).HasColumnName("Reorder_Level");
+        product.Property(x => x.Unit).HasMaxLength(50);
+        product.Property(x => x.IsKitchenItem).HasColumnName("IsKitchen_Item");
+        product.HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryID).OnDelete(DeleteBehavior.Restrict);
+
+        var sale = b.Entity<CanteenSale>();
+        sale.ToTable("Canteen_Sales");
+        sale.HasKey(x => x.ID);
+        sale.Property(x => x.CustomerName).HasColumnName("Customer_Name").HasMaxLength(50);
+        sale.Property(x => x.Contact).HasMaxLength(20);
+        sale.Property(x => x.CustomerType).HasColumnName("Customer_Type").HasMaxLength(10);
+        sale.Property(x => x.Total).HasColumnType("numeric(18,2)");
+        sale.Property(x => x.ServiceCharge).HasColumnName("Service_Charge").HasColumnType("numeric(18,2)");
+        sale.Property(x => x.Discount).HasColumnType("numeric(18,2)");
+        sale.Property(x => x.Paid).HasColumnType("numeric(18,2)");
+        sale.Property(x => x.TokenNo).HasColumnName("Token_No").HasMaxLength(5);
+        sale.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        sale.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        sale.Property(x => x.VAT).HasColumnType("numeric(18,2)");
+        sale.HasMany(x => x.Items).WithOne(x => x.Sale).HasForeignKey(x => x.BillNo).OnDelete(DeleteBehavior.Cascade);
+
+        var saleSub = b.Entity<CanteenSaleSub>();
+        saleSub.ToTable("Canteen_Sales_Sub");
+        saleSub.HasKey(x => x.ID);
+        saleSub.Property(x => x.BillNo).HasColumnName("Bill_No");
+        saleSub.Property(x => x.ServiceID).HasColumnName("Service_ID");
+        saleSub.Property(x => x.Rate).HasColumnType("decimal(18,2)");
+        saleSub.Property(x => x.BuyRate).HasColumnName("Buy_Rate").HasColumnType("decimal(18,2)");
+        saleSub.Property(x => x.Quantity).HasColumnType("decimal(18,2)");
+        saleSub.Property(x => x.Total).HasColumnType("decimal(18,2)");
+        saleSub.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ServiceID).OnDelete(DeleteBehavior.Restrict);
+
+        var challan = b.Entity<CanteenChallan>();
+        challan.ToTable("Canteen_Challan");
+        challan.HasKey(x => x.ID);
+        challan.Property(x => x.InvoiceNo).HasColumnName("Invoice_No").HasMaxLength(20);
+        challan.Property(x => x.InvoiceDate).HasColumnName("Invoice_Date").HasColumnType("datetime");
+        challan.Property(x => x.IsPosted).HasColumnName("Is_Posted");
+        challan.Property(x => x.Total).HasColumnType("numeric(18,2)");
+        challan.Property(x => x.Discount).HasColumnType("numeric(18,2)");
+        challan.Property(x => x.VAT).HasColumnType("numeric(18,2)");
+        challan.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        challan.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        challan.HasMany(x => x.Items).WithOne(x => x.Challan).HasForeignKey(x => x.ChallanNo).OnDelete(DeleteBehavior.Cascade);
+
+        var challanSub = b.Entity<CanteenChallanSub>();
+        challanSub.ToTable("Canteen_Challan_Sub");
+        challanSub.HasKey(x => x.ID);
+        challanSub.Property(x => x.ChallanNo).HasColumnName("Challan_No");
+        challanSub.Property(x => x.ServiceID).HasColumnName("Service_ID");
+        challanSub.Property(x => x.Total).HasColumnType("numeric(18,2)");
+        challanSub.Property(x => x.BuyRate).HasColumnName("Buy_Rate").HasColumnType("numeric(18,2)");
+        challanSub.Property(x => x.Quantity).HasColumnType("numeric(18,2)");
+        challanSub.Property(x => x.Discount).HasColumnType("numeric(18,2)");
+        challanSub.Property(x => x.VAT).HasColumnType("numeric(18,2)");
+        challanSub.HasOne(x => x.Product).WithMany().HasForeignKey(x => x.ServiceID).OnDelete(DeleteBehavior.Restrict);
+
+        var debtor = b.Entity<CanteenDebtor>();
+        debtor.ToTable("Canteen_Debtor");
+        debtor.HasKey(x => x.ID);
+        debtor.Property(x => x.Name).HasMaxLength(50);
+        debtor.Property(x => x.Designation).HasMaxLength(50);
+        debtor.Property(x => x.Balance).HasColumnType("decimal(18,2)");
+
+        var debtorLedger = b.Entity<CanteenDebtorLedger>();
+        debtorLedger.ToTable("Canteen_Debtor_Ledger");
+        debtorLedger.HasKey(x => x.ID);
+        debtorLedger.Property(x => x.DebtorID).HasColumnName("Debtor_ID");
+        debtorLedger.Property(x => x.BillNo).HasColumnName("Bill_No");
+        debtorLedger.Property(x => x.Debit).HasColumnType("decimal(18,2)");
+        debtorLedger.Property(x => x.Credit).HasColumnType("decimal(18,2)");
+        debtorLedger.Property(x => x.Balance).HasColumnType("decimal(18,2)");
+        debtorLedger.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        debtorLedger.HasOne(x => x.Debtor).WithMany().HasForeignKey(x => x.DebtorID).OnDelete(DeleteBehavior.Restrict);
     }
 }

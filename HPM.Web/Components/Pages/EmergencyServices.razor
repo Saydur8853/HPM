@@ -9,6 +9,7 @@
 @implements IDisposable
 @using System.Security.Claims
 @using HPM.Web.Components.Common
+@using HPM.Web.Services
 
 <PageTitle>@I18n.T("Emergency Services") | @Branding.HospitalName</PageTitle>
 
@@ -106,16 +107,30 @@
                                 <option value="Other">@I18n.T("Other")</option>
                             </InputSelect>
                         </label>
-                        <label>
-                            <span>@I18n.T("Attending / Ref. Doctor")</span>
-                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.DoctorID">
-                                <option value="">@I18n.T("Walk-in / None")</option>
-                                @foreach (var doctor in doctors)
-                                {
-                                    <option value="@doctor.ID">@DoctorLabel(doctor)</option>
-                                }
-                            </InputSelect>
-                        </label>
+                        <div class="billing-doc-col">
+                            <span class="classic-field-title">@I18n.T("Attending / Ref. Doctor")</span>
+                            @if (SelectedDoctor != null)
+                            {
+                                <div class="emergency-selected-doctor-badge">
+                                    <span class="doc-icon">👨‍⚕️</span>
+                                    <div class="doc-meta" title="@DoctorLabel(SelectedDoctor)">
+                                        <strong>@DoctorNameFormatter.FormatFullName(SelectedDoctor.Title, SelectedDoctor.Name)</strong>
+                                        <small>@SelectedDoctor.Degree</small>
+                                    </div>
+                                    <div class="doc-actions">
+                                        <button type="button" class="btn-doc-edit" @onclick="OpenDoctorModal" title="@I18n.T("Change Doctor")">✏️</button>
+                                        <button type="button" class="btn-doc-clear" @onclick="ClearDoctor" title="@I18n.T("Remove Doctor")">✕</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn-emergency-doc-trigger" @onclick="OpenDoctorModal">
+                                    <span class="doc-trigger-text">🩺 @I18n.T("Select Doctor / Walk-in")</span>
+                                    <span class="btn-pill-action">🔍 @I18n.T("Browse")</span>
+                                </button>
+                            }
+                        </div>
                     </div>
 
                     <!-- Line Editor Section -->
@@ -139,15 +154,20 @@
                                 }
                             </select>
                         </label>
-                        <label>
+                        <label style="width: 80px;">
                             <span>@I18n.T("Rate")</span>
                             <InputNumber class="classic-input bold-number" @bind-Value="lineRate" />
                         </label>
-                        <label>
+                        <label style="width: 52px;">
                             <span>@I18n.T("Qty")</span>
                             <InputNumber class="classic-input" @bind-Value="lineQuantity" />
                         </label>
-                        <button class="btn btn-dark tickets-btn" type="button" @onclick="AddLine">+ @I18n.T("Add")</button>
+                        <div class="billing-line-btn-group">
+                            <button class="btn btn-dark tickets-btn btn-add-line" type="button" @onclick="AddLine">+ @I18n.T("Add")</button>
+                            <button class="btn btn-secondary tickets-btn btn-browse-catalog" type="button" @onclick="OpenServiceModal" title="@I18n.T("Browse full catalog in popup modal")">
+                                🔍 @I18n.T("Catalog")
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Line Table -->
@@ -163,7 +183,7 @@
                         <div class="billing-line-rows">
                             @if (editor.Items.Count == 0)
                             {
-                                <div class="tickets-queue-empty" style="padding: 1.25rem 1rem;">
+                                <div class="tickets-queue-empty" style="padding: 1rem;">
                                     <span>@I18n.T("Add at least one emergency service to this memo.")</span>
                                 </div>
                             }
@@ -180,37 +200,55 @@
                             }
                         </div>
                     </div>
+                </div>
 
-                    <!-- Remarks & Totals Summary -->
-                    <div class="billing-bottom-summary">
-                        <label class="billing-remarks-box">
-                            <span>@I18n.T("Clinical Remarks / Instructions")</span>
-                            <InputTextArea class="classic-input" @bind-Value="editor.Remarks" placeholder="@I18n.T("Optional remarks...")" />
-                        </label>
-                        <div class="billing-totals-compact">
-                            <div>
-                                <span>@I18n.T("Gross Subtotal")</span>
-                                <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                <!-- Remarks & Totals Summary Panel (Permanently Anchored Above Footer) -->
+                <div class="emergency-bottom-panel">
+                    <!-- Left: Clinical Remarks Pop-up Modal Trigger -->
+                    <div class="emg-bottom-helpers">
+                        @if (string.IsNullOrWhiteSpace(editor.Remarks))
+                        {
+                            <button type="button" class="btn-emg-remarks-trigger" @onclick="OpenRemarksModal" title="@I18n.T("Add Clinical Remarks / Instructions")">
+                                <span class="remarks-icon">📝</span>
+                                <span class="remarks-text">@I18n.T("Add Remarks / Instructions")</span>
+                                <span class="remarks-badge">+ @I18n.T("Add")</span>
+                            </button>
+                        }
+                        else
+                        {
+                            <div class="emg-remarks-chip" @onclick="OpenRemarksModal" title="@editor.Remarks">
+                                <span class="remarks-icon">📝</span>
+                                <div class="remarks-chip-content">
+                                    <strong class="remarks-chip-label">@I18n.T("Remarks"):</strong>
+                                    <span class="remarks-chip-text">@editor.Remarks</span>
+                                </div>
+                                <button type="button" class="remarks-edit-btn" title="@I18n.T("Edit Remarks")">✏️</button>
                             </div>
-                            <label>
-                                <span>@I18n.T("Discount")</span>
-                                <InputNumber class="classic-input" @bind-Value="editor.Discount" @bind-Value:after="RecalculatePayable" />
-                            </label>
-                            @if (editor.Discount > 0)
-                            {
-                                <label>
-                                    <span>@I18n.T("Authorized By")</span>
-                                    <InputText class="classic-input" @bind-Value="editor.DiscountBy" placeholder="@I18n.T("Authorizer name")" />
-                                </label>
-                            }
-                            <label>
-                                <span>@I18n.T("Paid Amount")</span>
-                                <InputNumber class="classic-input" @bind-Value="editor.Paid" @bind-Value:after="PaidChanged" />
-                            </label>
-                            <div class="grand-due">
-                                <span>@I18n.T("Net Due")</span>
-                                <strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount - editor.Paid)))</strong>
+                        }
+                    </div>
+
+                    <!-- Right: Streamlined Totals Strip -->
+                    <div class="emg-totals-strip">
+                        <div class="emg-stat">
+                            <span class="stat-lbl">@I18n.T("Gross")</span>
+                            <span class="stat-val gross-val">@(I18n.FormatCurrency(editor.Total))</span>
+                        </div>
+                        <div class="emg-stat discount-stat" @onclick="OpenDiscountModal" title="@I18n.T("Click to set or modify discount in modal")">
+                            <div class="stat-lbl-row">
+                                <span class="stat-lbl">@I18n.T("Discount")</span>
+                                <span class="stat-edit-icon">✏️</span>
                             </div>
+                            <span class="stat-val @(editor.Discount > 0 ? "has-discount" : "")">
+                                @(editor.Discount > 0 ? $"-{I18n.FormatCurrency(editor.Discount)}" : "৳ 0")
+                            </span>
+                        </div>
+                        <div class="emg-stat paid-stat">
+                            <span class="stat-lbl">@I18n.T("Paid")</span>
+                            <InputNumber class="classic-input emg-paid-input" @bind-Value="editor.Paid" @bind-Value:after="PaidChanged" />
+                        </div>
+                        <div class="emg-stat due-stat">
+                            <span class="stat-lbl">@I18n.T("Net Due")</span>
+                            <span class="stat-val due-amount">@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount - editor.Paid)))</span>
                         </div>
                     </div>
                 </div>
@@ -310,6 +348,320 @@
     </div>
 </div>
 
+<!-- 1. Attending / Ref. Doctor Selection Modal -->
+@if (isDoctorModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDoctorModal">
+        <div class="doctor-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon">🩺</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Select Attending / Ref. Doctor")</h3>
+                        <small>@I18n.T("Search doctor by name, degree, department, or room")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDoctorModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="doctorSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search doctor by name, degree, room...")" />
+                    @if (!string.IsNullOrWhiteSpace(doctorSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => doctorSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+            <div class="doctor-modal-list">
+                <!-- Option for Walk-in / None -->
+                <div class="doctor-modal-item @(editor.DoctorID == null ? "active-selected" : "")"
+                     @onclick="() => SelectDoctor(null)">
+                    <div class="doctor-modal-item-left">
+                        <div class="doc-modal-avatar" style="background:#e2e8f0; color:#475569;">🚶</div>
+                        <div class="doc-modal-info">
+                            <span class="doc-modal-name">@I18n.T("Walk-in / None")</span>
+                            <span class="doc-modal-meta">
+                                <span>@I18n.T("No specific attending doctor assigned")</span>
+                            </span>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-modal-choose">
+                        @(editor.DoctorID == null ? "✓ " + I18n.T("Selected") : I18n.T("Select"))
+                    </button>
+                </div>
+
+                @if (!FilteredDoctors.Any())
+                {
+                    <div class="doc-modal-empty">@I18n.T("No doctor found matching your search.")</div>
+                }
+                else
+                {
+                    @foreach (var doc in FilteredDoctors.Take(60))
+                    {
+                        var fullName = DoctorNameFormatter.FormatFullName(doc.Title, doc.Name);
+                        <div class="doctor-modal-item @(editor.DoctorID == doc.ID ? "active-selected" : "")"
+                             @onclick="() => SelectDoctor(doc)">
+                            <div class="doctor-modal-item-left">
+                                <div class="doc-modal-avatar">👨‍⚕️</div>
+                                <div class="doc-modal-info">
+                                    <span class="doc-modal-name">@fullName</span>
+                                    <span class="doc-modal-meta">
+                                        <span>@doc.Degree</span>
+                                        @if (!string.IsNullOrWhiteSpace(doc.Room))
+                                        {
+                                            <span class="doc-modal-dept-badge" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">Room @doc.Room</span>
+                                        }
+                                    </span>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-modal-choose">
+                                @(editor.DoctorID == doc.ID ? "✓ " + I18n.T("Selected") : I18n.T("Select"))
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@FilteredDoctors.Count() @I18n.T("doctors found")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseDoctorModal">@I18n.T("Cancel")</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 2. Clinical Remarks & Instructions Modal -->
+@if (isRemarksModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseRemarksModal">
+        <div class="doctor-modal-dialog remarks-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);">📝</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Clinical Remarks & Instructions")</h3>
+                        <small>@I18n.T("Add optional clinical findings, instructions, or notes for memo")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseRemarksModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="remarks-modal-body">
+                <div class="remarks-quick-chips">
+                    <span class="quick-chip-title">@I18n.T("Quick Presets"):</span>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Emergency First Aid Given")'>+ First Aid Given</button>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Wound Dressing & Suturing Done")'>+ Wound Dressing</button>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Patient Stabilized & Discharged")'>+ Stabilized & Discharged</button>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Under Observation in Emergency")'>+ Under Observation</button>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Transferred to Ward / ICU")'>+ Transferred to Ward</button>
+                    <button type="button" class="quick-chip" @onclick='() => AppendRemark("Advised Rest & Follow-up")'>+ Advised Follow-up</button>
+                </div>
+                <div class="remarks-textarea-wrap">
+                    <textarea class="classic-input remarks-modal-textarea"
+                              maxlength="200"
+                              rows="4"
+                              placeholder="@I18n.T("Enter clinical notes, instructions, procedure details (max 200 chars)...")"
+                              @bind="tempRemarks"
+                              @bind:event="oninput"></textarea>
+                    <div class="remarks-char-counter">
+                        <span>@((tempRemarks?.Length ?? 0)) / 200</span>
+                    </div>
+                </div>
+            </div>
+            <div class="doctor-modal-footer">
+                <button type="button" class="btn btn-ghost tickets-btn" @onclick="ClearRemarks" style="color: #dc2626;">@I18n.T("Clear Remarks")</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn-modal-cancel" @onclick="CloseRemarksModal">@I18n.T("Cancel")</button>
+                    <button type="button" class="btn btn-primary tickets-btn" @onclick="SaveRemarks">@I18n.T("Save Remarks")</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 3. Discount & Authorization Modal -->
+@if (isDiscountModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDiscountModal">
+        <div class="doctor-modal-dialog discount-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">🏷️</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Discount & Authorization")</h3>
+                        <small>@I18n.T("Apply concession or discount to gross subtotal")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDiscountModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="discount-modal-body">
+                <div class="discount-summary-banner">
+                    <div class="summary-stat">
+                        <span>@I18n.T("Gross Subtotal")</span>
+                        <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Discount")</span>
+                        <strong style="color:#059669;">-@(I18n.FormatCurrency(tempDiscount))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Net Payable")</span>
+                        <strong style="color:#0284c7;">@(I18n.FormatCurrency(Math.Max(0, editor.Total - tempDiscount)))</strong>
+                    </div>
+                </div>
+
+                <div class="discount-quick-chips">
+                    <span class="quick-chip-title">@I18n.T("Quick Percentages"):</span>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(0)">0%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(5)">5%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(10)">10%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(15)">15%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(20)">20%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(50)">50%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(100)">100% (Free)</button>
+                </div>
+
+                <div class="discount-form-fields">
+                    <label>
+                        <span>@I18n.T("Discount Amount (৳)")</span>
+                        <input type="number"
+                               step="0.01"
+                               min="0"
+                               max="@editor.Total"
+                               class="classic-input bold-number"
+                               value="@tempDiscount"
+                               @oninput="HandleTempDiscountInput" />
+                    </label>
+
+                    <label>
+                        <span>
+                            @I18n.T("Authorized By")
+                            @if (tempDiscount > 0)
+                            {
+                                <span class="req">*</span>
+                            }
+                        </span>
+                        <input type="text"
+                               class="classic-input"
+                               maxlength="50"
+                               placeholder="@I18n.T("Name / Title of authorizing authority")"
+                               @bind="tempDiscountBy"
+                               @bind:event="oninput" />
+                    </label>
+                </div>
+
+                @if (tempDiscount > 0)
+                {
+                    <div class="authorizer-quick-chips">
+                        <span class="quick-chip-title">@I18n.T("Quick Authorizer"):</span>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Duty Doctor"'>Duty Doctor</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "RMO"'>RMO</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Hospital Director"'>Director</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Admin Office"'>Admin Office</button>
+                    </div>
+                }
+
+                @if (tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))
+                {
+                    <div class="discount-warning-note">
+                        ⚠️ @I18n.T("Authorization name is required when discount is greater than 0.")
+                    </div>
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <button type="button" class="btn btn-ghost tickets-btn" @onclick="RemoveDiscount" style="color: #dc2626;">@I18n.T("Remove Discount")</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn-modal-cancel" @onclick="CloseDiscountModal">@I18n.T("Cancel")</button>
+                    <button type="button" class="btn btn-primary tickets-btn" @onclick="ApplyDiscount" disabled="@(tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))">
+                        @I18n.T("Apply Discount")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 4. Emergency Services & Procedures Catalog Modal -->
+@if (isServiceModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseServiceModal">
+        <div class="doctor-modal-dialog service-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);">⚡</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Emergency Services & Procedures Catalog")</h3>
+                        <small>@I18n.T("Quick search and add services to cash memo")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseServiceModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="serviceSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search service name, procedure, or test...")" />
+                    @if (!string.IsNullOrWhiteSpace(serviceSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => serviceSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+            <!-- Category Filter Chips -->
+            <div class="service-category-chips">
+                <button type="button" class="service-cat-chip @(catalogCategoryId == 0 ? "active" : "")" @onclick="() => catalogCategoryId = 0">
+                    @I18n.T("All Categories")
+                </button>
+                @foreach (var cat in categories)
+                {
+                    <button type="button" class="service-cat-chip @(catalogCategoryId == cat.ID ? "active" : "")" @onclick="() => catalogCategoryId = cat.ID">
+                        @cat.Name
+                    </button>
+                }
+            </div>
+            <div class="doctor-modal-list service-modal-list">
+                @if (!CatalogFilteredServices.Any())
+                {
+                    <div class="doc-modal-empty">@I18n.T("No emergency service matches your search.")</div>
+                }
+                else
+                {
+                    @foreach (var s in CatalogFilteredServices.Take(100))
+                    {
+                        var catName = categories.FirstOrDefault(c => c.ID == s.CategoryID)?.Name ?? "Emergency";
+                        <div class="service-catalog-item">
+                            <div class="service-catalog-info">
+                                <span class="service-catalog-name">@s.Name</span>
+                                <div class="service-catalog-meta">
+                                    <span class="service-cat-badge">@catName</span>
+                                    <span class="service-rate-badge">@(I18n.FormatCurrency(s.SaleRate ?? 0))</span>
+                                </div>
+                            </div>
+                            <div class="service-catalog-action">
+                                <button type="button" class="btn btn-secondary tickets-btn" @onclick="() => SelectServiceFromCatalog(s)">
+                                    + @I18n.T("Add to Memo")
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@CatalogFilteredServices.Count() @I18n.T("services available")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseServiceModal">@I18n.T("Close")</button>
+            </div>
+        </div>
+    </div>
+}
+
 <div id="emergency-print" class="print-document">
     <div class="print-sheet">
         <PrintDocumentHeader Title="Emergency Service Cash Memo"
@@ -388,6 +740,137 @@
     private List<Registration> patientIdSuggestions = [];
     private IEnumerable<Service> FilteredServices => services.Where(x => x.CategoryID == selectedCategoryId);
 
+    // Modal States & Helpers
+    // 1. Doctor Modal
+    private bool isDoctorModalOpen = false;
+    private string doctorSearchQuery = string.Empty;
+    private DoctorsProfile? SelectedDoctor => editor.DoctorID.HasValue ? doctors.FirstOrDefault(x => x.ID == editor.DoctorID.Value) : null;
+    private IEnumerable<DoctorsProfile> FilteredDoctors => string.IsNullOrWhiteSpace(doctorSearchQuery)
+        ? doctors
+        : doctors.Where(d => (d.Name?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (d.Degree?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (d.Room?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private void OpenDoctorModal()
+    {
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = true;
+    }
+    private void CloseDoctorModal() => isDoctorModalOpen = false;
+    private void SelectDoctor(DoctorsProfile? doc)
+    {
+        editor.DoctorID = doc?.ID;
+        isDoctorModalOpen = false;
+    }
+    private void ClearDoctor() => editor.DoctorID = null;
+
+    // 2. Remarks Modal
+    private bool isRemarksModalOpen = false;
+    private string tempRemarks = string.Empty;
+    private void OpenRemarksModal()
+    {
+        tempRemarks = editor.Remarks ?? string.Empty;
+        isRemarksModalOpen = true;
+    }
+    private void CloseRemarksModal() => isRemarksModalOpen = false;
+    private void AppendRemark(string phrase)
+    {
+        if (string.IsNullOrWhiteSpace(tempRemarks))
+        {
+            tempRemarks = phrase;
+        }
+        else if (!tempRemarks.Contains(phrase, StringComparison.OrdinalIgnoreCase))
+        {
+            tempRemarks = $"{tempRemarks.TrimEnd(';', ' ', '.')}; {phrase}";
+        }
+    }
+    private void ClearRemarks() => tempRemarks = string.Empty;
+    private void SaveRemarks()
+    {
+        editor.Remarks = string.IsNullOrWhiteSpace(tempRemarks) ? null : tempRemarks.Trim();
+        isRemarksModalOpen = false;
+    }
+
+    // 3. Discount Modal
+    private bool isDiscountModalOpen = false;
+    private decimal tempDiscount = 0;
+    private string? tempDiscountBy = string.Empty;
+    private void OpenDiscountModal()
+    {
+        tempDiscount = editor.Discount;
+        tempDiscountBy = editor.DiscountBy;
+        isDiscountModalOpen = true;
+    }
+    private void CloseDiscountModal() => isDiscountModalOpen = false;
+    private void SetDiscountPercent(int percent)
+    {
+        if (percent <= 0)
+        {
+            tempDiscount = 0;
+        }
+        else
+        {
+            tempDiscount = Math.Round(editor.Total * (percent / 100m), 2);
+        }
+    }
+    private void HandleTempDiscountInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var val))
+        {
+            tempDiscount = Math.Max(0, Math.Min(val, editor.Total));
+        }
+        else
+        {
+            tempDiscount = 0;
+        }
+    }
+    private void RemoveDiscount()
+    {
+        editor.Discount = 0;
+        editor.DiscountBy = null;
+        RecalculatePayable();
+        isDiscountModalOpen = false;
+    }
+    private void ApplyDiscount()
+    {
+        editor.Discount = Math.Max(0, Math.Min(tempDiscount, editor.Total));
+        editor.DiscountBy = string.IsNullOrWhiteSpace(tempDiscountBy) ? null : tempDiscountBy.Trim();
+        RecalculatePayable();
+        isDiscountModalOpen = false;
+    }
+
+    // 4. Service Catalog Modal
+    private bool isServiceModalOpen = false;
+    private string serviceSearchQuery = string.Empty;
+    private int catalogCategoryId = 0;
+    private IEnumerable<Service> CatalogFilteredServices => services.Where(s =>
+        (catalogCategoryId == 0 || s.CategoryID == catalogCategoryId) &&
+        (string.IsNullOrWhiteSpace(serviceSearchQuery) || (s.Name?.Contains(serviceSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)));
+
+    private void OpenServiceModal()
+    {
+        serviceSearchQuery = string.Empty;
+        catalogCategoryId = selectedCategoryId;
+        isServiceModalOpen = true;
+    }
+    private void CloseServiceModal() => isServiceModalOpen = false;
+    private void SelectServiceFromCatalog(Service s)
+    {
+        selectedCategoryId = s.CategoryID ?? selectedCategoryId;
+        selectedServiceId = s.ID;
+        lineRate = s.SaleRate ?? 0;
+        editor.Items.Add(new CashMemoSubDInvestigation
+        {
+            SLNo = editor.Items.Count + 1,
+            TestID = s.ID,
+            Rate = s.SaleRate ?? 0,
+            Quantity = 1
+        });
+        Recalculate();
+        message = string.Empty;
+        isServiceModalOpen = false;
+    }
+
     private IEnumerable<CashMemoDInvestigation> FilteredMemos => string.IsNullOrWhiteSpace(memoScanQuery)
         ? memos
         : memos.Where(m => m.ID.ToString().Contains(memoScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
@@ -400,6 +883,12 @@
         I18n.OnLanguageChanged += HandleLanguageChanged;
         await using var db = await DbFactory.CreateDbContextAsync();
         doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        foreach (var d in doctors)
+        {
+            d.Name = DoctorNameFormatter.Sanitize(d.Name);
+        }
+        doctors = doctors.OrderBy(x => x.Name).ToList();
+
         categories = await db.ServiceCategories.AsNoTracking().Where(x => x.SubID == 0 && x.ID != 3 && x.ID != 7).OrderBy(x => x.Name).ToListAsync();
         var ids = categories.Select(x => x.ID).ToList();
         services = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && ids.Contains(x.CategoryID.Value)).OrderBy(x => x.Name).ToListAsync();
@@ -674,6 +1163,9 @@
         showPatientIdSuggestions = false;
         editor = NewMemo();
         paidManuallyEdited = false;
+        tempRemarks = string.Empty;
+        tempDiscount = 0;
+        tempDiscountBy = string.Empty;
         SelectFirstService();
     }
 
@@ -711,6 +1203,9 @@
             }).ToList()
         };
         paidManuallyEdited = true;
+        tempRemarks = m.Remarks ?? string.Empty;
+        tempDiscount = m.Discount;
+        tempDiscountBy = m.DiscountBy ?? string.Empty;
         message = string.Empty;
     }
 
@@ -876,8 +1371,8 @@
         return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
     }
     private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Service {id}";
-    private string DoctorName(int? id) => id is null ? "Walk-in / none" : doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
-    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private string DoctorName(int? id) => id is null ? "Walk-in / None" : (doctors.FirstOrDefault(x => x.ID == id) is { } d ? DoctorNameFormatter.FormatFullName(d.Title, d.Name) : "Doctor");
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{DoctorNameFormatter.FormatFullName(doctor.Title, doctor.Name)} {doctor.Degree}".Trim();
     private static string Age(DateTime birth)
     {
         var years = DateTime.Today.Year - birth.Year;

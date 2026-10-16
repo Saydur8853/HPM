@@ -1,0 +1,533 @@
+@page "/canteen/challan"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Components.Common
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
+
+<PageTitle>@I18n.T("Canteen Stock Receiving Challan") | @Branding.HospitalName</PageTitle>
+
+<div class="canteen-classic-fit">
+    <!-- Top Action & Status Bar -->
+    <div class="canteen-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>📥</span>
+                <span>@I18n.T("Canteen Stock Receiving Challan")</span>
+            </h1>
+            <span class="tickets-count-pill">
+                @challans.Count @I18n.T("Challans Recorded")
+            </span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass == "success" ? "✓" : "⚠") @message
+                </span>
+            }
+        </div>
+
+        <div class="tickets-top-actions">
+            <a href="/canteen/sales" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Go to Canteen Sales POS")">
+                🍽️ @I18n.T("Sales & POS")
+            </a>
+            <a href="/canteen/products" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Manage Products")">
+                🍱 @I18n.T("Products & Menu")
+            </a>
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="ResetForm" title="@I18n.T("New Challan")">
+                + @I18n.T("New Challan")
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Workspace Grid: Left Challan Form, Right Recent Challan List -->
+    <div class="canteen-classic-workspace">
+        <!-- Left Panel: Challan Editor Card -->
+        <div class="canteen-form-card">
+            <div class="canteen-card-header">
+                <h2>@(editor.ID == 0 ? I18n.T("Receive Inward Stock Challan") : $"{I18n.T("Challan")} #{editor.ID}")</h2>
+                <span class="canteen-badge">
+                    @(editor.ID == 0 ? "STOCK INWARD" : $"CHALLAN #{editor.ID}")
+                </span>
+            </div>
+
+            <EditForm Model="editor" OnValidSubmit="SaveChallanAsync" class="canteen-form-wrapper">
+                <DataAnnotationsValidator />
+
+                <div class="canteen-form-body">
+                    <!-- Challan Header Details (Compact 3-column) -->
+                    <div class="billing-demographics-grid" style="grid-template-columns: 1.2fr 1fr 1.2fr;">
+                        <label>
+                            <span>@I18n.T("Supplier")<span class="req">*</span></span>
+                            <select class="classic-input tickets-select" @bind="editor.Supplier">
+                                <option value="0">-- @I18n.T("Select Supplier") --</option>
+                                @foreach (var s in suppliers)
+                                {
+                                    <option value="@s.ID">@s.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Invoice / Challan No")<span class="req">*</span></span>
+                            <InputText class="classic-input" @bind-Value="editor.InvoiceNo" placeholder="INV-2026-001" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Invoice Date")</span>
+                            <InputDate class="classic-input" @bind-Value="editor.InvoiceDate" />
+                        </label>
+                    </div>
+
+                    <!-- Line Editor Bar -->
+                    <div class="billing-line-editor canteen-line-editor">
+                        <label style="flex: 2; min-width: 170px;">
+                            <span>@I18n.T("Select Product / Item to Receive")</span>
+                            <select class="classic-input tickets-select" value="@lineProductId" @onchange="ProductChanged">
+                                <option value="0">-- @I18n.T("Select Product") --</option>
+                                @foreach (var p in products)
+                                {
+                                    <option value="@p.ID">@p.Name (@p.Unit) — @I18n.T("Current Stock"): @p.Balance</option>
+                                }
+                            </select>
+                        </label>
+                        <label style="width: 80px;">
+                            <span>@I18n.T("Buy Rate")</span>
+                            <input type="number" step="0.01" class="classic-input bold-number" @bind="lineBuyRate" />
+                        </label>
+                        <label style="width: 60px;">
+                            <span>@I18n.T("Qty")</span>
+                            <input type="number" min="0.1" step="0.5" class="classic-input bold-number" @bind="lineQty" />
+                        </label>
+                        <div class="billing-line-btn-group">
+                            <button class="btn btn-dark tickets-btn btn-add-line" type="button" @onclick="AddLineItem">
+                                + @I18n.T("Add")
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Items Table -->
+                    <div class="billing-line-table-wrap canteen-table-wrap">
+                        <div class="canteen-table-head">
+                            <span style="width:24px;">#</span>
+                            <span style="flex:1.5;">@I18n.T("Product Name")</span>
+                            <span style="width:55px; text-align:center;">@I18n.T("Unit")</span>
+                            <span style="width:85px; text-align:right;">@I18n.T("Buy Rate")</span>
+                            <span style="width:60px; text-align:center;">@I18n.T("Qty")</span>
+                            <span style="width:95px; text-align:right;">@I18n.T("Total")</span>
+                            <span style="width:24px;"></span>
+                        </div>
+                        <div class="billing-line-rows">
+                            @if (editor.Items.Count == 0)
+                            {
+                                <div class="tickets-queue-empty" style="padding: 1.2rem;">
+                                    <span style="font-size:1.8rem;">📥</span>
+                                    <span>@I18n.T("Add received products to this challan.")</span>
+                                </div>
+                            }
+                            @foreach (var item in editor.Items)
+                            {
+                                var p = products.FirstOrDefault(x => x.ID == item.ServiceID);
+                                <div class="canteen-table-row">
+                                    <span style="width:24px; color:#64748b; font-weight:700;">@item.SLNO</span>
+                                    <span style="flex:1.5; font-weight:750; color:#0f172a;">
+                                        @(p?.Name ?? $"Item #{item.ServiceID}")
+                                    </span>
+                                    <span style="width:55px; text-align:center; font-size:10.5px; color:#64748b;">
+                                        @(p?.Unit ?? "pcs")
+                                    </span>
+                                    <span style="width:85px; text-align:right;">
+                                        @(I18n.FormatCurrency(item.BuyRate))
+                                    </span>
+                                    <span style="width:60px; text-align:center; font-weight:800;">
+                                        @item.Quantity
+                                    </span>
+                                    <strong style="width:95px; text-align:right; color:#0f172a;">
+                                        @(I18n.FormatCurrency(item.Total))
+                                    </strong>
+                                    <button type="button" class="btn-line-delete" style="width:24px;" title="@I18n.T("Remove")" @onclick="() => RemoveLineItem(item)">✕</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Summary Strip -->
+                <div class="canteen-bottom-panel">
+                    <div class="canteen-bottom-info">
+                        <span class="canteen-order-pill">
+                            📦 @editor.Items.Count @I18n.T("Items") (@(editor.Items.Sum(x => x.Quantity)) @I18n.T("Total Qty"))
+                        </span>
+                    </div>
+
+                    <div class="emg-totals-strip">
+                        <div class="emg-stat">
+                            <span class="stat-lbl">@I18n.T("Total")</span>
+                            <span class="stat-val gross-val">@(I18n.FormatCurrency(editor.Total))</span>
+                        </div>
+                        <div class="emg-stat due-stat">
+                            <span class="stat-lbl">@I18n.T("Net Payable")</span>
+                            <span class="stat-val due-amount">@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount)))</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer Action Bar -->
+                <div class="canteen-form-footer">
+                    <button class="btn btn-primary tickets-btn" type="submit" disabled="@saving">
+                        @(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Receive Stock & Post") : I18n.T("Update Challan"))
+                    </button>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintChallanAsync" title="@I18n.T("Print Inward Challan")">
+                                🖨️ @I18n.T("Print Challan")
+                            </button>
+                        }
+                        <button class="btn btn-ghost tickets-btn" type="button" @onclick="ResetForm">
+                            @I18n.T("Clear")
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Right Panel: Recent Challans List -->
+        <div class="canteen-queue-card">
+            <div class="canteen-queue-top">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Recent Stock Challans")</h2>
+                </div>
+                <span class="pill" style="font-size:11px; font-weight:700;">
+                    @FilteredChallans.Count() @I18n.T("Challans")
+                </span>
+            </div>
+
+            <div class="tickets-scanner-bar">
+                <div class="tickets-scanner-input-wrap">
+                    <span class="tickets-scanner-icon">🔍</span>
+                    <input type="text"
+                           class="classic-input tickets-scanner-input"
+                           placeholder="@I18n.T("Search Invoice #, Challan #, or Supplier...")"
+                           @bind="searchQuery"
+                           @bind:event="oninput" />
+                    @if (!string.IsNullOrWhiteSpace(searchQuery))
+                    {
+                        <button type="button" class="tickets-scanner-clear" @onclick="() => searchQuery = string.Empty">✕</button>
+                    }
+                </div>
+            </div>
+
+            <div class="billing-queue-list">
+                @if (!FilteredChallans.Any())
+                {
+                    <div class="tickets-queue-empty">
+                        <span style="font-size:2rem;">📥</span>
+                        <span>@I18n.T("No stock receiving challans found.")</span>
+                    </div>
+                }
+                @foreach (var ch in FilteredChallans)
+                {
+                    var suppName = suppliers.FirstOrDefault(s => s.ID == ch.Supplier)?.Name ?? $"Supplier #{ch.Supplier}";
+                    <div class="billing-queue-item @(editor.ID == ch.ID ? "active" : "")" @onclick="() => SelectChallan(ch)">
+                        <span class="billing-queue-serial">#@ch.ID</span>
+                        <div class="billing-queue-info">
+                            <span class="billing-queue-name">
+                                @ch.InvoiceNo
+                                <small class="canteen-type-tag">(@suppName)</small>
+                            </span>
+                            <span class="billing-queue-meta">
+                                @ch.InvoiceDate.ToString("dd MMM yyyy") &bull; @ch.Items.Count @I18n.T("item(s)")
+                            </span>
+                        </div>
+                        <div class="tickets-queue-badges">
+                            <span class="billing-queue-amount">@(I18n.FormatCurrency(ch.Total))</span>
+                        </div>
+                        <div class="tickets-queue-actions" @onclick:stopPropagation="true">
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("View")" @onclick="() => SelectChallan(ch)">✏️</button>
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("Print")" @onclick="() => PrintChallanItem(ch)">🖨️</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Print Challan Document -->
+<div id="canteen-challan-print" class="print-document">
+    <div class="print-sheet">
+        <PrintDocumentHeader Title="Canteen Stock Receiving Challan"
+                             DocNo="@($"CH-{editor.ID:0000}")"
+                             DocNoLabel="Challan #"
+                             BarcodeCode="@($"CAN-CH-{editor.ID}")" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Invoice No")</span><b>@editor.InvoiceNo</b></div>
+            <div><span>@I18n.T("Invoice Date")</span>@editor.InvoiceDate.ToString("dd MMM yyyy")</div>
+            <div><span>@I18n.T("Supplier")</span>@(suppliers.FirstOrDefault(s => s.ID == editor.Supplier)?.Name ?? "—")</div>
+            <div><span>@I18n.T("Received Date")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
+        </div>
+
+        <table class="data-table" style="margin-top: 14px;">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>@I18n.T("Product Item")</th>
+                    <th class="num">@I18n.T("Buy Rate")</th>
+                    <th class="num">@I18n.T("Quantity")</th>
+                    <th class="num">@I18n.T("Total Amount")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var itm in editor.Items)
+                {
+                    var p = products.FirstOrDefault(x => x.ID == itm.ServiceID);
+                    <tr>
+                        <td>@itm.SLNO</td>
+                        <td>@(p?.Name ?? $"Item #{itm.ServiceID}") (@(p?.Unit ?? "pcs"))</td>
+                        <td class="num">@(I18n.FormatCurrency(itm.BuyRate))</td>
+                        <td class="num">@itm.Quantity</td>
+                        <td class="num">@(I18n.FormatCurrency(itm.Total))</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="print-total">
+            <div><span>@I18n.T("Total")</span><strong>@(I18n.FormatCurrency(editor.Total))</strong></div>
+            <div class="grand"><span>@I18n.T("Net Total")</span><strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount)))</strong></div>
+        </div>
+
+        <PrintDocumentFooter SignTitle1="Store In-Charge"
+                             SignTitle3="Authorized Officer"
+                             PageNumberText="Page 1 of 1" />
+    </div>
+</div>
+
+@code {
+    private CanteenChallan editor = new() { InvoiceDate = DateTime.Today, TransDate = DateTime.Now };
+    private List<CanteenProduct> products = [];
+    private List<SupplierPharmacy> suppliers = [];
+    private List<CanteenChallan> challans = [];
+
+    private int lineProductId;
+    private decimal lineBuyRate;
+    private decimal lineQty = 1;
+    private string searchQuery = string.Empty;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+
+    private IEnumerable<CanteenChallan> FilteredChallans => string.IsNullOrWhiteSpace(searchQuery)
+        ? challans
+        : challans.Where(c => c.ID.ToString().Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                           || c.InvoiceNo.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadDataAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadDataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        products = await db.CanteenProducts.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        suppliers = await db.PharmacySuppliers.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        challans = await db.CanteenChallans.AsNoTracking()
+            .Include(x => x.Items)
+            .OrderByDescending(x => x.ID)
+            .Take(40)
+            .ToListAsync();
+    }
+
+    private void ProductChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var id) && id > 0)
+        {
+            lineProductId = id;
+            var p = products.FirstOrDefault(x => x.ID == id);
+            lineBuyRate = p?.BuyRate ?? 0;
+            lineQty = 1;
+        }
+        else
+        {
+            lineProductId = 0;
+            lineBuyRate = 0;
+            lineQty = 1;
+        }
+    }
+
+    private void AddLineItem()
+    {
+        if (lineProductId <= 0 || lineQty <= 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "পণ্য ও সঠিক পরিমাণ নির্ধারণ করুন।" : "Select a product and valid quantity.";
+            return;
+        }
+
+        var existing = editor.Items.FirstOrDefault(i => i.ServiceID == lineProductId);
+        if (existing != null)
+        {
+            existing.Quantity += lineQty;
+            existing.Total = existing.BuyRate * existing.Quantity;
+        }
+        else
+        {
+            editor.Items.Add(new CanteenChallanSub
+            {
+                SLNO = editor.Items.Count + 1,
+                ServiceID = lineProductId,
+                BuyRate = lineBuyRate,
+                Quantity = lineQty,
+                Total = lineBuyRate * lineQty
+            });
+        }
+
+        editor.Total = editor.Items.Sum(x => x.Total);
+        lineProductId = 0;
+        lineBuyRate = 0;
+        lineQty = 1;
+        message = string.Empty;
+    }
+
+    private void RemoveLineItem(CanteenChallanSub item)
+    {
+        editor.Items.Remove(item);
+        for (var i = 0; i < editor.Items.Count; i++) editor.Items[i].SLNO = i + 1;
+        editor.Total = editor.Items.Sum(x => x.Total);
+    }
+
+    private async Task SaveChallanAsync()
+    {
+        if (editor.Supplier <= 0 || string.IsNullOrWhiteSpace(editor.InvoiceNo))
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "সরবরাহকারী এবং চালান নম্বর আবশ্যক।" : "Supplier and Invoice/Challan No are required.";
+            return;
+        }
+
+        if (editor.Items.Count == 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "অন্তত একটি পণ্য চালানে যোগ করুন।" : "Add at least one item to this challan.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            editor.EnteredBy = userId;
+            editor.TransDate = DateTime.Now;
+            editor.Total = editor.Items.Sum(x => x.Total);
+            editor.IsPosted = true;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            db.CanteenChallans.Add(editor);
+            await db.SaveChangesAsync();
+
+            // Increase product stock balance and update BuyRate
+            foreach (var item in editor.Items)
+            {
+                var prod = await db.CanteenProducts.FindAsync(item.ServiceID);
+                if (prod != null)
+                {
+                    prod.Balance = (prod.Balance ?? 0) + item.Quantity;
+                    if (item.BuyRate > 0)
+                    {
+                        prod.BuyRate = item.BuyRate;
+                    }
+                }
+            }
+
+            await db.SaveChangesAsync();
+
+            messageClass = "success";
+            message = I18n.IsBangla ? $"চালান #{editor.ID} সফলভাবে গৃহীত ও স্টক হালনাগাদ করা হয়েছে।" : $"Challan #{editor.ID} received and inventory updated successfully.";
+
+            await PrintChallanAsync();
+            ResetForm();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void SelectChallan(CanteenChallan ch)
+    {
+        editor = new CanteenChallan
+        {
+            ID = ch.ID,
+            Supplier = ch.Supplier,
+            InvoiceNo = ch.InvoiceNo,
+            InvoiceDate = ch.InvoiceDate,
+            IsPosted = ch.IsPosted,
+            Total = ch.Total,
+            Discount = ch.Discount,
+            VAT = ch.VAT,
+            EnteredBy = ch.EnteredBy,
+            TransDate = ch.TransDate,
+            Items = ch.Items.OrderBy(x => x.SLNO).Select(x => new CanteenChallanSub
+            {
+                ID = x.ID,
+                ChallanNo = x.ChallanNo,
+                SLNO = x.SLNO,
+                ServiceID = x.ServiceID,
+                BuyRate = x.BuyRate,
+                Quantity = x.Quantity,
+                Total = x.Total
+            }).ToList()
+        };
+        message = string.Empty;
+    }
+
+    private void ResetForm()
+    {
+        editor = new CanteenChallan
+        {
+            InvoiceDate = DateTime.Today,
+            TransDate = DateTime.Now
+        };
+        lineProductId = 0;
+        lineBuyRate = 0;
+        lineQty = 1;
+        message = string.Empty;
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
+    private async Task PrintChallanItem(CanteenChallan ch)
+    {
+        SelectChallan(ch);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(60);
+        await PrintChallanAsync();
+    }
+
+    private Task PrintChallanAsync() => JS.InvokeVoidAsync("hpm.printElement", "canteen-challan-print", $"Canteen Challan {editor.ID}").AsTask();
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

@@ -5,161 +5,612 @@
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
 @inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
 @implements IDisposable
 @using System.Security.Claims
 @using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Doctor Prescription") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Doctor Prescription & Medication Orders") | @Branding.HospitalName</PageTitle>
 
+<!-- Modern Clinical Heading -->
 <div class="page-heading">
     <div>
-        <span class="eyebrow">@I18n.T("Pharmacy & Dispensary")</span>
-        <h1>@I18n.T("Doctor Prescription")</h1>
-        <p>@I18n.T("Doctor prescription entry and direct pharmacy dispensing.")</p>
+        <span class="eyebrow">@I18n.T("Clinical Consultation & Dispensary", "Clinical Consultation & Dispensary")</span>
+        <h1>@I18n.T("Doctor Prescription", "Doctor Prescription")</h1>
+        <p>@I18n.T("Smart medication order with auto-dosage calculator, instant generic search & pharmacy dispensing.")</p>
     </div>
-    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New Patient", "+ New prescription")</button>
-</div>
-
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
-
-<div class="module-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(editor.ID==0?I18n.T("Prescription", "New prescription"):$"{I18n.T("Prescription")} #{editor.ID}")</h2>
-                <p>@I18n.T("Prescription header and medication dosage items.", "Prescription header and medication dosage items.")</p>
-            </div>
-        </div>
-        <div class="form-grid">
-            <label>
-                <span>@I18n.T("Patient ID")</span>
-                <span class="input-action" style="display:flex; gap:6px;">
-                    <input @bind="editor.PatientID" placeholder="e.g. 202615461" />
-                    <button type="button" class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" @onclick="FindPatientAsync">@I18n.T("Find")</button>
-                </span>
-            </label>
-            <label><span>@I18n.T("Patient Name *")</span><input @bind="editor.Name" maxlength="100"/></label>
-            <label><span>@I18n.T("Date", "Visit date *")</span><InputDate Type="InputDateType.DateTimeLocal" @bind-Value="visitDate"/></label>
-            <label><span>@I18n.T("Age")</span><input @bind="editor.Age" maxlength="20"/></label>
-            <label><span>@I18n.T("Sex")</span><select @bind="editor.Sex"><option value="">@I18n.T("Select")</option><option value="Male">@I18n.T("Male")</option><option value="Female">@I18n.T("Female")</option><option value="Other">@I18n.T("Other")</option></select></label>
-            <label><span>@I18n.T("Blood Group")</span><input @bind="editor.BloodGroup" maxlength="10"/></label>
-            <label><span>@I18n.T("Doctor *", "Doctor *")</span><select @bind="doctorId"><option value="0">@I18n.T("Select Doctor")</option>@foreach(var x in doctors){<option value="@x.ID">@x.Title @x.Name</option>}</select></label>
-            <label class="span-2"><span>@I18n.T("Primary Diagnosis", "Diagnosis")</span><textarea @bind="editor.Diagnosis" placeholder="e.g. Dyslipidemia & Impaired Glucose Tolerance"></textarea></label>
-            <label class="span-2"><span>@I18n.T("Clinical Remarks / Instructions", "Complaints / notes")</span><textarea @bind="editor.Complain" placeholder="e.g. Fatigue, lethargy, heaviness"></textarea></label>
-            <label class="span-2"><span>🧪 @I18n.T("Advised Investigations / Lab Tests", "Advised Investigations")</span><textarea @bind="editor.Investigation" placeholder="e.g. 1. Lipid Profile&#10;2. SGPT (ALT)&#10;3. HbA1c"></textarea></label>
-            <label class="span-2"><span>💡 @I18n.T("Special Advice & Follow-up", "Special Advice")</span><textarea @bind="editor.Remark" placeholder="e.g. Low carbohydrate & low fat diet. 30 mins brisk walking. Review with lab reports."></textarea></label>
-        </div>
-        <div class="form-section-title">@I18n.T("Dosage & Instructions (Optional if only lab tests advised)", "Medicine direction")</div>
-        <div class="form-grid three">
-            <label class="span-2"><span>@I18n.T("Medicine / Product Name", "Medicine *")</span><select @bind="medicineId"><option value="0">@I18n.T("Select")</option>@foreach(var x in medicines){<option value="@x.ID">@x.Name</option>}</select></label>
-            <label><span>@I18n.T("Quantity *")</span><InputNumber @bind-Value="quantity"/></label>
-            <label><span>@I18n.T("Dosage & Instructions", "Dose")</span><InputNumber @bind-Value="dose"/></label>
-            <label><span>@I18n.T("Times/day", "Times/day")</span><InputNumber @bind-Value="interval"/></label>
-            <label><span>@I18n.T("days", "Days")</span><InputNumber @bind-Value="days"/></label>
-        </div>
-        <div class="form-actions"><button class="btn btn-secondary" @onclick="AddMedicine" disabled="@(!canPrescribe)">+ @I18n.T("Add")</button></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
-                        <th>@I18n.T("Dose", "Dose")</th>
-                        <th>@I18n.T("Times/day", "Times/day")</th>
-                        <th>@I18n.T("days", "Days")</th>
-                        <th class="num">@I18n.T("Qty")</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if(lines.Count==0){
-                        <tr><td colspan="7"><div class="empty-state small">@I18n.T("No medicines added to cart yet.", "No medicine selected.")</div></td></tr>
-                    }
-                    @for(var i=0;i<lines.Count;i++){
-                        var index=i;
-                        var x=lines[i];
-                        <tr>
-                            <td>@(i+1)</td>
-                            <td>@MedicineName(x.ServiceID)</td>
-                            <td>@x.Dose</td>
-                            <td>@x.Interval</td>
-                            <td>@x.Days</td>
-                            <td class="num">@x.Quantity</td>
-                            <td><button class="icon-btn" @onclick="()=>lines.RemoveAt(index)" disabled="@(!canPrescribe)">✕</button></td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-        <div class="form-actions">
-            <button class="btn btn-primary" @onclick="SaveAsync" disabled="@(isSaving || !canPrescribe)">
-                @(isSaving?I18n.T("Saving…"):I18n.T("Save"))
+    <div style="display:flex; align-items:center; gap:8px;">
+        @if (editor.ID > 0)
+        {
+            <button class="btn btn-primary" @onclick="PrintAsync" style="background:#0284c7; border-color:#0284c7;">
+                🖨️ @I18n.T("Print Prescription")
             </button>
-            @if(editor.ID>0){
-                <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print")</button>
-            }
-        </div>
+        }
+        <button class="btn btn-secondary" @onclick="Reset">
+            + @I18n.T("New Prescription")
+        </button>
     </div>
+</div>
 
-    <div class="panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@I18n.T("Prescriptions & Dispensing", "Recent prescriptions")</h2>
-                <p>@I18n.T("Dispense prescribed medicines directly from doctor prescriptions.")</p>
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" style="margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
+        <span>@message</span>
+        <button type="button" class="btn-clear" style="border:none; background:transparent; cursor:pointer;" @onclick="() => message = string.Empty">✕</button>
+    </div>
+}
+
+<div class="rx-workspace-grid">
+    <!-- LEFT COLUMN: Patient Info, Diagnosis, Medication Builder & Prescription Cart -->
+    <div class="rx-left-workspace">
+        
+        <!-- CARD 1: Patient Details & Doctor Information -->
+        <div class="rx-card">
+            <div class="rx-card-header">
+                <span class="rx-card-title">
+                    👤 @(editor.ID == 0 ? I18n.T("Patient & Consultant Information") : $"{I18n.T("Prescription")} #RX-{editor.ID}")
+                </span>
+                @if (editor.ID > 0)
+                {
+                    <span class="badge badge-info" style="font-size:11.5px; font-weight:700;">
+                        Visit #@editor.VisitNo • @(editor.VisitDate?.ToString("dd MMM yyyy") ?? visitDate.ToString("dd MMM yyyy"))
+                    </span>
+                }
+            </div>
+
+            <!-- Patient Search / Selection -->
+            @if (selectedPatient != null)
+            {
+                <div class="rx-patient-hero-badge">
+                    <div class="rx-patient-hero-info">
+                        <strong style="font-size:14px; color:#0369a1;">#@selectedPatient.PatientID</strong>
+                        <span style="font-weight:700; color:#0f172a;">@selectedPatient.Name</span>
+                        <span>• @FormatPatientAge(selectedPatient.DateOfBirth)</span>
+                        <span>• @selectedPatient.Sex</span>
+                        @if (!string.IsNullOrWhiteSpace(selectedPatient.BloodGroup))
+                        {
+                            <span class="badge" style="background:#fee2e2; color:#991b1b; font-weight:800;">🩸 @selectedPatient.BloodGroup</span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(selectedPatient.Weight))
+                        {
+                            <span class="patient-weight-pill">⚖️ @selectedPatient.Weight kg</span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(selectedPatient.Contact))
+                        {
+                            <span>• 📞 @selectedPatient.Contact</span>
+                        }
+                    </div>
+                    <button type="button" class="btn btn-secondary" style="padding:3px 10px; font-size:11px;" @onclick="ClearSelectedPatient">
+                        @I18n.T("Change")
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="rx-search-wrapper" style="margin-bottom:12px;">
+                    <div style="display:flex; gap:8px;">
+                        <div style="position:relative; flex:1;">
+                            <span class="rx-search-icon">🔍</span>
+                            <input type="text"
+                                   class="rx-search-input"
+                                   placeholder="@I18n.T("Search Registered Patient (Patient ID, Mobile No, or Name)...")"
+                                   @bind="patientSearchQuery"
+                                   @bind:event="oninput"
+                                   @onkeydown="HandlePatientSearchKeyDown"
+                                   @onfocus="() => showPatientSuggestions = true" />
+                            @if (!string.IsNullOrWhiteSpace(patientSearchQuery))
+                            {
+                                <button type="button" class="rx-search-clear" @onclick="ClearPatientSearch">✕</button>
+                            }
+                            @if (showPatientSuggestions && PatientSuggestions.Any())
+                            {
+                                <div class="rx-med-dropdown" style="z-index:110;">
+                                    @foreach (var p in PatientSuggestions)
+                                    {
+                                        <div class="rx-med-item" @onmousedown:preventDefault @onclick="() => SelectPatient(p)">
+                                            <div>
+                                                <strong style="color:#0369a1; font-size:12.5px;">#@p.PatientID</strong>
+                                                <span style="margin-left:8px; font-weight:700; color:#0f172a;">@p.Name</span>
+                                                <small style="margin-left:6px; color:#64748b;">(@p.Contact)</small>
+                                            </div>
+                                            <div style="display:flex; align-items:center; gap:6px;">
+                                                @if (!string.IsNullOrWhiteSpace(p.Weight))
+                                                {
+                                                    <span class="patient-weight-pill">⚖️ @p.Weight kg</span>
+                                                }
+                                                <span style="font-size:11px; color:#64748b;">@p.Sex</span>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <button type="button" class="btn btn-secondary" style="height:38px; padding:0 14px;" @onclick="FindPatientDirectAsync">
+                            @I18n.T("Find")
+                        </button>
+                    </div>
+                </div>
+            }
+
+            <!-- Patient Basic Details & Doctor Grid -->
+            <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-bottom:10px;">
+                <label>
+                    <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Patient Name *")</span>
+                    <input class="classic-input" @bind="editor.Name" maxlength="100" placeholder="@I18n.T("Name")" />
+                </label>
+                <label style="max-width:110px;">
+                    <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Age")</span>
+                    <input class="classic-input" @bind="editor.Age" maxlength="20" placeholder="e.g. 35Y" />
+                </label>
+                <label style="max-width:100px;">
+                    <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Sex")</span>
+                    <select class="classic-input" @bind="editor.Sex">
+                        <option value="">@I18n.T("Select")</option>
+                        <option value="Male">@I18n.T("Male")</option>
+                        <option value="Female">@I18n.T("Female")</option>
+                        <option value="Other">@I18n.T("Other")</option>
+                    </select>
+                </label>
+                <label style="max-width:95px;">
+                    <span style="font-size:11px; font-weight:700; color:#475569;">⚖️ @I18n.T("Weight")</span>
+                    <input class="classic-input" @bind="weightText" placeholder="e.g. 68 kg" />
+                </label>
+                <label style="max-width:90px;">
+                    <span style="font-size:11px; font-weight:700; color:#475569;">🩸 @I18n.T("Blood")</span>
+                    <input class="classic-input" @bind="editor.BloodGroup" maxlength="10" placeholder="e.g. B+" />
+                </label>
+                <label style="min-width:200px;">
+                    <span style="font-size:11px; font-weight:700; color:#475569;">🩺 @I18n.T("Consultant Doctor *")</span>
+                    <select class="classic-input" @bind="doctorId">
+                        <option value="0">@I18n.T("Select Consultant Doctor")</option>
+                        @foreach (var doc in doctors)
+                        {
+                            <option value="@doc.ID">@doc.Title @doc.Name</option>
+                        }
+                    </select>
+                </label>
             </div>
         </div>
 
-        <div class="scanner-search-group" style="margin: 0 1.25rem 0.75rem 1.25rem;">
-            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
-            <input type="text"
-                   class="scanner-input"
-                   placeholder="@I18n.T("Scan Prescription QR (RX-XXXX), Patient ID, or Search Name...", "Scan Prescription QR (RX-XXXX), Patient ID, or Search Name...")"
-                   @bind="rxScanQuery"
-                   @bind:event="oninput"
-                   @onkeydown="HandleRxScanKeyDown" />
-            @if (!string.IsNullOrWhiteSpace(rxScanQuery))
-            {
-                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearRxScan">✕</button>
-            }
+        <!-- CARD 2: Clinical Details (Diagnosis, Complaints, Advised Tests, Instructions) -->
+        <div class="rx-card">
+            <div class="rx-card-header" style="cursor:pointer;" @onclick="() => showClinicalSection = !showClinicalSection">
+                <span class="rx-card-title">
+                    📋 @I18n.T("Clinical Diagnosis & Advice")
+                </span>
+                <span style="font-size:12px; color:#0284c7; font-weight:700;">
+                    @(showClinicalSection ? I18n.T("Hide Details ▲") : I18n.T("Show Details ▼"))
+                </span>
+            </div>
+
+            <div style="display:@(showClinicalSection ? "block" : "none")">
+                <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <label>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Primary Diagnosis")</span>
+                        <input class="classic-input" @bind="editor.Diagnosis" placeholder="e.g. Dyslipidemia, Type 2 DM, Upper Respiratory Tract Infection" />
+                    </label>
+                    <label>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Chief Complaints / Symptoms")</span>
+                        <input class="classic-input" @bind="editor.Complain" placeholder="e.g. Fever, persistent dry cough for 3 days, headache" />
+                    </label>
+                </div>
+                <div class="form-grid" style="grid-template-columns: 1fr 1fr; gap:10px;">
+                    <label>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">🧪 @I18n.T("Advised Lab Investigations")</span>
+                        <textarea class="classic-input" rows="2" @bind="editor.Investigation" placeholder="e.g. 1. CBC with ESR&#10;2. Serum Creatinine&#10;3. Lipid Profile"></textarea>
+                    </label>
+                    <label>
+                        <span style="font-size:11px; font-weight:700; color:#475569;">💡 @I18n.T("Special Advice & Follow-up")</span>
+                        <textarea class="classic-input" rows="2" @bind="editor.Remark" placeholder="e.g. Drink plenty of warm water. Rest for 3 days. Review after 7 days with reports."></textarea>
+                    </label>
+                </div>
+            </div>
         </div>
 
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Prescription No", "Prescription")</th>
-                        <th>@I18n.T("Patient Name", "Patient")</th>
-                        <th>@I18n.T("Doctor")</th>
-                        <th>@I18n.T("Date")</th>
-                        <th>@I18n.T("Item / Strength", "Medicines")</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (!Filtered.Any())
-                    {
-                        <tr><td colspan="6"><div class="empty-state small">@I18n.T("No matching prescriptions found.")</div></td></tr>
-                    }
-                    @foreach(var x in Filtered){
+        <!-- CARD 3: Intelligent Medicine Search & Dosage Auto-Calculator Builder -->
+        <div class="rx-card" style="border: 2px solid #0284c7; background: #ffffff;">
+            <div class="rx-card-header">
+                <span class="rx-card-title" style="color:#0369a1;">
+                    💊 @I18n.T("Prescription Medication Builder")
+                </span>
+                <span style="font-size:11px; color:#64748b; font-weight:600;">
+                    @I18n.T("Type to search medicine • Dosage timing & days auto-calculate total quantity")
+                </span>
+            </div>
+
+            <!-- Medicine Search Combo Box with Dropdown Suggestions -->
+            <div class="rx-med-builder-box">
+                @if (selectedMedicine != null)
+                {
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                        <div class="rx-selected-pill">
+                            <span>💊 <b>@selectedMedicine.Name</b></span>
+                            @if (!string.IsNullOrWhiteSpace(selectedMedicine.TypeName))
+                            {
+                                <span class="rx-type-pill">@selectedMedicine.TypeName</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(selectedMedicine.GenericName))
+                            {
+                                <span style="color:#0369a1; font-weight:600; font-size:11.5px;">(@selectedMedicine.GenericName)</span>
+                            }
+                            @if (selectedMedicine.SaleRate > 0)
+                            {
+                                <span style="color:#047857; font-weight:700; font-size:11px;">• ৳@selectedMedicine.SaleRate.ToString("F2")</span>
+                            }
+                            <button type="button" class="btn-clear" @onclick="ClearSelectedMedicine" title="@I18n.T("Remove selected medicine")">✕</button>
+                        </div>
+                        <span style="font-size:11px; color:#10b981; font-weight:700;">✓ @I18n.T("Medicine Selected")</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="rx-search-wrapper" style="margin-bottom:10px;">
+                        <span class="rx-search-icon">🔍</span>
+                        <input type="text"
+                               class="rx-search-input"
+                               placeholder="@I18n.T("Type medicine name or generic (e.g. Napa, Seclo, Paracetamol, Cipro, Ace)...")"
+                               @bind="medicineSearchQuery"
+                               @bind:event="oninput"
+                               @onkeydown="HandleMedicineSearchKeyDown"
+                               @onfocus="() => showMedicineSuggestions = true"
+                               autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(medicineSearchQuery))
+                        {
+                            <button type="button" class="rx-search-clear" @onclick="ClearMedicineSearch">✕</button>
+                        }
+
+                        @if (showMedicineSuggestions && FilteredMedicines.Any())
+                        {
+                            <div class="rx-med-dropdown">
+                                @for (int i = 0; i < FilteredMedicines.Count; i++)
+                                {
+                                    var med = FilteredMedicines[i];
+                                    var isHl = i == highlightedMedIndex;
+                                    <div class="rx-med-item @(isHl ? "highlighted" : "")"
+                                         @onmousedown:preventDefault
+                                         @onclick="() => SelectMedicine(med)">
+                                        <div>
+                                            <strong style="color:#0f172a; font-size:13px;">@med.Name</strong>
+                                            @if (!string.IsNullOrWhiteSpace(med.TypeName))
+                                            {
+                                                <span class="rx-type-pill">@med.TypeName</span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(med.GenericName))
+                                            {
+                                                <small style="display:block; color:#64748b; font-size:11px; margin-top:1px;">
+                                                    @med.GenericName
+                                                </small>
+                                            }
+                                        </div>
+                                        <div style="text-align:right;">
+                                            @if (med.SaleRate > 0)
+                                            {
+                                                <span style="font-weight:700; color:#0369a1; font-size:12px;">৳@med.SaleRate.ToString("F2")</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
+                <!-- Dosage Time / Timing Selector (Quick Chips + Custom Input) -->
+                <div style="margin-bottom:10px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between;">
+                        <span style="font-size:11.5px; font-weight:800; color:#0f172a;">
+                            ⏰ @I18n.T("Dosage Timing / Frequency")
+                        </span>
+                        <span style="font-size:11px; color:#64748b;">
+                            @I18n.T("Daily Units: ") <b>@ParseDailyUnits(dosagePattern)</b>/day
+                        </span>
+                    </div>
+
+                    <!-- Dosage Preset Chips -->
+                    <div class="rx-chip-group">
+                        @foreach (var p in DosagePresets)
+                        {
+                            var isActive = string.Equals(dosagePattern, p.Pattern, StringComparison.OrdinalIgnoreCase);
+                            <button type="button"
+                                    class="rx-chip @(isActive ? "active" : "")"
+                                    @onclick="() => SelectDosagePreset(p)">
+                                @p.Label
+                            </button>
+                        }
+                    </div>
+
+                    <!-- Custom Dosage input row -->
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <div style="flex:1;">
+                            <input class="classic-input"
+                                   style="height:32px; font-size:12.5px; font-weight:700; color:#0369a1;"
+                                   @bind="dosagePattern"
+                                   @bind:event="oninput"
+                                   @onkeyup="OnDosagePatternChanged"
+                                   placeholder="@I18n.T("Custom dosage pattern (e.g. 1 + 0 + 1 or 2 + 0 + 2)")" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Meal Relation / Instructions Selector -->
+                <div style="margin-bottom:12px;">
+                    <span style="font-size:11.5px; font-weight:800; color:#0f172a; display:block; margin-bottom:2px;">
+                        🍽️ @I18n.T("Instructions & Meal Relation")
+                    </span>
+                    <div class="rx-chip-group" style="margin-bottom:0;">
+                        @foreach (var ins in InstructionPresets)
+                        {
+                            var isActive = string.Equals(selectedInstruction, ins, StringComparison.OrdinalIgnoreCase);
+                            <button type="button"
+                                    class="rx-chip @(isActive ? "active" : "")"
+                                    @onclick="() => SelectInstructionPreset(ins)">
+                                @ins
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Duration (Days) & Quantity Row with Dynamic Auto-Calculator -->
+                <div style="display:grid; grid-template-columns: 1.2fr 1fr auto; gap:12px; align-items:flex-end;">
+                    <!-- Duration Days -->
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <span style="font-size:11px; font-weight:700; color:#475569;">📅 @I18n.T("Duration (Days)")</span>
+                        </div>
+                        <div style="display:flex; gap:4px; align-items:center;">
+                            <button type="button" class="btn btn-secondary" style="height:34px; padding:0 10px; font-weight:800;" @onclick="DecreaseDays">-</button>
+                            <input type="number"
+                                   min="1"
+                                   max="365"
+                                   class="classic-input"
+                                   style="height:34px; text-align:center; font-size:13.5px; font-weight:800; color:#0f172a;"
+                                   @bind="days"
+                                   @bind:event="oninput"
+                                   @onkeyup="OnDaysChanged" />
+                            <button type="button" class="btn btn-secondary" style="height:34px; padding:0 10px; font-weight:800;" @onclick="IncreaseDays">+</button>
+                        </div>
+                        <!-- Quick Duration Chips -->
+                        <div style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap;">
+                            @foreach (var d in DurationPresets)
+                            {
+                                <button type="button"
+                                        class="rx-chip @(days == d.Days ? "active" : "")"
+                                        style="padding:1px 6px; font-size:10.5px;"
+                                        @onclick="() => SelectDurationPreset(d.Days)">
+                                    @d.Label
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Calculated Quantity -->
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <span style="font-size:11px; font-weight:700; color:#475569;">📦 @I18n.T("Total Quantity *")</span>
+                            @if (isQuantityManual)
+                            {
+                                <button type="button"
+                                        class="btn-clear"
+                                        style="font-size:10px; color:#0284c7; font-weight:700; cursor:pointer;"
+                                        @onclick="ResetQuantityToAuto">
+                                    ↺ @I18n.T("Auto") (@autoCalculatedQty)
+                                </button>
+                            }
+                        </div>
+                        <input type="number"
+                               min="1"
+                               class="classic-input"
+                               style="height:34px; font-size:14px; font-weight:800; color:#0369a1; text-align:center;"
+                               @bind="quantity"
+                               @bind:event="oninput"
+                               @onchange="OnQuantityManuallyChanged" />
+                        <div style="margin-top:4px;">
+                            <span class="rx-calc-badge @(isQuantityManual ? "manual" : "")">
+                                @if (isQuantityManual)
+                                {
+                                    <span>✏️ @I18n.T("Manual override") (@autoCalculatedQty @I18n.T("auto"))</span>
+                                }
+                                else
+                                {
+                                    <span>⚡ @ParseDailyUnits(dosagePattern)/day × @days days = <b>@quantity</b></span>
+                                }
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Add Button -->
+                    <div>
+                        <button type="button"
+                                class="btn btn-primary"
+                                style="height:38px; padding:0 18px; font-size:13px; font-weight:700; background:#0284c7; border-color:#0284c7; white-space:nowrap;"
+                                @onclick="AddMedicine"
+                                disabled="@(!canPrescribe || (medicineId <= 0 && selectedMedicine == null))">
+                            + @I18n.T("Add Medication")
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TABLE: Prescribed Medication Items -->
+            <div class="data-table-wrap" style="border: 1px solid #e2e8f0; border-radius:6px; overflow:hidden;">
+                <table class="data-table" style="margin-bottom:0;">
+                    <thead style="background:#f8fafc;">
                         <tr>
-                            <td><b>#@x.ID</b><br/><small>Visit @x.VisitNo</small></td>
-                            <td>@x.Name<br/><small>@x.Age · @x.Sex</small></td>
-                            <td>@DoctorName(x.ReferredBy)</td>
-                            <td>@x.VisitDate?.ToString("dd MMM yyyy")</td>
-                            <td>@x.Medicines.Count</td>
-                            <td>
-                                <button class="icon-btn" @onclick="()=>SelectAsync(x.ID)">@I18n.T("View")</button>
-                                @if(canPrescribe){<button class="icon-btn danger" @onclick="()=>DeleteAsync(x.ID)">✕</button>}
-                            </td>
+                            <th style="width:36px; text-align:center;">#</th>
+                            <th>@I18n.T("Medicine / Product")</th>
+                            <th style="text-align:center;">@I18n.T("Dosage Pattern")</th>
+                            <th>@I18n.T("Meal Instruction")</th>
+                            <th style="text-align:center;">@I18n.T("Duration")</th>
+                            <th style="text-align:center;">@I18n.T("Qty")</th>
+                            <th style="width:40px; text-align:center;"></th>
                         </tr>
+                    </thead>
+                    <tbody>
+                        @if (lines.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="7" style="text-align:center; padding:24px 12px; color:#64748b;">
+                                    <div style="font-size:20px; margin-bottom:4px;">💊</div>
+                                    <span style="font-weight:600;">@I18n.T("No medications added yet.")</span>
+                                    <small style="display:block; color:#94a3b8; margin-top:2px;">
+                                        @I18n.T("Search medicine above and click '+ Add Medication' to build prescription.")
+                                    </small>
+                                </td>
+                            </tr>
+                        }
+                        @for (var i = 0; i < lines.Count; i++)
+                        {
+                            var index = i;
+                            var med = lines[i];
+                            <tr>
+                                <td style="text-align:center; font-weight:700; color:#64748b;">@(i + 1)</td>
+                                <td>
+                                    <strong style="color:#0f172a; font-size:13px;">@MedicineName(med.ServiceID)</strong>
+                                    @if (!string.IsNullOrWhiteSpace(MedicineGeneric(med.ServiceID)))
+                                    {
+                                        <small style="display:block; color:#64748b; font-size:11px;">
+                                            @MedicineGeneric(med.ServiceID)
+                                        </small>
+                                    }
+                                </td>
+                                <td style="text-align:center;">
+                                    <span style="font-size:12px; font-weight:800; color:#0369a1; background:#e0f2fe; padding:2px 8px; border-radius:4px; border:1px solid #bae6fd;">
+                                        @(med.DosagePattern ?? "1 + 0 + 1")
+                                    </span>
+                                </td>
+                                <td>
+                                    <span style="font-size:12px; color:#334155; font-weight:600;">
+                                        @(med.Instruction ?? "After meal")
+                                    </span>
+                                </td>
+                                <td style="text-align:center; font-weight:700; color:#0f172a;">
+                                    @(med.Days ?? 1) @I18n.T("Days")
+                                </td>
+                                <td style="text-align:center;">
+                                    <span style="font-size:13px; font-weight:800; color:#0f172a; background:#f1f5f9; padding:2px 8px; border-radius:4px;">
+                                        @med.Quantity
+                                    </span>
+                                </td>
+                                <td style="text-align:center;">
+                                    <button type="button" class="icon-btn danger" style="padding:2px 6px;" @onclick="() => lines.RemoveAt(index)" disabled="@(!canPrescribe)" title="@I18n.T("Remove")">
+                                        ✕
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Save & Action Buttons Bar -->
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px; padding-top:12px; border-top:1px solid #f1f5f9;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <button class="btn btn-primary"
+                            style="height:38px; padding:0 20px; font-size:13px; font-weight:700; background:#047857; border-color:#047857;"
+                            @onclick="SaveAsync"
+                            disabled="@(isSaving || !canPrescribe)">
+                        @(isSaving ? I18n.T("Saving…") : (editor.ID == 0 ? "💾 " + I18n.T("Save Prescription") : "💾 " + I18n.T("Update Prescription")))
+                    </button>
+                    @if (editor.ID > 0)
+                    {
+                        <button class="btn btn-secondary" style="height:38px; padding:0 16px;" @onclick="PrintAsync">
+                            🖨️ @I18n.T("Print Slip")
+                        </button>
                     }
-                </tbody>
-            </table>
+                </div>
+                <button class="btn btn-ghost" style="color:#64748b; font-size:12px;" @onclick="Reset">
+                    ✕ @I18n.T("Clear All")
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN: Recent Prescriptions & Direct Dispense Queue -->
+    <div class="rx-right-workspace">
+        <div class="rx-card" style="position:sticky; top:12px;">
+            <div class="rx-card-header">
+                <span class="rx-card-title">
+                    📋 @I18n.T("Prescriptions & Dispensing")
+                </span>
+                <span class="badge badge-info" style="font-weight:700;">
+                    @Filtered.Count() @I18n.T("Listed")
+                </span>
+            </div>
+
+            <!-- Scanner / Search Filter Bar -->
+            <div class="rx-search-wrapper" style="margin-bottom:12px;">
+                <span class="rx-search-icon">📷</span>
+                <input type="text"
+                       class="rx-search-input"
+                       placeholder="@I18n.T("Scan Prescription QR (RX-XXXX) or Patient Name...")"
+                       @bind="rxScanQuery"
+                       @bind:event="oninput"
+                       @onkeydown="HandleRxScanKeyDown" />
+                @if (!string.IsNullOrWhiteSpace(rxScanQuery))
+                {
+                    <button type="button" class="rx-search-clear" @onclick="ClearRxScan">✕</button>
+                }
+            </div>
+
+            <!-- List of Recent Prescriptions -->
+            <div style="max-height: calc(100vh - 240px); overflow-y: auto; padding-right:2px;">
+                @if (!Filtered.Any())
+                {
+                    <div style="text-align:center; padding:32px 16px; color:#64748b;">
+                        <div style="font-size:24px; margin-bottom:4px;">🔍</div>
+                        <span style="font-weight:600;">@I18n.T("No matching prescriptions found.")</span>
+                    </div>
+                }
+                @foreach (var x in Filtered)
+                {
+                    var isSelected = editor.ID == x.ID;
+                    <div style="padding:10px 12px; margin-bottom:8px; border-radius:6px; border:1px solid @(isSelected ? "#0284c7" : "#e2e8f0"); background:@(isSelected ? "#f0f9ff" : "#ffffff"); transition:all 0.12s ease; cursor:pointer;"
+                         @onclick="() => SelectAsync(x.ID)">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px;">
+                            <div>
+                                <strong style="color:#0369a1; font-size:13px;">#RX-@x.ID</strong>
+                                <small style="margin-left:6px; color:#64748b; font-weight:600;">Visit #@x.VisitNo</small>
+                            </div>
+                            <span style="font-size:11px; color:#64748b; font-weight:600;">
+                                @(x.VisitDate?.ToString("dd MMM yyyy"))
+                            </span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div>
+                                <span style="font-weight:700; color:#0f172a; font-size:12.5px;">@x.Name</span>
+                                <small style="margin-left:6px; color:#64748b;">(@x.Age • @x.Sex)</small>
+                            </div>
+                            <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700; font-size:11px;">
+                                💊 @x.Medicines.Count @I18n.T("Meds")
+                            </span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:11.5px; color:#64748b;">
+                            <span>🩺 @DoctorName(x.ReferredBy)</span>
+                            <div style="display:flex; gap:4px;">
+                                <button type="button" class="btn btn-secondary" style="padding:2px 8px; font-size:11px;" @onclick:stopPropagation="true" @onclick="() => SelectAsync(x.ID)">
+                                    @I18n.T("View")
+                                </button>
+                                <a href="@($"/pharmacy/pos?prescriptionId={x.ID}")" class="btn btn-primary" style="padding:2px 8px; font-size:11px; background:#0284c7;" @onclick:stopPropagation="true">
+                                    @I18n.T("Dispense")
+                                </a>
+                                @if (canPrescribe)
+                                {
+                                    <button type="button" class="icon-btn danger" style="padding:2px 6px; font-size:10px;" @onclick:stopPropagation="true" @onclick="() => DeleteAsync(x.ID)">
+                                        ✕
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
         </div>
     </div>
 </div>
 
-@if(editor.ID>0)
+<!-- Printable A4 Prescription Sheet -->
+@if (editor.ID > 0)
 {
     <div id="prescription-print" class="print-sheet panel print-document" style="padding:0; background:transparent; border:none; box-shadow:none;">
         <PrescriptionA4PrintSheet
@@ -171,6 +622,7 @@
             Age="@editor.Age"
             Sex="@editor.Sex"
             BloodGroup="@editor.BloodGroup"
+            Weight="@(editor.Weight.HasValue ? $"{editor.Weight:0.##} kg" : weightText)"
             PrescriptionDate="@visitDate"
             DoctorName="@DoctorName(editor.ReferredBy)"
             DoctorQualification="@DoctorQualification(editor.ReferredBy)"
@@ -182,10 +634,11 @@
             SpecialAdvice="@editor.Remark"
             MedicationItems="@(lines.Select(x => new PrescriptionA4PrintSheet.PrescriptionMedItem {
                 MedicineName = MedicineName(x.ServiceID),
+                GenericOrType = MedicineGeneric(x.ServiceID),
                 Quantity = x.Quantity,
-                Dosage = x.Dose != null ? $"{x.Dose} Dose" : "1 + 0 + 1",
-                Duration = $"{x.Days} Days",
-                Instruction = x.Interval != null ? $"{x.Interval} times/day" : "After meal"
+                Dosage = !string.IsNullOrWhiteSpace(x.DosagePattern) ? x.DosagePattern : (x.Dose != null ? $"{x.Dose} Dose" : "1 + 0 + 1"),
+                Duration = $"{x.Days ?? 1} Days",
+                Instruction = !string.IsNullOrWhiteSpace(x.Instruction) ? x.Instruction : (x.Interval != null ? $"{x.Interval} times/day" : "After meal")
             }).ToList())" />
     </div>
 }
@@ -197,16 +650,107 @@
     [SupplyParameterFromQuery(Name = "patientId")]
     public string? QueryPatientId { get; set; }
 
-    private Prescription editor=NewEditor();
-    private List<PrescriptionMedicine> lines=[];
-    private List<Service> medicines=[];
-    private List<DoctorsProfile> doctors=[];
-    private List<Prescription> recent=[];
-    private DateTime visitDate=DateTime.Now;
-    private int doctorId,medicineId,quantity=1,days=1;
-    private decimal? dose=1,interval=1;
-    private string rxScanQuery="";
-    private string message="",messageClass="success";
+    // Prescription models
+    private Prescription editor = NewEditor();
+    private List<PrescriptionMedicine> lines = [];
+    private List<Service> rawMedicines = [];
+    private List<MedicineSearchItem> medItems = [];
+    private Dictionary<int, string> genericNames = [];
+    private Dictionary<int, string> typeNames = [];
+    private List<DoctorsProfile> doctors = [];
+    private List<Prescription> recent = [];
+    private List<Registration> registeredPatients = [];
+
+    // State & Selection
+    private DateTime visitDate = DateTime.Now;
+    private int doctorId;
+    private int medicineId;
+    private MedicineSearchItem? selectedMedicine;
+    private Registration? selectedPatient;
+    private string medicineSearchQuery = "";
+    private string patientSearchQuery = "";
+    private string weightText = "";
+    private bool showMedicineSuggestions;
+    private bool showPatientSuggestions;
+    private int highlightedMedIndex = 0;
+    private bool showClinicalSection = true;
+
+    // Intelligent Dosage Calculator State
+    private string dosagePattern = "1 + 0 + 1";
+    private string selectedInstruction = "After meal (ভরা পেটে)";
+    private int days = 7;
+    private int quantity = 14;
+    private int autoCalculatedQty = 14;
+    private bool isQuantityManual = false;
+    private decimal? dose = 1;
+
+    // Presets
+    private readonly (string Label, string Pattern, decimal DailyUnits)[] DosagePresets = new[]
+    {
+        ("1 + 0 + 1", "1 + 0 + 1", 2m),
+        ("1 + 1 + 1", "1 + 1 + 1", 3m),
+        ("1 + 0 + 0", "1 + 0 + 0", 1m),
+        ("0 + 0 + 1", "0 + 0 + 1", 1m),
+        ("0 + 1 + 0", "0 + 1 + 0", 1m),
+        ("2 + 0 + 2", "2 + 0 + 2", 4m),
+        ("1 + 1 + 1 + 1", "1 + 1 + 1 + 1", 4m),
+        ("½ + 0 + ½", "½ + 0 + ½", 1m),
+        ("Once Daily", "1 time daily", 1m),
+        ("PRN (প্রয়োজনে)", "As needed (PRN)", 1m)
+    };
+
+    private readonly (string Label, int Days)[] DurationPresets = new[]
+    {
+        ("3d", 3),
+        ("5d", 5),
+        ("7d", 7),
+        ("10d", 10),
+        ("14d", 14),
+        ("1m (30d)", 30),
+        ("2m (60d)", 60)
+    };
+
+    private readonly string[] InstructionPresets = new[]
+    {
+        "After meal (ভরা পেটে)",
+        "Before meal (খালি পেটে)",
+        "With meal (খাবারের সাথে)",
+        "At bedtime (ঘুমানোর আগে)",
+        "30 min before meal (খাবারের ৩০ মিনিট আগে)",
+        "As directed (নিয়ম অনুযায়ী)"
+    };
+
+    // Filtered search results
+    private List<MedicineSearchItem> FilteredMedicines
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(medicineSearchQuery)) return [];
+            var q = medicineSearchQuery.Trim();
+            return medItems.Where(m =>
+                m.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                (m.GenericName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (m.TypeName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).Take(15).ToList();
+        }
+    }
+
+    private IEnumerable<Registration> PatientSuggestions
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(patientSearchQuery)) return Enumerable.Empty<Registration>();
+            var q = patientSearchQuery.Trim();
+            return registeredPatients.Where(p =>
+                (p.PatientID?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.Contact?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).Take(6);
+        }
+    }
+
+    private string rxScanQuery = "";
+    private string message = "", messageClass = "success";
     private bool isSaving;
     private bool canPrescribe;
     private bool isAdministrator;
@@ -219,6 +763,226 @@
                          || (x.PatientID?.Contains(rxScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
                          || $"RX-{x.ID}".Contains(rxScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)).Take(100);
 
+    // =========================================================================
+    // Intelligent Dosage Calculator Logic
+    // =========================================================================
+    private decimal ParseDailyUnits(string? pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern)) return 1m;
+        var trimmed = pattern.Trim();
+
+        // Check if matching any preset directly
+        var matched = DosagePresets.FirstOrDefault(p => string.Equals(p.Pattern, trimmed, StringComparison.OrdinalIgnoreCase) || string.Equals(p.Label, trimmed, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(matched.Pattern)) return matched.DailyUnits;
+
+        // Split by '+', '-', or spaces
+        var parts = trimmed.Split(new[] { '+', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        decimal sum = 0;
+        bool foundAny = false;
+        foreach (var p in parts)
+        {
+            var clean = p.Trim();
+            if (clean == "½" || clean == "1/2")
+            {
+                sum += 0.5m;
+                foundAny = true;
+            }
+            else if (decimal.TryParse(clean, out var val))
+            {
+                sum += val;
+                foundAny = true;
+            }
+        }
+
+        if (foundAny && sum > 0) return sum;
+        if (decimal.TryParse(trimmed, out var num) && num > 0) return num;
+
+        return 1m;
+    }
+
+    private void RecalculateQuantity()
+    {
+        var daily = ParseDailyUnits(dosagePattern);
+        var d = Math.Max(1, days);
+        autoCalculatedQty = (int)Math.Ceiling(daily * d);
+        if (!isQuantityManual)
+        {
+            quantity = autoCalculatedQty;
+        }
+    }
+
+    private void SelectDosagePreset((string Label, string Pattern, decimal DailyUnits) preset)
+    {
+        dosagePattern = preset.Pattern;
+        RecalculateQuantity();
+    }
+
+    private void SelectDurationPreset(int d)
+    {
+        days = d;
+        RecalculateQuantity();
+    }
+
+    private void SelectInstructionPreset(string ins)
+    {
+        selectedInstruction = ins;
+    }
+
+    private void IncreaseDays()
+    {
+        days = Math.Min(365, days + 1);
+        RecalculateQuantity();
+    }
+
+    private void DecreaseDays()
+    {
+        days = Math.Max(1, days - 1);
+        RecalculateQuantity();
+    }
+
+    private void OnDaysChanged()
+    {
+        days = Math.Max(1, days);
+        RecalculateQuantity();
+    }
+
+    private void OnDosagePatternChanged()
+    {
+        RecalculateQuantity();
+    }
+
+    private void OnQuantityManuallyChanged()
+    {
+        isQuantityManual = true;
+    }
+
+    private void ResetQuantityToAuto()
+    {
+        isQuantityManual = false;
+        quantity = autoCalculatedQty;
+    }
+
+    // =========================================================================
+    // Medicine Auto-Suggest Dropdown Handlers
+    // =========================================================================
+    private void SelectMedicine(MedicineSearchItem item)
+    {
+        selectedMedicine = item;
+        medicineId = item.ID;
+        medicineSearchQuery = item.Name;
+        showMedicineSuggestions = false;
+        highlightedMedIndex = 0;
+        RecalculateQuantity();
+    }
+
+    private void ClearSelectedMedicine()
+    {
+        selectedMedicine = null;
+        medicineId = 0;
+        medicineSearchQuery = "";
+        showMedicineSuggestions = false;
+        highlightedMedIndex = 0;
+    }
+
+    private void ClearMedicineSearch()
+    {
+        medicineSearchQuery = "";
+        showMedicineSuggestions = false;
+        highlightedMedIndex = 0;
+    }
+
+    private void HandleMedicineSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "ArrowDown")
+        {
+            showMedicineSuggestions = true;
+            if (FilteredMedicines.Count > 0)
+                highlightedMedIndex = (highlightedMedIndex + 1) % FilteredMedicines.Count;
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            showMedicineSuggestions = true;
+            if (FilteredMedicines.Count > 0)
+                highlightedMedIndex = (highlightedMedIndex - 1 + FilteredMedicines.Count) % FilteredMedicines.Count;
+        }
+        else if (e.Key == "Enter")
+        {
+            if (showMedicineSuggestions && FilteredMedicines.Count > 0 && highlightedMedIndex >= 0 && highlightedMedIndex < FilteredMedicines.Count)
+            {
+                SelectMedicine(FilteredMedicines[highlightedMedIndex]);
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            showMedicineSuggestions = false;
+        }
+        else
+        {
+            showMedicineSuggestions = true;
+        }
+    }
+
+    // =========================================================================
+    // Patient Search & Selection
+    // =========================================================================
+    private void SelectPatient(Registration p)
+    {
+        selectedPatient = p;
+        editor.PatientID = p.PatientID;
+        editor.Name = p.Name;
+        editor.Age = FormatPatientAge(p.DateOfBirth);
+        editor.Sex = p.Sex;
+        editor.BloodGroup = p.BloodGroup;
+        if (!string.IsNullOrWhiteSpace(p.Weight))
+        {
+            weightText = $"{p.Weight} kg";
+            if (decimal.TryParse(p.Weight, out var w)) editor.Weight = w;
+        }
+
+        patientSearchQuery = "";
+        showPatientSuggestions = false;
+        _ = DetectAssignedDoctorAsync(p.PatientID);
+    }
+
+    private void ClearSelectedPatient()
+    {
+        selectedPatient = null;
+        editor.PatientID = null;
+        patientSearchQuery = "";
+    }
+
+    private void ClearPatientSearch()
+    {
+        patientSearchQuery = "";
+        showPatientSuggestions = false;
+    }
+
+    private async Task HandlePatientSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await FindPatientDirectAsync();
+        }
+    }
+
+    private async Task FindPatientDirectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(patientSearchQuery)) return;
+        showPatientSuggestions = false;
+        editor.PatientID = patientSearchQuery.Trim();
+        await FindPatientAsync();
+    }
+
+    private static string FormatPatientAge(DateTime? dob)
+    {
+        if (dob.HasValue && dob.Value.Year > 1900)
+            return $"{Math.Max(1, DateTime.Today.Year - dob.Value.Year)}Y";
+        return "35Y";
+    }
+
+    // =========================================================================
+    // Barcode / Scanner Search
+    // =========================================================================
     private void ClearRxScan() => rxScanQuery = "";
 
     private async Task HandleRxScanKeyDown(KeyboardEventArgs e)
@@ -269,14 +1033,19 @@
         await FindPatientAsync();
     }
 
+    // =========================================================================
+    // Initialization & Data Loading
+    // =========================================================================
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        var principal=(await AuthStateProvider.GetAuthenticationStateAsync()).User;
-        isAdministrator=principal.IsInRole(RoleNames.Administrator);
-        if(int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim),out var mappedDoctorId))currentDoctorProfileId=mappedDoctorId;
-        canPrescribe=isAdministrator||principal.IsInRole(RoleNames.Doctor)||principal.IsInRole(RoleNames.PharmacyOperator)||principal.IsInRole(RoleNames.Reception)||currentDoctorProfileId.HasValue;
-        if(currentDoctorProfileId.HasValue)doctorId=currentDoctorProfileId.Value;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedDoctorId))
+            currentDoctorProfileId = mappedDoctorId;
+        canPrescribe = isAdministrator || principal.IsInRole(RoleNames.Doctor) || principal.IsInRole(RoleNames.PharmacyOperator) || principal.IsInRole(RoleNames.Reception) || currentDoctorProfileId.HasValue;
+        if (currentDoctorProfileId.HasValue) doctorId = currentDoctorProfileId.Value;
+        RecalculateQuantity();
         await LoadAsync();
     }
 
@@ -291,6 +1060,83 @@
         }
     }
 
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        
+        // 1. Load Generic Names & Medicine Types dictionaries
+        genericNames = await db.GenericGroups.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name ?? "");
+        typeNames = await db.MedicineTypes.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Type ?? "");
+
+        // 2. Load Services where CategoryID = 3 (Medicines)
+        rawMedicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+        medItems = rawMedicines.Select(m => new MedicineSearchItem
+        {
+            ID = m.ID,
+            Name = m.Name ?? "Medicine",
+            GenericName = m.GenericID.HasValue && genericNames.TryGetValue(m.GenericID.Value, out var g) ? g : null,
+            TypeName = m.TypeID.HasValue && typeNames.TryGetValue(m.TypeID.Value, out var t) ? t : null,
+            SaleRate = m.SaleRate ?? 0
+        }).ToList();
+
+        // 3. Load active doctors
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive == true).OrderBy(x => x.Name).ToListAsync();
+
+        // 4. Load recent patients for search dropdown
+        registeredPatients = await db.Registrations.AsNoTracking().OrderByDescending(x => x.ID).Take(150).ToListAsync();
+
+        // 5. Load recent prescriptions
+        recent = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).OrderByDescending(x => x.ID).Take(150).ToListAsync();
+    }
+
+    private async Task DetectAssignedDoctorAsync(string? pid)
+    {
+        if (string.IsNullOrWhiteSpace(pid)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var opdTicket = await db.OPDTickets.AsNoTracking().Where(x => x.RegNo == pid && x.DoctorID > 0).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+        var appt = await db.DoctorAppointments.AsNoTracking().Where(x => x.PatientID == pid && x.DoctorID > 0).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+        var encounter = await db.PatientEncounters.AsNoTracking().Where(x => x.PatientID == pid && x.DoctorID > 0).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+        var admission = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == pid && x.Consultant > 0).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+        var prevRx = await db.Prescriptions.AsNoTracking().Where(x => x.PatientID == pid && x.ReferredBy > 0).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+
+        int assignedDoctorId = opdTicket?.DoctorID
+            ?? appt?.DoctorID
+            ?? encounter?.DoctorID
+            ?? admission?.Consultant
+            ?? prevRx?.ReferredBy
+            ?? 0;
+
+        if (assignedDoctorId > 0 && doctors.Any(d => d.ID == assignedDoctorId))
+        {
+            doctorId = assignedDoctorId;
+            editor.ReferredBy = assignedDoctorId;
+        }
+        else if (doctorId == 0 && currentDoctorProfileId.HasValue && doctors.Any(d => d.ID == currentDoctorProfileId.Value))
+        {
+            doctorId = currentDoctorProfileId.Value;
+            editor.ReferredBy = doctorId;
+        }
+
+        if (opdTicket != null)
+        {
+            editor.TicketID = opdTicket.ID;
+            if (!string.IsNullOrWhiteSpace(opdTicket.Comments) && string.IsNullOrWhiteSpace(editor.Complain))
+                editor.Complain = opdTicket.Comments;
+        }
+
+        if (encounter != null)
+        {
+            editor.EncounterID = encounter.ID;
+            if (!string.IsNullOrWhiteSpace(encounter.Diagnosis) && string.IsNullOrWhiteSpace(editor.Diagnosis))
+                editor.Diagnosis = encounter.Diagnosis;
+            if (!string.IsNullOrWhiteSpace(encounter.ChiefComplaint) && string.IsNullOrWhiteSpace(editor.Complain))
+                editor.Complain = encounter.ChiefComplaint;
+        }
+    }
+
     private async Task FindPatientAsync()
     {
         if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
@@ -299,74 +1145,8 @@
         var p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == pid);
         if (p != null)
         {
-            editor.Name = p.Name;
-            editor.Age = p.DateOfBirth.Year > 1900 ? $"{Math.Max(1, DateTime.Today.Year - p.DateOfBirth.Year)}Y" : (!string.IsNullOrWhiteSpace(editor.Age) ? editor.Age : "35Y");
-            editor.Sex = p.Sex;
-            editor.BloodGroup = p.BloodGroup;
-
-            // Auto-detect Appointed Doctor / OPD Doctor for this patient
-            var opdTicket = await db.OPDTickets.AsNoTracking()
-                .Where(x => x.RegNo == pid && x.DoctorID > 0)
-                .OrderByDescending(x => x.ID)
-                .FirstOrDefaultAsync();
-
-            var appt = await db.DoctorAppointments.AsNoTracking()
-                .Where(x => x.PatientID == pid && x.DoctorID > 0)
-                .OrderByDescending(x => x.ID)
-                .FirstOrDefaultAsync();
-
-            var encounter = await db.PatientEncounters.AsNoTracking()
-                .Where(x => x.PatientID == pid && x.DoctorID > 0)
-                .OrderByDescending(x => x.ID)
-                .FirstOrDefaultAsync();
-
-            var admission = await db.PatientAdmissions.AsNoTracking()
-                .Where(x => x.PatientID == pid && x.Consultant > 0)
-                .OrderByDescending(x => x.ID)
-                .FirstOrDefaultAsync();
-
-            var prevRx = await db.Prescriptions.AsNoTracking()
-                .Where(x => x.PatientID == pid && x.ReferredBy > 0)
-                .OrderByDescending(x => x.ID)
-                .FirstOrDefaultAsync();
-
-            int assignedDoctorId = opdTicket?.DoctorID
-                ?? appt?.DoctorID
-                ?? encounter?.DoctorID
-                ?? admission?.Consultant
-                ?? prevRx?.ReferredBy
-                ?? 0;
-
-            if (assignedDoctorId > 0 && doctors.Any(d => d.ID == assignedDoctorId))
-            {
-                doctorId = assignedDoctorId;
-                editor.ReferredBy = assignedDoctorId;
-            }
-            else if (doctorId == 0 && currentDoctorProfileId.HasValue && doctors.Any(d => d.ID == currentDoctorProfileId.Value))
-            {
-                doctorId = currentDoctorProfileId.Value;
-                editor.ReferredBy = doctorId;
-            }
-
-            if (opdTicket != null)
-            {
-                editor.TicketID = opdTicket.ID;
-                if (!string.IsNullOrWhiteSpace(opdTicket.Comments) && string.IsNullOrWhiteSpace(editor.Complain))
-                    editor.Complain = opdTicket.Comments;
-            }
-
-            if (encounter != null)
-            {
-                editor.EncounterID = encounter.ID;
-                if (!string.IsNullOrWhiteSpace(encounter.Diagnosis) && string.IsNullOrWhiteSpace(editor.Diagnosis))
-                    editor.Diagnosis = encounter.Diagnosis;
-                if (!string.IsNullOrWhiteSpace(encounter.ChiefComplaint) && string.IsNullOrWhiteSpace(editor.Complain))
-                    editor.Complain = encounter.ChiefComplaint;
-            }
-
-            var docLabel = DoctorName(doctorId);
-            var docSuffix = !string.IsNullOrWhiteSpace(docLabel) && docLabel != "—" ? $" ও নিযুক্ত ডাক্তার '{docLabel}'" : "";
-            Success(I18n.IsBangla ? $"রোগী '{p.Name}' (PID: {p.PatientID}){docSuffix} এর তথ্য লোড হয়েছে।" : $"Patient '{p.Name}' and doctor details loaded.");
+            SelectPatient(p);
+            Success(I18n.IsBangla ? $"রোগী '{p.Name}' (PID: {p.PatientID}) এর তথ্য লোড হয়েছে।" : $"Patient '{p.Name}' loaded.");
         }
         else
         {
@@ -389,6 +1169,11 @@
         editor.Age = encounter.Age;
         editor.Sex = encounter.Sex ?? patient?.Sex;
         editor.BloodGroup = patient?.BloodGroup;
+        if (!string.IsNullOrWhiteSpace(patient?.Weight))
+        {
+            weightText = $"{patient.Weight} kg";
+            if (decimal.TryParse(patient.Weight, out var w)) editor.Weight = w;
+        }
         editor.Diagnosis = encounter.Diagnosis;
         editor.Complain = encounter.ChiefComplaint;
         doctorId = encounter.DoctorID;
@@ -396,43 +1181,61 @@
         Success(I18n.T("Patient loaded from the doctor queue."));
     }
 
-    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-
-    private async Task LoadAsync()
-    {
-        await using var db=await DbFactory.CreateDbContextAsync();
-        medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).OrderBy(x=>x.Name).ToListAsync();
-        doctors=await db.Doctors.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
-        recent=await db.Prescriptions.AsNoTracking().Include(x=>x.Medicines).OrderByDescending(x=>x.ID).Take(150).ToListAsync();
-    }
-
+    // =========================================================================
+    // Add Medicine to Cart
+    // =========================================================================
     private void AddMedicine()
     {
-        if(!canPrescribe){Fail(I18n.T("Only the assigned doctor can write a prescription."));return;}
-        if(medicineId<=0||quantity<=0||days<=0||(dose??0)<=0||(interval??0)<=0){
-            Fail(I18n.IsBangla ? "ঔষধ, পরিমাণ, মাত্রা ও দিনের সংখ্যা সঠিক হতে হবে।" : "Medicine, positive quantity, dose, times/day and days are required.");
+        if (!canPrescribe) { Fail(I18n.T("Only the assigned doctor can write a prescription.")); return; }
+        var actualMedId = medicineId > 0 ? medicineId : (selectedMedicine?.ID ?? 0);
+        if (actualMedId <= 0 || quantity <= 0 || days <= 0)
+        {
+            Fail(I18n.IsBangla ? "ঔষধ নির্বাচন করুন এবং সঠিক পরিমাণ লিখুন।" : "Please select a valid medicine and positive quantity.");
             return;
         }
-        var existing=lines.FirstOrDefault(x=>x.ServiceID==medicineId);
-        if(existing!=null){
-            existing.Quantity+=quantity;
-            existing.Dose=dose;
-            existing.Interval=interval;
-            existing.Days=days;
+
+        var cleanPattern = string.IsNullOrWhiteSpace(dosagePattern) ? "1 + 0 + 1" : dosagePattern.Trim();
+        var cleanInstruction = string.IsNullOrWhiteSpace(selectedInstruction) ? "After meal" : selectedInstruction.Trim();
+        var dailyUnits = ParseDailyUnits(cleanPattern);
+
+        var existing = lines.FirstOrDefault(x => x.ServiceID == actualMedId);
+        if (existing != null)
+        {
+            existing.Quantity += quantity;
+            existing.Dose = dose;
+            existing.Interval = dailyUnits;
+            existing.Days = days;
+            existing.DosagePattern = cleanPattern;
+            existing.Instruction = cleanInstruction;
         }
-        else lines.Add(new PrescriptionMedicine{ServiceID=medicineId,Quantity=quantity,Dose=dose,Interval=interval,Days=days});
-        medicineId=0;
-        quantity=1;
-        days=1;
-        dose=1;
-        interval=1;
-        message="";
+        else
+        {
+            lines.Add(new PrescriptionMedicine
+            {
+                ServiceID = actualMedId,
+                Quantity = quantity,
+                Dose = dose,
+                Interval = dailyUnits,
+                Days = days,
+                DosagePattern = cleanPattern,
+                Instruction = cleanInstruction
+            });
+        }
+
+        // Reset medicine selector for next item
+        ClearSelectedMedicine();
+        isQuantityManual = false;
+        RecalculateQuantity();
+        message = "";
     }
 
+    // =========================================================================
+    // Save Prescription
+    // =========================================================================
     private async Task SaveAsync()
     {
-        if(!canPrescribe){Fail(I18n.T("Only authorized medical and pharmacy staff can sign prescriptions."));return;}
-        if(!isAdministrator && currentDoctorProfileId.HasValue && doctorId != currentDoctorProfileId.Value)
+        if (!canPrescribe) { Fail(I18n.T("Only authorized medical staff can sign prescriptions.")); return; }
+        if (!isAdministrator && currentDoctorProfileId.HasValue && doctorId != currentDoctorProfileId.Value)
         {
             Fail(I18n.T("A doctor cannot sign a prescription under another doctor's name."));
             return;
@@ -447,73 +1250,92 @@
         isSaving = true;
         try
         {
-            var target = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            // Parse weight if provided
+            if (!string.IsNullOrWhiteSpace(weightText))
             {
-            Prescription target;
-            var day = visitDate.Date;
-            if (editor.ID == 0)
-            {
-                await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Prescription:{day:yyyyMMdd}");
-                var next = (await db.Prescriptions
-                    .Where(x => x.VisitDate == day)
-                    .MaxAsync(x => (int?)x.VisitNo) ?? 0) + 1;
-                target = new Prescription { VisitNo = next };
-                db.Prescriptions.Add(target);
-            }
-            else
-            {
-                if (await db.PrescriptionDispenses.AnyAsync(x => x.PrescriptionID == editor.ID))
-                    throw new InvalidOperationException(I18n.IsBangla ? "ইতিমধ্যে ঔষধ প্রদান করা প্রেসক্রিপশন সম্পাদনা করা যাবে না।" : "A dispensed prescription cannot be edited.");
-                target = await db.Prescriptions.Include(x => x.Medicines).SingleAsync(x => x.ID == editor.ID);
-                db.PrescriptionMedicines.RemoveRange(target.Medicines);
-                if (target.VisitDate?.Date != day)
+                var cleanWeight = weightText.Replace("kg", "", StringComparison.OrdinalIgnoreCase).Trim();
+                if (decimal.TryParse(cleanWeight, out var parsedW))
                 {
-                    await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Prescription:{day:yyyyMMdd}");
-                    target.VisitNo = (await db.Prescriptions
-                        .Where(x => x.VisitDate == day)
-                        .MaxAsync(x => (int?)x.VisitNo) ?? 0) + 1;
+                    editor.Weight = parsedW;
                 }
             }
 
-            target.Name = editor.Name;
-            target.Age = editor.Age?.Trim();
-            target.Sex = editor.Sex;
-            target.BloodGroup = editor.BloodGroup?.Trim();
-            target.VisitDate = day;
-            target.Type = "OPD";
-            target.Diagnosis = editor.Diagnosis?.Trim();
-            target.Complain = editor.Complain?.Trim();
-            target.Investigation = editor.Investigation?.Trim();
-            target.Remark = editor.Remark?.Trim();
-            target.ReferredBy = doctorId;
-            target.PatientID = editor.PatientID;
-            target.EncounterID = editor.EncounterID;
-            target.TicketID = editor.TicketID;
-            target.Status = "Signed";
-            target.CreatedBy ??= await CurrentUserIdAsync();
-            target.SignedAt = DateTime.Now;
-            target.Medicine = lines.Count > 0
-                ? string.Join("; ", lines.Select(x => $"{MedicineName(x.ServiceID)} x {x.Quantity}"))
-                : (!string.IsNullOrWhiteSpace(target.Investigation) ? $"Advised Investigations: {target.Investigation}" : "Clinical Consultation");
-            target.Medicines = lines.Select((x, i) => new PrescriptionMedicine
+            var target = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
-                ServiceID = x.ServiceID,
-                Dose = x.Dose,
-                Interval = x.Interval,
-                Days = x.Days,
-                Quantity = x.Quantity,
-                SLNO = i + 1
-            }).ToList();
-            await db.SaveChangesAsync();
-            if (target.EncounterID.HasValue)
-            {
-                var encounter = await db.PatientEncounters.SingleAsync(x => x.ID == target.EncounterID.Value);
-                encounter.ChiefComplaint = target.Complain;
-                encounter.Diagnosis = target.Diagnosis;
-                encounter.UpdatedAt = DateTime.Now;
+                Prescription target;
+                var day = visitDate.Date;
+                if (editor.ID == 0)
+                {
+                    await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Prescription:{day:yyyyMMdd}");
+                    var next = (await db.Prescriptions
+                        .Where(x => x.VisitDate == day)
+                        .MaxAsync(x => (int?)x.VisitNo) ?? 0) + 1;
+                    target = new Prescription { VisitNo = next };
+                    db.Prescriptions.Add(target);
+                }
+                else
+                {
+                    if (await db.PrescriptionDispenses.AnyAsync(x => x.PrescriptionID == editor.ID))
+                        throw new InvalidOperationException(I18n.IsBangla ? "ইতিমধ্যে ঔষধ প্রদান করা প্রেসক্রিপশন সম্পাদনা করা যাবে না।" : "A dispensed prescription cannot be edited.");
+                    target = await db.Prescriptions.Include(x => x.Medicines).SingleAsync(x => x.ID == editor.ID);
+                    db.PrescriptionMedicines.RemoveRange(target.Medicines);
+                    if (target.VisitDate?.Date != day)
+                    {
+                        await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Prescription:{day:yyyyMMdd}");
+                        target.VisitNo = (await db.Prescriptions
+                            .Where(x => x.VisitDate == day)
+                            .MaxAsync(x => (int?)x.VisitNo) ?? 0) + 1;
+                    }
+                }
+
+                target.Name = editor.Name;
+                target.Age = editor.Age?.Trim();
+                target.Sex = editor.Sex;
+                target.BloodGroup = editor.BloodGroup?.Trim();
+                target.Weight = editor.Weight;
+                target.VisitDate = day;
+                target.Type = "OPD";
+                target.Diagnosis = editor.Diagnosis?.Trim();
+                target.Complain = editor.Complain?.Trim();
+                target.Investigation = editor.Investigation?.Trim();
+                target.Remark = editor.Remark?.Trim();
+                target.ReferredBy = doctorId;
+                target.PatientID = editor.PatientID;
+                target.EncounterID = (editor.ID == 0 && editor.EncounterID.HasValue && await db.Prescriptions.AnyAsync(x => x.EncounterID == editor.EncounterID.Value))
+                    ? null
+                    : editor.EncounterID;
+                target.TicketID = editor.TicketID;
+                target.Status = "Signed";
+                target.CreatedBy ??= await CurrentUserIdAsync();
+                target.SignedAt = DateTime.Now;
+                target.Medicine = lines.Count > 0
+                    ? string.Join("; ", lines.Select(x => $"{MedicineName(x.ServiceID)} ({x.DosagePattern ?? "1+0+1"}) x {x.Days}d = {x.Quantity}"))
+                    : (!string.IsNullOrWhiteSpace(target.Investigation) ? $"Advised Investigations: {target.Investigation}" : "Clinical Consultation");
+
+                target.Medicines = lines.Select((x, i) => new PrescriptionMedicine
+                {
+                    ServiceID = x.ServiceID,
+                    Dose = x.Dose,
+                    Interval = x.Interval,
+                    Days = x.Days,
+                    Quantity = x.Quantity,
+                    SLNO = i + 1,
+                    DosagePattern = x.DosagePattern,
+                    Instruction = x.Instruction
+                }).ToList();
+
                 await db.SaveChangesAsync();
-            }
-            return target;
+
+                if (target.EncounterID.HasValue)
+                {
+                    var encounter = await db.PatientEncounters.SingleAsync(x => x.ID == target.EncounterID.Value);
+                    encounter.ChiefComplaint = target.Complain;
+                    encounter.Diagnosis = target.Diagnosis;
+                    encounter.UpdatedAt = DateTime.Now;
+                    await db.SaveChangesAsync();
+                }
+
+                return target;
             }, System.Data.IsolationLevel.Serializable);
 
             editor = target;
@@ -526,44 +1348,76 @@
                 Interval = x.Interval,
                 Days = x.Days,
                 Quantity = x.Quantity,
-                SLNO = x.SLNO
+                SLNO = x.SLNO,
+                DosagePattern = x.DosagePattern,
+                Instruction = x.Instruction
             }).ToList();
-            Success(I18n.IsBangla ? $"প্রেসক্রিপশন #{target.ID} সংরক্ষিত হয়েছে (ভিজিট সিরিয়াল #{target.VisitNo})।" : $"Prescription #{target.ID} saved with daily visit serial #{target.VisitNo}.");
+
+            Success(I18n.IsBangla ? $"প্রেসক্রিপশন #RX-{target.ID} সফলভাবে সংরক্ষিত হয়েছে (ভিজিট #{target.VisitNo})।" : $"Prescription #RX-{target.ID} saved with visit #{target.VisitNo}.");
             await LoadAsync();
         }
         catch (Exception ex)
         {
             Fail(ex.GetBaseException().Message);
         }
-        finally { isSaving = false; }
+        finally
+        {
+            isSaving = false;
+        }
     }
 
     private async Task SelectAsync(long id)
     {
-        await using var db=await DbFactory.CreateDbContextAsync();
-        var x=await db.Prescriptions.AsNoTracking().Include(x=>x.Medicines).SingleAsync(x=>x.ID==id);
-        editor=x;
-        visitDate=x.VisitDate??DateTime.Now;
-        doctorId=x.ReferredBy??0;
-        lines=x.Medicines.OrderBy(x=>x.SLNO).Select(x=>new PrescriptionMedicine{ID=x.ID,PrescriptionID=x.PrescriptionID,ServiceID=x.ServiceID,Dose=x.Dose,Interval=x.Interval,Days=x.Days,Quantity=x.Quantity,SLNO=x.SLNO}).ToList();
-        message="";
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var x = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).SingleAsync(x => x.ID == id);
+        editor = x;
+        visitDate = x.VisitDate ?? DateTime.Now;
+        doctorId = x.ReferredBy ?? 0;
+        weightText = x.Weight.HasValue ? $"{x.Weight:0.##} kg" : "";
+
+        if (!string.IsNullOrWhiteSpace(x.PatientID))
+        {
+            selectedPatient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(p => p.PatientID == x.PatientID);
+        }
+        else
+        {
+            selectedPatient = null;
+        }
+
+        lines = x.Medicines.OrderBy(m => m.SLNO).Select(m => new PrescriptionMedicine
+        {
+            ID = m.ID,
+            PrescriptionID = m.PrescriptionID,
+            ServiceID = m.ServiceID,
+            Dose = m.Dose,
+            Interval = m.Interval,
+            Days = m.Days,
+            Quantity = m.Quantity,
+            SLNO = m.SLNO,
+            DosagePattern = !string.IsNullOrWhiteSpace(m.DosagePattern) ? m.DosagePattern : (m.Interval == 2 ? "1 + 0 + 1" : (m.Interval == 3 ? "1 + 1 + 1" : (m.Interval == 1 ? "1 + 0 + 0" : $"{m.Interval} times/day"))),
+            Instruction = !string.IsNullOrWhiteSpace(m.Instruction) ? m.Instruction : "After meal"
+        }).ToList();
+
+        message = "";
     }
 
     private async Task DeleteAsync(long id)
     {
-        if(!canPrescribe){Fail(I18n.T("Only a doctor or administrator can delete a prescription."));return;}
-        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্রেসক্রিপশন #{id} মুছে ফেলতে চান?" : $"Delete prescription #{id}?")) return;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(await db.PrescriptionDispenses.AnyAsync(x=>x.PrescriptionID==id)){
+        if (!canPrescribe) { Fail(I18n.T("Only a doctor or administrator can delete a prescription.")); return; }
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্রেসক্রিপশন #{id} মুছে ফেলতে চান?" : $"Delete prescription #{id}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.PrescriptionDispenses.AnyAsync(x => x.PrescriptionID == id))
+        {
             Fail(I18n.IsBangla ? "ঔষধ বিতরণকৃত প্রেসক্রিপশন মুছে ফেলা যাবে না।" : "Dispensed prescription cannot be deleted.");
             return;
         }
-        var x=await db.Prescriptions.FindAsync(id);
-        if(x!=null){
+        var x = await db.Prescriptions.FindAsync(id);
+        if (x != null)
+        {
             db.Remove(x);
             await db.SaveChangesAsync();
         }
-        if(editor.ID==id) Reset();
+        if (editor.ID == id) Reset();
         Success(I18n.IsBangla ? "প্রেসক্রিপশন মুছে ফেলা হয়েছে।" : "Prescription deleted.");
         await LoadAsync();
     }
@@ -578,20 +1432,57 @@
                   .ToList();
     }
 
-    private async Task PrintAsync()=>await JS.InvokeVoidAsync("hpm.printElement","prescription-print", $"Prescription - {editor.Name} (Rx #{editor.ID})");
-    private async Task<int> CurrentUserIdAsync(){var p=(await AuthStateProvider.GetAuthenticationStateAsync()).User;return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;}
-    private void Reset(){editor=NewEditor();lines=[];visitDate=DateTime.Now;doctorId=currentDoctorProfileId??0;medicineId=0;message="";}
-    private static Prescription NewEditor()=>new(){Sex=""};
-    private string MedicineName(int id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private string DoctorName(int? id){var x=doctors.FirstOrDefault(x=>x.ID==id);return x==null?"—":$"{x.Title} {x.Name}";}
-    private string DoctorQualification(int? id){var x=doctors.FirstOrDefault(x=>x.ID==id);return x?.Degree??"MBBS, Specialist Consultant";}
-    private string DoctorDesignation(int? id){var x=doctors.FirstOrDefault(x=>x.ID==id);return x?.Attachment??"Consultant Physician";}
-    private string DoctorDeptName(int? id){return "Clinical Medicine";}
-    private void Success(string x){messageClass="success";message=x;}
-    private void Fail(string x){messageClass="danger";message=x;}
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "prescription-print", $"Prescription - {editor.Name} (Rx #{editor.ID})");
+    private async Task<int> CurrentUserIdAsync() { var p = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(p.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
+    
+    private void Reset()
+    {
+        editor = NewEditor();
+        lines = [];
+        visitDate = DateTime.Now;
+        doctorId = currentDoctorProfileId ?? 0;
+        selectedMedicine = null;
+        selectedPatient = null;
+        medicineId = 0;
+        medicineSearchQuery = "";
+        patientSearchQuery = "";
+        weightText = "";
+        dosagePattern = "1 + 0 + 1";
+        selectedInstruction = "After meal (ভরা পেটে)";
+        days = 7;
+        quantity = 14;
+        autoCalculatedQty = 14;
+        isQuantityManual = false;
+        message = "";
+    }
+
+    private static Prescription NewEditor() => new() { Sex = "" };
+    private string MedicineName(int id) => rawMedicines.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string? MedicineGeneric(int id)
+    {
+        var med = rawMedicines.FirstOrDefault(x => x.ID == id);
+        if (med?.GenericID.HasValue == true && genericNames.TryGetValue(med.GenericID.Value, out var g))
+            return g;
+        return null;
+    }
+    private string DoctorName(int? id) { var x = doctors.FirstOrDefault(x => x.ID == id); return x == null ? "—" : $"{x.Title} {x.Name}"; }
+    private string DoctorQualification(int? id) { var x = doctors.FirstOrDefault(x => x.ID == id); return x?.Degree ?? "MBBS, Specialist Consultant"; }
+    private string DoctorDesignation(int? id) { var x = doctors.FirstOrDefault(x => x.ID == id); return x?.Attachment ?? "Consultant Physician"; }
+    private string DoctorDeptName(int? id) { return "Clinical Medicine"; }
+    private void Success(string x) { messageClass = "success"; message = x; }
+    private void Fail(string x) { messageClass = "danger"; message = x; }
 
     public void Dispose()
     {
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    public sealed class MedicineSearchItem
+    {
+        public int ID { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string? GenericName { get; set; }
+        public string? TypeName { get; set; }
+        public decimal SaleRate { get; set; }
     }
 }

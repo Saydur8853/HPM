@@ -10,6 +10,8 @@ public sealed class Registration
     public DateTime DateOfBirth { get; set; } = DateTime.Today;
     [Required, StringLength(10)] public string Sex { get; set; } = string.Empty;
     [StringLength(10)] public string? BloodGroup { get; set; }
+    [StringLength(20)] public string? Weight { get; set; }
+    public string? PhotoData { get; set; }
     [StringLength(100)] public string? FatherName { get; set; }
     [StringLength(100)] public string? MotherName { get; set; }
     [StringLength(50)] public string? CareOf { get; set; }
@@ -36,6 +38,7 @@ public sealed class DoctorAppointment
     public DateTime ApptDate { get; set; } = DateTime.Today;
     [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
     [StringLength(50)] public string? Age { get; set; }
+    [StringLength(20)] public string? Weight { get; set; }
     [StringLength(20)] public string? ContactNo { get; set; }
     [StringLength(11)] public string? PatientID { get; set; }
     [Required, StringLength(30)] public string Status { get; set; } = "Booked";
