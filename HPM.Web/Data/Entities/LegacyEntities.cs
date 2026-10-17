@@ -38,6 +38,7 @@ public sealed class DoctorAppointment
     public DateTime ApptDate { get; set; } = DateTime.Today;
     [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
     [StringLength(50)] public string? Age { get; set; }
+    [StringLength(50)] public string? Sex { get; set; }
     [StringLength(20)] public string? Weight { get; set; }
     [StringLength(20)] public string? ContactNo { get; set; }
     [StringLength(11)] public string? PatientID { get; set; }

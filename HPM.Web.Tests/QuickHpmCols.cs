@@ -615,3 +615,5 @@ SELECT SCOPE_IDENTITY();";
         _output.WriteLine("Inserted prescription medicines successfully.");
     }
 }
+
+

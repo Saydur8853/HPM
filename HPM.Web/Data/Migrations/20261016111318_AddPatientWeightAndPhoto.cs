@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -11,31 +11,24 @@ namespace HPM.Web.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<string>(
-                name: "Photo_Data",
-                table: "Registration",
-                type: "nvarchar(max)",
-                nullable: true);
-
-            migrationBuilder.AddColumn<string>(
-                name: "Weight",
-                table: "Registration",
-                type: "nvarchar(20)",
-                maxLength: 20,
-                nullable: true);
-
-            migrationBuilder.AddColumn<bool>(
-                name: "Is_Active",
-                table: "Doctors_Profile",
-                type: "bit",
-                nullable: false,
-                defaultValue: true);
-
-            migrationBuilder.AddColumn<int>(
-                name: "Priority",
-                table: "Doctors_Profile",
-                type: "int",
-                nullable: true);
+            migrationBuilder.Sql(@"
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Photo_Data')
+                BEGIN
+                    ALTER TABLE [Registration] ADD [Photo_Data] nvarchar(max) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Weight')
+                BEGIN
+                    ALTER TABLE [Registration] ADD [Weight] nvarchar(20) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'Is_Active')
+                BEGIN
+                    ALTER TABLE [Doctors_Profile] ADD [Is_Active] bit NOT NULL DEFAULT 1;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'Priority')
+                BEGIN
+                    ALTER TABLE [Doctors_Profile] ADD [Priority] int NULL;
+                END
+            ");
 
             migrationBuilder.CreateTable(
                 name: "Canteen_Category",

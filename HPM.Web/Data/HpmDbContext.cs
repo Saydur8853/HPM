@@ -407,6 +407,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.ApptDate).HasColumnName("Appt_Date").HasColumnType("date");
         e.Property(x => x.Name).HasMaxLength(100);
         e.Property(x => x.Age).HasMaxLength(50);
+        e.Property(x => x.Sex).HasColumnName("Sex").HasMaxLength(50);
         e.Property(x => x.Weight).HasColumnName("Weight").HasMaxLength(20);
         e.Property(x => x.ContactNo).HasColumnName("Contact_No").HasMaxLength(20);
         e.Property(x => x.PatientID).HasColumnName("Patient_ID").HasMaxLength(11);

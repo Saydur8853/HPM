@@ -121,6 +121,14 @@ await using (var scope = app.Services.CreateAsyncScope())
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Database.MigrateAsync();
 
+        var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
+        if (!await roleManager.RoleExistsAsync(RoleNames.Authorizer))
+        {
+            var roleResult = await roleManager.CreateAsync(new IdentityRole<int>(RoleNames.Authorizer));
+            if (!roleResult.Succeeded)
+                throw new InvalidOperationException(string.Join("; ", roleResult.Errors.Select(x => x.Description)));
+        }
+
         const string patientColSql = """
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Weight')
             BEGIN
@@ -133,6 +141,10 @@ await using (var scope = app.Services.CreateAsyncScope())
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctor_Appointment]') AND name = 'Weight')
             BEGIN
                 ALTER TABLE [Doctor_Appointment] ADD [Weight] nvarchar(20) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctor_Appointment]') AND name = 'Sex')
+            BEGIN
+                ALTER TABLE [Doctor_Appointment] ADD [Sex] nvarchar(50) NULL;
             END
         """;
         await db.Database.ExecuteSqlRawAsync(patientColSql);
