@@ -61,4 +61,8 @@ public sealed class LabTestResult
     public DateTime? ReportedAt { get; set; }
     public int? ReportedBy { get; set; }
     public bool IsVerified { get; set; }
+    [Required, StringLength(20)] public string Status { get; set; } = "Active";
+    public int? CancelledBy { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    [StringLength(500)] public string? CancellationReason { get; set; }
 }

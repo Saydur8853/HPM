@@ -22,14 +22,6 @@
                 <span>🔬</span>
                 <span>@(isIpdMode ? I18n.T("IPD Investigation Cash Memo") : I18n.T("OPD Investigation Cash Memo"))</span>
             </h1>
-            <div class="diagnostic-mode-toggle" role="group" aria-label="Patient Type">
-                <button type="button" class="mode-toggle-btn @(!isIpdMode ? "active" : "")" @onclick='() => SetPatientTypeAsync("1")' title="@I18n.T("Switch to OPD Outpatient Billing")">
-                    🏥 OPD
-                </button>
-                <button type="button" class="mode-toggle-btn @(isIpdMode ? "active" : "")" @onclick='() => SetPatientTypeAsync("2")' title="@I18n.T("Switch to IPD Inpatient Billing")">
-                    🛏️ IPD
-                </button>
-            </div>
             @if (!string.IsNullOrWhiteSpace(message))
             {
                 <span class="tickets-inline-alert @messageClass" title="@message">
@@ -68,9 +60,41 @@
                     </span>
                 </div>
                 <div class="diagnostic-card-header-actions">
+                    <div class="diagnostic-billing-type-picker">
+                        <span class="diagnostic-billing-type-label">@I18n.T("Billing Type")</span>
+                        <div class="diagnostic-mode-toggle" role="group" aria-label="@I18n.T("Billing Type")">
+                            <button type="button"
+                                    class="mode-toggle-btn @(!isIpdMode ? "active opd-active" : "")"
+                                    aria-pressed="@(!isIpdMode)"
+                                    @onclick='() => SetPatientTypeAsync("1")'
+                                    title="@I18n.T("Collect payment now as an OPD bill")">
+                                <span class="mode-toggle-icon">🏥</span>
+                                <span><strong>@I18n.T("OPD Billing")</strong><small>@I18n.T("Pay now")</small></span>
+                            </button>
+                            <button type="button"
+                                    class="mode-toggle-btn @(isIpdMode ? "active ipd-active" : "")"
+                                    aria-pressed="@(isIpdMode)"
+                                    @onclick='() => SetPatientTypeAsync("2")'
+                                    title="@I18n.T("Add the charge to the patient's IPD final bill")">
+                                <span class="mode-toggle-icon">🛏️</span>
+                                <span><strong>@I18n.T("Charge to IPD")</strong><small>@I18n.T("Final bill")</small></span>
+                            </button>
+                        </div>
+                    </div>
                     <button type="button" class="btn btn-outline tickets-btn btn-header-modal-trigger" @onclick="OpenRecentBillsModal" title="@I18n.T("Search & view past diagnostic cash memos")">
                         📋 @I18n.T("Recent Bills & Orders") (@recentMemos.Count)
                     </button>
+                </div>
+            </div>
+            <div class="diagnostic-mode-explainer @(isIpdMode ? "ipd" : "opd")" role="status">
+                <div class="diagnostic-mode-explainer-copy">
+                    <span class="diagnostic-mode-explainer-icon">@(isIpdMode ? "🛏️" : "💳")</span>
+                    <div>
+                        <strong>@(isIpdMode ? I18n.T("Charge to the patient's IPD account") : I18n.T("Collect payment at the diagnostic counter"))</strong>
+                        <span>@(isIpdMode
+                            ? I18n.T("No payment is collected here. The full diagnostic charge will be added to the patient's IPD final bill.")
+                            : I18n.T("Receive payment now and issue an OPD diagnostic cash memo. Any unpaid amount remains due on this bill."))</span>
+                    </div>
                 </div>
             </div>
 
@@ -519,11 +543,17 @@
                             <!-- Footer Actions within the preview card -->
                             <div class="diag-preview-footer-actions">
                                 <button class="btn btn-secondary diag-submit-btn diag-btn-save" type="button" @onclick="() => SaveBillAsync(false)" disabled="@saving" title="@I18n.T("Save bill into database without printing")">
-                                    💾 @(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Save Bill") : I18n.T("Update Bill"))
+                                    💾 @(saving
+                                        ? I18n.T("Saving…")
+                                        : isIpdMode
+                                            ? (editor.ID == 0 ? I18n.T("Post to IPD Bill") : I18n.T("Update IPD Charge"))
+                                            : (editor.ID == 0 ? I18n.T("Save OPD Bill") : I18n.T("Update OPD Bill")))
                                 </button>
 
                                 <button class="btn btn-primary diag-submit-btn diag-btn-print" type="button" @onclick="() => SaveBillAsync(true)" disabled="@saving" title="@I18n.T("Save bill and immediately print invoice")">
-                                    🖨 @(saving ? I18n.T("Saving & Printing…") : I18n.T("Save & Print"))
+                                    🖨 @(saving
+                                        ? I18n.T("Saving & Printing…")
+                                        : isIpdMode ? I18n.T("Post & Print Memo") : I18n.T("Save & Print Receipt"))
                                 </button>
 
                                 <div class="diag-sub-actions">
@@ -2035,11 +2065,29 @@
     private async Task SetPatientTypeAsync(string type)
     {
         if (currentPatientType == type) return;
+        if (HasModeSwitchData())
+        {
+            var destination = type == "2" ? I18n.T("Charge to IPD") : I18n.T("OPD Billing");
+            var confirmMessage = I18n.IsBangla
+                ? $"বিলিং টাইপ {destination}-এ বদলালে বর্তমান ফর্মের রোগী, টেস্ট ও অসংরক্ষিত তথ্য মুছে যাবে। চালিয়ে যাবেন?"
+                : $"Switching to {destination} will clear the current patient, tests, and unsaved form data. Continue?";
+            if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMessage)) return;
+        }
         currentPatientType = type;
         NavigationManager.NavigateTo($"/diagnostic/billing?patientType={(type == "2" ? "IPD" : "OPD")}", replace: false);
         Reset();
         await LoadAsync();
     }
+
+    private bool HasModeSwitchData() =>
+        editor.ID > 0
+        || activeOrderId.HasValue
+        || editor.Items.Count > 0
+        || !string.IsNullOrWhiteSpace(editor.PatientID)
+        || !string.IsNullOrWhiteSpace(editor.RegNo)
+        || !string.IsNullOrWhiteSpace(editor.PatientName)
+        || !string.IsNullOrWhiteSpace(editor.Contact)
+        || !string.IsNullOrWhiteSpace(editor.Remarks);
 
     private string ServiceName(int id)
     {

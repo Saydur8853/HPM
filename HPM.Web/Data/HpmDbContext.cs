@@ -487,8 +487,15 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         header.Property(x => x.RefundAmount).HasColumnName("Refund_Amount").HasColumnType("numeric(18,2)");
         header.Property(x => x.ReceivableAdjustment).HasColumnName("Receivable_Adjustment").HasColumnType("numeric(18,2)");
         header.Property(x => x.Reason).HasMaxLength(500);
+        header.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Posted");
+        header.Property(x => x.RefundMethod).HasColumnName("Refund_Method").HasMaxLength(30);
+        header.Property(x => x.RefundReference).HasColumnName("Refund_Reference").HasMaxLength(100);
+        header.Property(x => x.RefundReceivedBy).HasColumnName("Refund_Received_By").HasMaxLength(100);
         header.Property(x => x.EnteredBy).HasColumnName("Entered_By");
         header.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        header.Property(x => x.CancelledBy).HasColumnName("Cancelled_By");
+        header.Property(x => x.CancelledAt).HasColumnName("Cancelled_At").HasColumnType("datetime");
+        header.Property(x => x.CancellationReason).HasColumnName("Cancellation_Reason").HasMaxLength(500);
         header.HasOne(x => x.Memo).WithMany().HasForeignKey(x => x.MemoID).OnDelete(DeleteBehavior.Restrict);
         header.HasMany(x => x.Items).WithOne(x => x.Return).HasForeignKey(x => x.ReturnID).OnDelete(DeleteBehavior.Cascade);
         header.HasIndex(x => new { x.MemoID, x.TransDate });
@@ -1355,7 +1362,12 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         result.Property(x => x.ReportedAt).HasColumnName("Reported_At").HasColumnType("datetime");
         result.Property(x => x.ReportedBy).HasColumnName("Reported_By");
         result.Property(x => x.IsVerified).HasColumnName("Is_Verified");
+        result.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Active");
+        result.Property(x => x.CancelledBy).HasColumnName("Cancelled_By");
+        result.Property(x => x.CancelledAt).HasColumnName("Cancelled_At").HasColumnType("datetime");
+        result.Property(x => x.CancellationReason).HasColumnName("Cancellation_Reason").HasMaxLength(500);
         result.HasIndex(x => new { x.MemoID, x.ServiceID });
+        result.HasQueryFilter(x => x.Status != "Cancelled");
     }
 
     private static void ConfigureCanteen(ModelBuilder b)

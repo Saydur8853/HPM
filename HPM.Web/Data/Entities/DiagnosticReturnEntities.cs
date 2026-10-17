@@ -10,8 +10,15 @@ public sealed class DiagnosticCashMemoReturn
     public decimal RefundAmount { get; set; }
     public decimal ReceivableAdjustment { get; set; }
     [Required, StringLength(500)] public string Reason { get; set; } = string.Empty;
+    [Required, StringLength(20)] public string Status { get; set; } = "Posted";
+    [StringLength(30)] public string? RefundMethod { get; set; }
+    [StringLength(100)] public string? RefundReference { get; set; }
+    [StringLength(100)] public string? RefundReceivedBy { get; set; }
     public int EnteredBy { get; set; }
     public DateTime TransDate { get; set; } = DateTime.Now;
+    public int? CancelledBy { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    [StringLength(500)] public string? CancellationReason { get; set; }
     public CashMemoDInvestigation? Memo { get; set; }
     public List<DiagnosticCashMemoReturnItem> Items { get; set; } = [];
 }
