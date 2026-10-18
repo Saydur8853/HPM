@@ -1,0 +1,69 @@
+@page "/diagnostic/imaging-worklist"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Imaging Worklist") | @Branding.HospitalName</PageTitle>
+
+<div class="worklist-classic-fit">
+    <div class="worklist-classic-topbar">
+        <div class="tickets-top-left"><h1 class="tickets-page-title"><span>🩻</span><span>@I18n.T("Imaging & Radiology Worklist")</span></h1><span class="tickets-count-pill">@filteredItems.Count @I18n.T("Studies")</span>@if (!string.IsNullOrWhiteSpace(message)) { <span class="tickets-inline-alert @messageClass">@message</span> }</div>
+        <DiagnosticNavTabs />
+        <div class="tickets-top-actions">
+            <select class="classic-input tickets-select" @bind="statusFilter" @bind:after="FilterItems"><option value="all">@I18n.T("All Statuses")</option><option value="Pending">@I18n.T("Pending")</option><option value="Scheduled">@I18n.T("Scheduled / Called")</option><option value="InProcess">@I18n.T("In Progress")</option><option value="Completed">@I18n.T("Completed")</option></select>
+            <input class="classic-input" style="width:220px" @bind="search" @bind:event="oninput" @bind:after="FilterItems" placeholder="@I18n.T("Memo, patient or study...")" />
+            <button class="btn btn-secondary tickets-btn" @onclick="LoadAsync">🔄 @I18n.T("Refresh")</button>
+        </div>
+    </div>
+    <div class="worklist-classic-workspace"><div class="worklist-card">
+        <div class="worklist-header"><h2>@I18n.T("Radiology Study Queue")</h2><span class="pill">@items.Count(x => x.Status is "Pending" or "Scheduled") @I18n.T("Waiting")</span></div>
+        <div class="worklist-table-scroll data-table-wrap"><table class="data-table">
+            <thead><tr><th>@I18n.T("Bill No")</th><th>@I18n.T("Patient Details")</th><th>@I18n.T("Imaging Study")</th><th>@I18n.T("Room / Machine")</th><th>@I18n.T("Status")</th><th>@I18n.T("Action")</th></tr></thead>
+            <tbody>
+                @if (filteredItems.Count == 0) { <tr><td colspan="6" class="dtm-empty">@I18n.T("No imaging studies found.")</td></tr> }
+                @foreach (var item in filteredItems)
+                {
+                    <tr>
+                        <td><strong style="color:#0284c7">#@item.MemoID</strong><br/><small>@item.OrderedAt.ToString("dd MMM, hh:mm tt")</small></td>
+                        <td><strong>@item.PatientName</strong><br/><small>@item.PatientID · @item.Age / @item.Sex</small></td>
+                        <td><strong>@item.TestName</strong></td>
+                        <td><input class="classic-input" value="@item.Workstation" disabled="@(item.Status is "InProcess" or "Completed")" @onchange="e => UpdateWorkstationAsync(item, e.Value?.ToString())" placeholder="X-Ray Room / CT-1" /></td>
+                        <td><span class="pill @(item.Status == "Completed" ? "pill-success" : "")">@I18n.T(DisplayStatus(item.Status))</span>@if (item.ScheduledAt.HasValue) { <br/><small>@item.ScheduledAt.Value.ToString("dd MMM, hh:mm tt")</small> }</td>
+                        <td style="text-align:right"><div style="display:inline-flex;gap:5px">
+                            @if (item.Status == "Pending") { <button class="btn btn-secondary tickets-btn" @onclick='() => AdvanceAsync(item, "Scheduled")'>📅 @I18n.T("Call / Schedule")</button><button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")'>▶ @I18n.T("Start Study")</button> }
+                            else if (item.Status == "Scheduled") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")'>▶ @I18n.T("Start Study")</button> }
+                            else if (item.Status == "InProcess") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "Completed")'>✓ @I18n.T("Complete Study")</button> }
+                            else { <NavLink class="btn btn-secondary tickets-btn" href="@($"diagnostic/imaging-results?memoId={item.MemoID}")">📝 @I18n.T("Enter Report")</NavLink> }
+                        </div></td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+    </div></div>
+</div>
+
+@code {
+    private List<ImagingItem> items = [], filteredItems = [];
+    private string statusFilter = "all", search = "", message = "", messageClass = "success";
+    protected override async Task OnInitializedAsync() { I18n.OnLanguageChanged += LanguageChanged; await LoadAsync(); }
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync(); var categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID); var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID);
+        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking().Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(300).ToListAsync(); var memoIds = memos.Select(x => x.ID).ToArray(); var tracking = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
+        items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key))).Where(x => services.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsImaging(s, s.CategoryID.HasValue ? categories.GetValueOrDefault(s.CategoryID.Value) : null)).Select(x => { tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t); return new ImagingItem { MemoID = x.Memo.ID, ServiceID = x.ServiceID, PatientID = x.Memo.PatientID, PatientName = x.Memo.PatientName, Age = x.Memo.Age ?? "—", Sex = x.Memo.Sex ?? "—", TestName = services[x.ServiceID].Name ?? $"Study #{x.ServiceID}", OrderedAt = x.Memo.TransDate, Status = t?.Status ?? "Pending", ScheduledAt = t?.ScheduledAt, Workstation = t?.Workstation }; }).Where(x => x.Status != "Cancelled").ToList(); FilterItems();
+    }
+    private void FilterItems() { var q = items.AsEnumerable(); if (statusFilter != "all") q = q.Where(x => x.Status == statusFilter); if (!string.IsNullOrWhiteSpace(search)) { var s = search.Trim(); q = q.Where(x => x.MemoID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) || x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) || (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) || x.TestName.Contains(s, StringComparison.OrdinalIgnoreCase)); } filteredItems = q.ToList(); }
+    private async Task UpdateWorkstationAsync(ImagingItem item, string? value) { await using var db = await DbFactory.CreateDbContextAsync(); var row = await GetOrCreateAsync(db, item); row.Workstation = string.IsNullOrWhiteSpace(value) ? null : value.Trim(); await db.SaveChangesAsync(); item.Workstation = row.Workstation; }
+    private async Task AdvanceAsync(ImagingItem item, string next)
+    {
+        try { await using var db = await DbFactory.CreateDbContextAsync(); var row = await GetOrCreateAsync(db, item); if (!DiagnosticWorkflow.CanAdvance(row.Status, next)) throw new InvalidOperationException($"Invalid status transition from {row.Status} to {next}."); var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User; var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null; var now = DateTime.Now; row.Status = next; row.SpecimenType = "Imaging / No Specimen"; if (next == "Scheduled") row.ScheduledAt = now; else if (next == "InProcess") { row.ProcessingStartedAt = now; row.ProcessingStartedBy = userId; } else if (next == "Completed") { row.CompletedAt = now; row.CompletedBy = userId; } await db.SaveChangesAsync(); item.Status = next; item.ScheduledAt = row.ScheduledAt; Success($"{item.TestName} updated to {DisplayStatus(next)}."); FilterItems(); }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); await LoadAsync(); }
+    }
+    private static async Task<LabSampleCollection> GetOrCreateAsync(HpmDbContext db, ImagingItem item) { var row = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID); if (row is not null) return row; row = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = "Imaging / No Specimen", Status = "Pending" }; db.LabSampleCollections.Add(row); return row; }
+    private static string DisplayStatus(string status) => status switch { "Scheduled" => "Scheduled / Called", "InProcess" => "In Progress", _ => status };
+    private void Success(string text) { messageClass = "success"; message = text; } private void Fail(string text) { messageClass = "danger"; message = text; } private void LanguageChanged() => InvokeAsync(StateHasChanged); public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
+    private sealed class ImagingItem { public long MemoID { get; set; } public int ServiceID { get; set; } public string? PatientID { get; set; } public string PatientName { get; set; } = ""; public string Age { get; set; } = ""; public string Sex { get; set; } = ""; public string TestName { get; set; } = ""; public DateTime OrderedAt { get; set; } public string Status { get; set; } = "Pending"; public DateTime? ScheduledAt { get; set; } public string? Workstation { get; set; } }
+}

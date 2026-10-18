@@ -163,6 +163,7 @@ public sealed class Department
     public int ID { get; set; }
     public string Name { get; set; } = string.Empty;
     public int? DepartmentCategoryID { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public sealed class TicketType
@@ -170,6 +171,7 @@ public sealed class TicketType
     public int ID { get; set; }
     public string Name { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public sealed class ServiceCategory
@@ -197,4 +199,5 @@ public sealed class Service
     public int? GenericID { get; set; }
     public int? SupplierID { get; set; }
     public int? InvestigationModuleID { get; set; }
+    public string? DiagnosticType { get; set; }
 }

@@ -43,6 +43,14 @@ public sealed class LabSampleCollection
     [StringLength(100)] public string? SpecimenType { get; set; } = "Blood";
     public DateTime? CollectedAt { get; set; }
     public int? CollectedBy { get; set; }
+    public DateTime? ReceivedAt { get; set; }
+    public int? ReceivedBy { get; set; }
+    public DateTime? ProcessingStartedAt { get; set; }
+    public int? ProcessingStartedBy { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public int? CompletedBy { get; set; }
+    public DateTime? ScheduledAt { get; set; }
+    [StringLength(100)] public string? Workstation { get; set; }
     [StringLength(30)] public string Status { get; set; } = "Pending";
     [StringLength(200)] public string? Remarks { get; set; }
 }
@@ -53,7 +61,7 @@ public sealed class LabTestResult
     public long MemoID { get; set; }
     public int ServiceID { get; set; }
     [Required, StringLength(100)] public string ParameterName { get; set; } = string.Empty;
-    [StringLength(100)] public string ResultValue { get; set; } = string.Empty;
+    [StringLength(4000)] public string ResultValue { get; set; } = string.Empty;
     [StringLength(50)] public string? Unit { get; set; }
     [StringLength(200)] public string? ReferenceRange { get; set; }
     [StringLength(30)] public string? Flag { get; set; } = "Normal";

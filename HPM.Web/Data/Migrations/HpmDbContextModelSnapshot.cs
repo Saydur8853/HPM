@@ -1245,6 +1245,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Department_Category_ID");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true)
+                        .HasColumnName("Is_Active");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -1252,17 +1258,22 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("Name")
+                        .IsUnique();
+
                     b.ToTable("Department", (string)null);
 
                     b.HasData(
                         new
                         {
                             ID = 1,
+                            IsActive = true,
                             Name = "Emergency"
                         },
                         new
                         {
                             ID = 2,
+                            IsActive = true,
                             Name = "Medicine"
                         });
                 });
@@ -1523,6 +1534,11 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(11)
                         .HasColumnType("nvarchar(11)")
                         .HasColumnName("Patient_ID");
+
+                    b.Property<string>("Sex")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("Sex");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -2321,13 +2337,41 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Collected_By");
 
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Completed_At");
+
+                    b.Property<int?>("CompletedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Completed_By");
+
                     b.Property<long>("MemoID")
                         .HasColumnType("bigint")
                         .HasColumnName("Memo_ID");
 
+                    b.Property<DateTime?>("ProcessingStartedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Processing_Started_At");
+
+                    b.Property<int?>("ProcessingStartedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Processing_Started_By");
+
+                    b.Property<DateTime?>("ReceivedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Received_At");
+
+                    b.Property<int?>("ReceivedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Received_By");
+
                     b.Property<string>("Remarks")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ScheduledAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Scheduled_At");
 
                     b.Property<int>("ServiceID")
                         .HasColumnType("int")
@@ -2342,6 +2386,10 @@ namespace HPM.Web.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Workstation")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.HasKey("ID");
 
@@ -2449,8 +2497,8 @@ namespace HPM.Web.Data.Migrations
 
                     b.Property<string>("ResultValue")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)")
                         .HasColumnName("Result_Value");
 
                     b.Property<int>("ServiceID")
@@ -3978,8 +4026,18 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("Days")
                         .HasColumnType("int");
 
+                    b.Property<string>("DosagePattern")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("DosagePattern");
+
                     b.Property<decimal?>("Dose")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Instruction")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Instruction");
 
                     b.Property<decimal?>("Interval")
                         .HasColumnType("decimal(18,2)");
@@ -3993,14 +4051,6 @@ namespace HPM.Web.Data.Migrations
 
                     b.Property<int>("SLNO")
                         .HasColumnType("int");
-
-                    b.Property<string>("DosagePattern")
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("Instruction")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
 
                     b.Property<int>("ServiceID")
                         .HasColumnType("int")
@@ -4156,6 +4206,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("CategoryID")
                         .HasColumnType("int")
                         .HasColumnName("Category_ID");
+
+                    b.Property<string>("DiagnosticType")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Diagnostic_Type");
 
                     b.Property<int?>("GenericID")
                         .HasColumnType("int")
@@ -4409,12 +4464,21 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true)
+                        .HasColumnName("Is_Active");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
 
                     b.ToTable("Ticket_Type", (string)null);
 
@@ -4423,6 +4487,7 @@ namespace HPM.Web.Data.Migrations
                         {
                             ID = 1,
                             Amount = 50m,
+                            IsActive = true,
                             Name = "Consultation Fee"
                         });
                 });

@@ -12,12 +12,29 @@ public sealed class WorkflowAndModelTests
     [Theory]
     [InlineData(null, "InProcess", true)]
     [InlineData("Pending", "InProcess", true)]
+    [InlineData("Pending", "Collected", true)]
+    [InlineData("Collected", "Received", true)]
+    [InlineData("Received", "InProcess", true)]
+    [InlineData("Pending", "Scheduled", true)]
+    [InlineData("Scheduled", "InProcess", true)]
     [InlineData("InProcess", "Completed", true)]
     [InlineData("Pending", "Completed", false)]
+    [InlineData("Collected", "Completed", false)]
+    [InlineData("Received", "Completed", false)]
     [InlineData("Completed", "InProcess", false)]
     [InlineData("Completed", "Completed", false)]
     public void Diagnostic_status_transitions_are_forward_only(string? current, string next, bool expected) =>
         Assert.Equal(expected, DiagnosticWorkflow.CanAdvance(current, next));
+
+    [Fact]
+    public void Diagnostic_tests_route_explicitly_and_support_legacy_category_fallback()
+    {
+        var category = new ServiceCategory { ID = 200, Name = "Radiology & Imaging" };
+        Assert.Equal(DiagnosticTestRouting.Imaging, DiagnosticTestRouting.Resolve(new Service { DiagnosticType = "Imaging" }));
+        Assert.Equal(DiagnosticTestRouting.Pathology, DiagnosticTestRouting.Resolve(new Service { DiagnosticType = "Pathology" }, category));
+        Assert.Equal(DiagnosticTestRouting.Imaging, DiagnosticTestRouting.Resolve(new Service(), category));
+        Assert.Equal(DiagnosticTestRouting.Pathology, DiagnosticTestRouting.Resolve(new Service(), new ServiceCategory { ID = 8, Name = "Pathology" }));
+    }
 
     [Theory]
     [InlineData(EncounterStatuses.Waiting, EncounterStatuses.InConsultation, true)]
@@ -99,6 +116,10 @@ public sealed class WorkflowAndModelTests
         var sample = db.Model.FindEntityType(typeof(LabSampleCollection))!;
         Assert.Contains(sample.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(LabSampleCollection.MemoID), nameof(LabSampleCollection.ServiceID)]));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.ReceivedAt)));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.ProcessingStartedAt)));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.CompletedAt)));
+        Assert.NotNull(db.Model.FindEntityType(typeof(Service))!.FindProperty(nameof(Service.DiagnosticType)));
 
         var allocation = db.Model.FindEntityType(typeof(PharmacySaleBatchAllocation))!;
         Assert.Contains(allocation.GetIndexes(), index => index.IsUnique
@@ -139,6 +160,16 @@ public sealed class WorkflowAndModelTests
         var turnover = db.Model.FindEntityType(typeof(BedTurnover))!;
         Assert.Contains(turnover.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(BedTurnover.BedCabinID)]));
+
+        var department = db.Model.FindEntityType(typeof(Department))!;
+        Assert.NotNull(department.FindProperty(nameof(Department.IsActive)));
+        Assert.Contains(department.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(Department.Name)]));
+
+        var ticketType = db.Model.FindEntityType(typeof(TicketType))!;
+        Assert.NotNull(ticketType.FindProperty(nameof(TicketType.IsActive)));
+        Assert.Contains(ticketType.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(TicketType.Name)]));
     }
 
     [Fact]

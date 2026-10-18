@@ -4,406 +4,106 @@
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
 @implements IDisposable
-@using System.Data
 @using System.Security.Claims
 
 <PageTitle>@I18n.T("Lab Worklist") | @Branding.HospitalName</PageTitle>
 
 <div class="worklist-classic-fit">
-    <!-- Compact Top Action, Metrics & Status Bar -->
     <div class="worklist-classic-topbar">
         <div class="tickets-top-left">
-            <h1 class="tickets-page-title">
-                <span>🔬</span>
-                <span>@I18n.T("Lab Worklist & Specimen Tracking")</span>
-            </h1>
-            <span class="tickets-count-pill">
-                @worklist.Count @I18n.T("Tests")
-            </span>
-            <div class="worklist-metrics-inline">
-                <span class="worklist-metric-pill amber" title="@I18n.T("Pending Collection")">
-                    ⏳ @I18n.T("Pending"): <b>@worklist.Count(x => x.SampleStatus == "Pending")</b>
-                </span>
-                <span class="worklist-metric-pill violet" title="@I18n.T("Under Processing")">
-                    ⚙️ @I18n.T("In Process"): <b>@worklist.Count(x => x.SampleStatus == "InProcess")</b>
-                </span>
-                <span class="worklist-metric-pill green" title="@I18n.T("Completed")">
-                    ✓ @I18n.T("Completed"): <b>@worklist.Count(x => x.SampleStatus == "Completed")</b>
-                </span>
-            </div>
-            @if (!string.IsNullOrWhiteSpace(message))
-            {
-                <span class="tickets-inline-alert @messageClass" title="@message">
-                    @(messageClass.Contains("danger") ? "⚠" : "✓") @message
-                </span>
-            }
+            <h1 class="tickets-page-title"><span>🔬</span><span>@I18n.T("Lab Receive & Processing Worklist")</span></h1>
+            <span class="tickets-count-pill">@filteredItems.Count @I18n.T("Tests")</span>
+            @if (!string.IsNullOrWhiteSpace(message)) { <span class="tickets-inline-alert @messageClass">@message</span> }
         </div>
-
         <DiagnosticNavTabs />
-
-        <div class="tickets-top-actions" style="display:flex; align-items:center; gap:8px;">
-            <select class="classic-input tickets-select" style="min-width:130px; font-size:11.5px;" @bind="statusFilter" @bind:after="FilterWorklist">
-                <option value="all">@I18n.T("All Statuses")</option>
-                <option value="Pending">@I18n.T("Pending Collection")</option>
-                <option value="InProcess">@I18n.T("Under Processing")</option>
-                <option value="Completed">@I18n.T("Completed")</option>
+        <div class="tickets-top-actions">
+            <select class="classic-input tickets-select" @bind="statusFilter" @bind:after="FilterItems">
+                <option value="all">@I18n.T("All Statuses")</option><option value="Collected">@I18n.T("Awaiting Lab Receipt")</option><option value="Received">@I18n.T("Received")</option><option value="InProcess">@I18n.T("In Process")</option><option value="Completed">@I18n.T("Completed")</option>
             </select>
-
-            <div class="tickets-scanner-bar" style="margin:0; width:220px;">
-                <div class="tickets-scanner-input-wrap">
-                    <span class="tickets-scanner-icon" title="Barcode Scanner">📷</span>
-                    <input type="text"
-                           class="classic-input tickets-scanner-input"
-                           placeholder="@I18n.T("Scan Tube / Memo #...")"
-                           @bind="scanQuery"
-                           @bind:event="oninput"
-                           @onkeydown="HandleScanKeyDown" />
-                    @if (!string.IsNullOrWhiteSpace(scanQuery))
-                    {
-                        <button type="button" class="tickets-scanner-clear" @onclick="ClearScan" title="Clear">✕</button>
-                    }
-                </div>
-            </div>
-
-            <button type="button" class="btn btn-secondary tickets-btn" @onclick="LoadAsync" title="@I18n.T("Refresh")">
-                🔄 @I18n.T("Refresh")
-            </button>
-            <AuthorizeView Roles="@RoleNames.Administrator">
-                <NavLink href="diagnostic/billing" class="btn btn-primary tickets-btn">
-                    + @I18n.T("New Bill")
-                </NavLink>
-            </AuthorizeView>
+            <input class="classic-input" style="width:220px" @bind="search" @bind:event="oninput" @bind:after="FilterItems" placeholder="@I18n.T("Scan tube, memo or patient...")" />
+            <button class="btn btn-secondary tickets-btn" @onclick="LoadAsync">🔄 @I18n.T("Refresh")</button>
         </div>
     </div>
 
-    <!-- Main Workspace: Single Full-Height Responsive Table Card -->
-    <div class="worklist-classic-workspace">
-        <div class="worklist-card">
-            <div class="worklist-header">
-                <h2>@I18n.T("Diagnostic Specimen & Test Queue")</h2>
-                <span class="pill" style="font-size:11px; font-weight:700;">
-                    @filteredWorklist.Count @I18n.T("Items Listed")
-                </span>
-            </div>
-
-            <div class="worklist-table-scroll data-table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 80px;">@I18n.T("Bill No", "Memo #")</th>
-                            <th style="width: 220px;">@I18n.T("Patient Details")</th>
-                            <th>@I18n.T("Investigation Details", "Ordered Test")</th>
-                            <th style="width: 170px;">@I18n.T("Sample Type", "Specimen")</th>
-                            <th style="width: 140px;">@I18n.T("Status")</th>
-                            <th style="width: 130px;">@I18n.T("Date", "Order Time")</th>
-                            <th style="width: 210px; text-align: right;">@I18n.T("Action / Event", "Action")</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @if (filteredWorklist.Count == 0)
-                        {
-                            <tr>
-                                <td colspan="7">
-                                    <div class="tickets-queue-empty" style="padding: 2.5rem 1rem;">
-                                        <span style="font-size: 2rem;">🔬</span>
-                                        <span>@I18n.T("No test orders found matching your filters.")</span>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                        @foreach (var item in filteredWorklist)
-                        {
-                            <tr>
-                                <td>
-                                    <b style="color:#0284c7;">#@item.MemoID</b>
-                                    @if (!string.IsNullOrWhiteSpace(item.PatientID))
-                                    {
-                                        <br /><small style="color:#64748b;">@item.PatientID</small>
-                                    }
-                                </td>
-                                <td>
-                                    <b>@item.PatientName</b>
-                                    <br /><small style="color:#64748b;">@item.Age / @item.Sex &bull; @(item.Contact ?? "—")</small>
-                                </td>
-                                <td>
-                                    <strong style="color:#0f172a;">@item.TestName</strong>
-                                </td>
-                                <td>
-                                    <select class="classic-input tickets-select" style="min-height:28px; font-size:11px; padding:2px 6px;" value="@item.SpecimenType" @onchange="(e) => UpdateSpecimen(item, e.Value?.ToString())">
-                                        <option value="Blood">Blood (EDTA/Serum)</option>
-                                        <option value="Urine">Urine</option>
-                                        <option value="Stool">Stool</option>
-                                        <option value="Swab">Swab</option>
-                                        <option value="Sputum">Sputum</option>
-                                        <option value="X-Ray / Imaging">X-Ray / Scan</option>
-                                    </select>
-                                </td>
-                                <td>
-                                    @if (item.SampleStatus == "Pending")
-                                    {
-                                        <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:800; border:1px solid #fde68a;">
-                                            ⏳ @I18n.T("Pending Collection")
-                                        </span>
-                                    }
-                                    else if (item.SampleStatus == "InProcess")
-                                    {
-                                        <span class="pill" style="background:#ede9fe; color:#6d28d9; font-weight:800; border:1px solid #ddd6fe;">
-                                            ⚙️ @I18n.T("Under Processing")
-                                        </span>
-                                    }
-                                    else
-                                    {
-                                        <span class="pill pill-success" style="font-weight:800;">
-                                            ✓ @I18n.T("Completed")
-                                        </span>
-                                    }
-                                </td>
-                                <td style="font-size:11px; color:#475569;">
-                                    @item.TransDate.ToString("dd MMM hh:mm tt")
-                                </td>
-                                <td style="text-align: right;">
-                                    <div style="display:inline-flex; align-items:center; gap:4px;">
-                                        @if (item.SampleStatus == "Pending")
-                                        {
-                                            <button type="button" class="btn btn-secondary tickets-btn" style="font-size:10.5px; padding:2px 8px;" @onclick='() => SetStatusAsync(item, "InProcess")'>
-                                                🧪 @I18n.T("Collect")
-                                            </button>
-                                        }
-                                        else if (item.SampleStatus == "InProcess")
-                                        {
-                                            <button type="button" class="btn btn-primary tickets-btn" style="font-size:10.5px; padding:2px 8px;" @onclick='() => SetStatusAsync(item, "Completed")'>
-                                                ✓ @I18n.T("Finish")
-                                            </button>
-                                        }
-                                        <NavLink href="@($"diagnostic/results?memoId={item.MemoID}")" class="btn btn-ghost tickets-btn" style="font-size:10.5px; padding:2px 8px;" title="@I18n.T("Results & Report")">
-                                            📋 @I18n.T("Results") &rarr;
-                                        </NavLink>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+    <div class="worklist-classic-workspace"><div class="worklist-card">
+        <div class="worklist-header"><h2>@I18n.T("Collected Pathology Samples")</h2><span class="pill">@items.Count(x => x.Status == "Collected") @I18n.T("Awaiting Receipt")</span></div>
+        <div class="worklist-table-scroll data-table-wrap"><table class="data-table">
+            <thead><tr><th>@I18n.T("Bill / Tube")</th><th>@I18n.T("Patient Details")</th><th>@I18n.T("Test & Specimen")</th><th>@I18n.T("Collected")</th><th>@I18n.T("Status")</th><th>@I18n.T("Action")</th></tr></thead>
+            <tbody>
+                @if (filteredItems.Count == 0) { <tr><td colspan="6" class="dtm-empty">@I18n.T("No collected pathology samples are waiting in the lab queue.")</td></tr> }
+                @foreach (var item in filteredItems)
+                {
+                    <tr>
+                        <td><strong style="color:#0284c7">#@item.MemoID</strong><br/><code>SMP-@item.MemoID-@item.ServiceID</code></td>
+                        <td><strong>@item.PatientName</strong><br/><small>@item.PatientID · @item.Age / @item.Sex</small></td>
+                        <td><strong>@item.TestName</strong><br/><small>@item.SpecimenType</small></td>
+                        <td><small>@item.CollectedAt?.ToString("dd MMM, hh:mm tt")</small></td>
+                        <td><span class="pill @(item.Status == "Completed" ? "pill-success" : "")">@I18n.T(DisplayStatus(item.Status))</span>@if (!string.IsNullOrWhiteSpace(item.Remarks)) { <br/><small style="color:#b45309">@item.Remarks</small> }</td>
+                        <td style="text-align:right"><div style="display:inline-flex;gap:5px">
+                            @if (item.Status == "Collected")
+                            {
+                                <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "Received")'>📥 @I18n.T("Receive in Lab")</button>
+                                <button class="btn btn-danger tickets-btn" @onclick="() => RejectAsync(item)">@I18n.T("Reject / Recollect")</button>
+                            }
+                            else if (item.Status == "Received") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")'>⚙ @I18n.T("Start Processing")</button> }
+                            else if (item.Status == "InProcess") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "Completed")'>✓ @I18n.T("Complete Test")</button> }
+                            else { <NavLink class="btn btn-secondary tickets-btn" href="@($"diagnostic/results?memoId={item.MemoID}")">📋 @I18n.T("Enter Result")</NavLink> }
+                        </div></td>
+                    </tr>
+                }
+            </tbody>
+        </table></div>
+    </div></div>
 </div>
 
 @code {
-    private List<WorklistItem> worklist = [];
-    private List<WorklistItem> filteredWorklist = [];
-    private string statusFilter = "all";
-    private string scanQuery = "";
-    private string message = "";
-    private string messageClass = "success";
-
-    protected override async Task OnInitializedAsync()
-    {
-        I18n.OnLanguageChanged += HandleLanguageChanged;
-        await LoadAsync();
-    }
-
-    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    private List<LabItem> items = [];
+    private List<LabItem> filteredItems = [];
+    private string statusFilter = "all", search = "", message = "", messageClass = "success";
+    protected override async Task OnInitializedAsync() { I18n.OnLanguageChanged += LanguageChanged; await LoadAsync(); }
 
     private async Task LoadAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
-        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
-            .Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(200).ToListAsync();
+        var categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID);
+        var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID);
+        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking().Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(300).ToListAsync();
         var memoIds = memos.Select(x => x.ID).ToArray();
-        var samples = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToListAsync();
-        var sampleMap = samples.GroupBy(x => (x.MemoID, x.ServiceID)).ToDictionary(x => x.Key, x => x.First());
-
-        worklist = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID)
-        .Where(group => !sampleMap.TryGetValue((m.ID, group.Key), out var existingSample) || existingSample.Status != "Cancelled")
-        .Select(group =>
-        {
-            sampleMap.TryGetValue((m.ID, group.Key), out var sample);
-            return new WorklistItem
-            {
-                MemoID = m.ID, ServiceID = group.Key, PatientID = m.PatientID, PatientName = m.PatientName,
-                Age = m.Age ?? "—", Sex = m.Sex ?? "—", Contact = m.Contact, TransDate = m.TransDate,
-                TestName = services.GetValueOrDefault(group.Key) ?? $"Test #{group.Key}",
-                SpecimenType = sample?.SpecimenType ?? "Blood", SampleStatus = sample?.Status ?? "Pending", SampleCollectionID = sample?.ID
-            };
-        })).ToList();
-        FilterWorklist();
+        var tracking = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
+        items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key)))
+            .Where(x => services.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsPathology(s, s.CategoryID.HasValue ? categories.GetValueOrDefault(s.CategoryID.Value) : null))
+            .Select(x => { tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t); return new LabItem { MemoID = x.Memo.ID, ServiceID = x.ServiceID, PatientID = x.Memo.PatientID, PatientName = x.Memo.PatientName, Age = x.Memo.Age ?? "—", Sex = x.Memo.Sex ?? "—", TestName = services[x.ServiceID].Name ?? $"Test #{x.ServiceID}", SpecimenType = t?.SpecimenType ?? "Blood", Status = t?.Status ?? "Pending", CollectedAt = t?.CollectedAt, Remarks = t?.Remarks }; })
+            .Where(x => x.Status is "Collected" or "Received" or "InProcess" or "Completed").ToList();
+        FilterItems();
     }
 
-    private void FilterWorklist()
+    private void FilterItems() { var q = items.AsEnumerable(); if (statusFilter != "all") q = q.Where(x => x.Status == statusFilter); if (!string.IsNullOrWhiteSpace(search)) { var s = search.Trim(); q = q.Where(x => x.MemoID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) || x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) || (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) || x.TestName.Contains(s, StringComparison.OrdinalIgnoreCase) || $"SMP-{x.MemoID}-{x.ServiceID}".Contains(s, StringComparison.OrdinalIgnoreCase)); } filteredItems = q.ToList(); }
+
+    private async Task AdvanceAsync(LabItem item, string next)
     {
-        var query = worklist.AsEnumerable();
-        if (statusFilter != "all")
-        {
-            query = query.Where(x => x.SampleStatus == statusFilter);
-        }
-        if (!string.IsNullOrWhiteSpace(scanQuery))
-        {
-            var q = scanQuery.Trim();
-            query = query.Where(x => x.MemoID.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
-                                  || (x.PatientID?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
-                                  || x.PatientName.Contains(q, StringComparison.OrdinalIgnoreCase)
-                                  || x.TestName.Contains(q, StringComparison.OrdinalIgnoreCase)
-                                  || (x.Contact?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
-                                  || $"SMP-{x.MemoID}".Contains(q, StringComparison.OrdinalIgnoreCase)
-                                  || $"LAB-{x.MemoID}".Contains(q, StringComparison.OrdinalIgnoreCase));
-        }
-        filteredWorklist = query.ToList();
-    }
-
-    private void HandleScanKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-        {
-            ProcessScan();
-        }
-    }
-
-    private void ProcessScan()
-    {
-        if (string.IsNullOrWhiteSpace(scanQuery)) return;
-        var raw = scanQuery.Trim();
-
-        if (raw.StartsWith("HPM:TUBE|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:LAB|", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = raw.Split('|');
-            foreach (var p in parts)
-            {
-                if (p.StartsWith("INV:", StringComparison.OrdinalIgnoreCase))
-                {
-                    scanQuery = p.Substring(4).Trim();
-                    break;
-                }
-                if (p.StartsWith("SMP:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var smp = p.Substring(4).Trim();
-                    if (smp.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var segs = smp.Substring(4).Split('-');
-                        if (segs.Length > 0)
-                        {
-                            scanQuery = segs[0];
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        else if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase))
-        {
-            scanQuery = raw.Substring(4);
-        }
-        else if (raw.Contains("/portal/report/", StringComparison.OrdinalIgnoreCase))
-        {
-            var idx = raw.LastIndexOf("/portal/report/", StringComparison.OrdinalIgnoreCase);
-            scanQuery = raw.Substring(idx + "/portal/report/".Length).Trim().TrimEnd('/');
-        }
-        else if (raw.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
-        {
-            var segs = raw.Substring(4).Split('-');
-            if (segs.Length > 0)
-            {
-                scanQuery = segs[0];
-            }
-        }
-
-        FilterWorklist();
-    }
-
-    private void ClearScan()
-    {
-        scanQuery = "";
-        FilterWorklist();
-    }
-
-    private async Task UpdateSpecimen(WorklistItem item, string? newSpecimen)
-    {
-        if (string.IsNullOrWhiteSpace(newSpecimen)) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
-        if (sample is null)
-        {
-            sample = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = newSpecimen, Status = "Pending" };
-            db.LabSampleCollections.Add(sample);
-        }
-        else sample.SpecimenType = newSpecimen;
-        await db.SaveChangesAsync();
-        item.SpecimenType = newSpecimen;
-        item.SampleCollectionID = sample.ID;
-        Success(I18n.IsBangla ? $"{item.TestName}-এর জন্য নমুনা আপডেট করা হয়েছে।" : $"Specimen updated for {item.TestName}.");
-    }
-
-    private async Task SetStatusAsync(WorklistItem item, string newStatus)
-    {
-        if (newStatus is not ("InProcess" or "Completed")) { Fail("Invalid laboratory status."); return; }
-
         try
         {
-            await using var strategyDb = await DbFactory.CreateDbContextAsync();
-            var strategy = strategyDb.Database.CreateExecutionStrategy();
-            await strategy.ExecuteAsync(async () =>
-            {
-                await using var db = await DbFactory.CreateDbContextAsync();
-                await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
-
-                var validOrder = await db.EmergencyMemoItems.AnyAsync(x => x.MemoID == item.MemoID && x.TestID == item.ServiceID)
-                    && await db.EmergencyMemos.AnyAsync(x => x.ID == item.MemoID && x.ModuleID == 2);
-                if (!validOrder) throw new InvalidOperationException("The diagnostic test order no longer exists.");
-                var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
-                var currentStatus = sample?.Status ?? "Pending";
-                if (!DiagnosticWorkflow.CanAdvance(currentStatus, newStatus))
-                    throw new InvalidOperationException($"Invalid status transition from {currentStatus} to {newStatus}.");
-                if (sample is null)
-                {
-                    sample = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = item.SpecimenType, Status = "Pending" };
-                    db.LabSampleCollections.Add(sample);
-                }
-                sample.Status = newStatus;
-                if (newStatus == "InProcess")
-                {
-                    var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
-                    sample.CollectedAt ??= DateTime.Now;
-                    sample.CollectedBy = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ? userId : null;
-                }
-                await db.SaveChangesAsync();
-                await tx.CommitAsync();
-
-                item.SampleStatus = newStatus;
-                item.SampleCollectionID = sample.ID;
-            });
-
-            Success(I18n.IsBangla ? $"মেমো #{item.MemoID}-এর {item.TestName} আপডেট করা হয়েছে।" : $"{item.TestName} on order #{item.MemoID} updated to {newStatus}.");
-            FilterWorklist();
+            await using var db = await DbFactory.CreateDbContextAsync(); var row = await db.LabSampleCollections.SingleAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+            if (!DiagnosticWorkflow.CanAdvance(row.Status, next)) throw new InvalidOperationException($"Invalid status transition from {row.Status} to {next}.");
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User; var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null; var now = DateTime.Now;
+            row.Status = next; row.Remarks = null;
+            if (next == "Received") { row.ReceivedAt = now; row.ReceivedBy = userId; }
+            else if (next == "InProcess") { row.ProcessingStartedAt = now; row.ProcessingStartedBy = userId; }
+            else if (next == "Completed") { row.CompletedAt = now; row.CompletedBy = userId; }
+            await db.SaveChangesAsync(); item.Status = next; item.Remarks = null; Success($"{item.TestName} updated to {DisplayStatus(next)}."); FilterItems();
         }
-        catch (Exception ex)
-        {
-            Fail(ex.GetBaseException().Message);
-            await LoadAsync();
-        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); await LoadAsync(); }
     }
 
-    private void Success(string text) { messageClass = "success"; message = text; }
-    private void Fail(string text) { messageClass = "danger"; message = text; }
-
-    public void Dispose()
+    private async Task RejectAsync(LabItem item)
     {
-        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        await using var db = await DbFactory.CreateDbContextAsync(); var row = await db.LabSampleCollections.SingleAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+        row.Status = "Pending"; row.CollectedAt = null; row.CollectedBy = null; row.ReceivedAt = null; row.ReceivedBy = null; row.Remarks = "Rejected by laboratory — recollection required"; await db.SaveChangesAsync();
+        Success($"{item.TestName} sent back for recollection."); await LoadAsync();
     }
 
-    private sealed class WorklistItem
-    {
-        public long MemoID { get; set; }
-        public int ServiceID { get; set; }
-        public string? PatientID { get; set; }
-        public string PatientName { get; set; } = "";
-        public string Age { get; set; } = "";
-        public string Sex { get; set; } = "";
-        public string? Contact { get; set; }
-        public DateTime TransDate { get; set; }
-        public string TestName { get; set; } = "";
-        public string SpecimenType { get; set; } = "Blood";
-        public string SampleStatus { get; set; } = "Pending";
-        public long? SampleCollectionID { get; set; }
-    }
+    private static string DisplayStatus(string status) => status switch { "Collected" => "Awaiting Lab Receipt", "Received" => "Received in Lab", "InProcess" => "In Process", _ => status };
+    private void Success(string text) { messageClass = "success"; message = text; } private void Fail(string text) { messageClass = "danger"; message = text; }
+    private void LanguageChanged() => InvokeAsync(StateHasChanged); public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
+    private sealed class LabItem { public long MemoID { get; set; } public int ServiceID { get; set; } public string? PatientID { get; set; } public string PatientName { get; set; } = ""; public string Age { get; set; } = ""; public string Sex { get; set; } = ""; public string TestName { get; set; } = ""; public string SpecimenType { get; set; } = ""; public string Status { get; set; } = ""; public DateTime? CollectedAt { get; set; } public string? Remarks { get; set; } }
 }

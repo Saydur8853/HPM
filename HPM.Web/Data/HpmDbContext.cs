@@ -575,12 +575,16 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         department.HasKey(x => x.ID);
         department.Property(x => x.Name).HasMaxLength(50);
         department.Property(x => x.DepartmentCategoryID).HasColumnName("Department_Category_ID");
+        department.Property(x => x.IsActive).HasColumnName("Is_Active").HasDefaultValue(true);
+        department.HasIndex(x => x.Name).IsUnique();
 
         var ticketType = b.Entity<TicketType>();
         ticketType.ToTable("Ticket_Type");
         ticketType.HasKey(x => x.ID);
         ticketType.Property(x => x.Name).HasMaxLength(50);
         ticketType.Property(x => x.Amount).HasColumnType("numeric(18,2)");
+        ticketType.Property(x => x.IsActive).HasColumnName("Is_Active").HasDefaultValue(true);
+        ticketType.HasIndex(x => x.Name).IsUnique();
 
         var category = b.Entity<ServiceCategory>();
         category.ToTable("Service_Category");
@@ -607,6 +611,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.GenericID).HasColumnName("Generic_ID");
         service.Property(x => x.SupplierID).HasColumnName("Supplier_ID");
         service.Property(x => x.InvestigationModuleID).HasColumnName("Investigation_Module_ID");
+        service.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(20);
 
         department.HasData(
             new Department { ID = 1, Name = "Emergency" },
@@ -1343,6 +1348,14 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         sample.Property(x => x.SpecimenType).HasColumnName("Specimen_Type").HasMaxLength(100);
         sample.Property(x => x.CollectedAt).HasColumnName("Collected_At").HasColumnType("datetime");
         sample.Property(x => x.CollectedBy).HasColumnName("Collected_By");
+        sample.Property(x => x.ReceivedAt).HasColumnName("Received_At").HasColumnType("datetime");
+        sample.Property(x => x.ReceivedBy).HasColumnName("Received_By");
+        sample.Property(x => x.ProcessingStartedAt).HasColumnName("Processing_Started_At").HasColumnType("datetime");
+        sample.Property(x => x.ProcessingStartedBy).HasColumnName("Processing_Started_By");
+        sample.Property(x => x.CompletedAt).HasColumnName("Completed_At").HasColumnType("datetime");
+        sample.Property(x => x.CompletedBy).HasColumnName("Completed_By");
+        sample.Property(x => x.ScheduledAt).HasColumnName("Scheduled_At").HasColumnType("datetime");
+        sample.Property(x => x.Workstation).HasMaxLength(100);
         sample.Property(x => x.Status).HasMaxLength(30);
         sample.Property(x => x.Remarks).HasMaxLength(200);
         sample.HasIndex(x => new { x.MemoID, x.ServiceID }).IsUnique();
@@ -1354,7 +1367,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         result.Property(x => x.MemoID).HasColumnName("Memo_ID");
         result.Property(x => x.ServiceID).HasColumnName("Service_ID");
         result.Property(x => x.ParameterName).HasColumnName("Parameter_Name").HasMaxLength(100);
-        result.Property(x => x.ResultValue).HasColumnName("Result_Value").HasMaxLength(100);
+        result.Property(x => x.ResultValue).HasColumnName("Result_Value").HasMaxLength(4000);
         result.Property(x => x.Unit).HasMaxLength(50);
         result.Property(x => x.ReferenceRange).HasColumnName("Reference_Range").HasMaxLength(200);
         result.Property(x => x.Flag).HasMaxLength(30);
