@@ -1160,6 +1160,14 @@ namespace HPM.Web.Localization
             ["No records found."] = "কোনো তথ্য পাওয়া যায়নি।",
             ["Loading data..."] = "তথ্য লোড হচ্ছে...",
             ["Please wait..."] = "অনুগ্রহ করে অপেক্ষা করুন...",
+            ["View"] = "দেখুন",
+            ["Cancel Return"] = "রিটার্ন বাতিল করুন",
+            ["Cancel & Reverse Return"] = "রিটার্ন বাতিল ও রিভার্স করুন",
+            ["Cancellation Reason"] = "বাতিলের কারণ",
+            ["Keep Return"] = "রিটার্ন বহাল রাখুন",
+            ["COMPLETED"] = "সম্পন্ন",
+            ["CANCELLED"] = "বাতিলকৃত",
+            ["CANCELLED / REVERSED"] = "বাতিলকৃত ও রিভার্সড",
 
             // Clean User-Facing Subtitles
             ["Consultant schedules and daily patient booking."] = "কনসালট্যান্ট সময়সূচী এবং দৈনিক রোগী বুকিং ও সিরিয়াল।",
