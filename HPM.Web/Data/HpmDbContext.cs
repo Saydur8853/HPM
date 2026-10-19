@@ -101,6 +101,13 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<CanteenDebtorLedger> CanteenDebtorLedgers => Set<CanteenDebtorLedger>();
     public DbSet<PathologyGroupHead> PathologyGroupHeads => Set<PathologyGroupHead>();
     public DbSet<LabConsultant> LabConsultants => Set<LabConsultant>();
+    public DbSet<StoreProductCategory> StoreProductCategories => Set<StoreProductCategory>();
+    public DbSet<SupplierStore> StoreSuppliers => Set<SupplierStore>();
+    public DbSet<StoreProduct> StoreProducts => Set<StoreProduct>();
+    public DbSet<StoreChallan> StoreChallans => Set<StoreChallan>();
+    public DbSet<StoreChallanSub> StoreChallanItems => Set<StoreChallanSub>();
+    public DbSet<StoreIssue> StoreIssues => Set<StoreIssue>();
+    public DbSet<StoreIssueSub> StoreIssueItems => Set<StoreIssueSub>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

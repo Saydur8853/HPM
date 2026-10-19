@@ -899,9 +899,32 @@ window.hpm = {
         frame.style.border = '0';
         document.body.appendChild(frame);
         const printWindow = frame.contentWindow;
+        const isThermal = elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm'));
         printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title>
         <link rel="stylesheet" href="/app.css">
         <style>
+            ${isThermal ? `
+            @page { size: 80mm auto; margin: 3mm 2mm; }
+            * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            html, body {
+                width: 76mm !important;
+                max-width: 76mm !important;
+                margin: 0 auto !important;
+                padding: 0 !important;
+                font-family: 'Courier New', Courier, monospace, system-ui;
+                font-size: 11px !important;
+                color: #000000 !important;
+                background: #ffffff !important;
+            }
+            .pos-receipt-80mm {
+                width: 100% !important;
+                max-width: 100% !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+                border: none !important;
+            }
+            .pos-receipt-80mm table { width: 100% !important; font-size: 10.5px !important; }
+            ` : `
             @page { size: A4 portrait; margin: 8mm 10mm 10mm 10mm; }
             * { box-sizing: border-box !important; print-color-adjust: exact !important; }
             html, body { 
@@ -919,6 +942,7 @@ window.hpm = {
                 flex-direction: column;
                 min-height: 100%;
             }
+            `}
             .print-document, .print-sheet, .clinical-report-sheet, .a4-page-sheet { 
                 width: 100% !important; 
                 max-width: 100% !important; 

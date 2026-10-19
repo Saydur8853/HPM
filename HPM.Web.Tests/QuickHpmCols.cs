@@ -614,6 +614,142 @@ SELECT SCOPE_IDENTITY();";
         }
         _output.WriteLine("Inserted prescription medicines successfully.");
     }
+
+    [Fact]
+    public async Task Migrate_Store_Module()
+    {
+        var webConnStr = "Server=np:\\\\.\\pipe\\MSSQL$HPMDB\\sql\\query;Database=HPM_Web;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True";
+
+        await using var webConn = new SqlConnection(webConnStr);
+        await webConn.OpenAsync();
+
+        var ddl = @"
+IF OBJECT_ID('Store_Product_Category', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Product_Category](
+        [ID] [int] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Name] [nvarchar](50) NOT NULL
+    );
+END
+
+IF OBJECT_ID('Supplier_Store', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Supplier_Store](
+        [ID] [int] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Name] [nvarchar](50) NOT NULL,
+        [Address] [nvarchar](100) NULL,
+        [Contact] [nvarchar](50) NULL,
+        [Amount] [numeric](18, 2) NOT NULL DEFAULT (0),
+        [Trans_Date] [datetime] NULL
+    );
+END
+
+IF OBJECT_ID('Store_Product', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Product](
+        [ID] [int] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Name] [nvarchar](50) NOT NULL,
+        [Unit] [nvarchar](50) NOT NULL,
+        [Category] [int] NOT NULL,
+        [Supplier] [int] NOT NULL,
+        [Re_Order_Level] [int] NOT NULL DEFAULT (0),
+        [Balance] [decimal](18, 2) NOT NULL DEFAULT (0),
+        [Buy_Rate] [decimal](18, 2) NOT NULL DEFAULT (0),
+        [Sale_Rate] [decimal](18, 2) NOT NULL DEFAULT (0),
+        [Entered_By] [int] NOT NULL DEFAULT (1),
+        [Trans_Date] [datetime] NOT NULL DEFAULT (GETDATE())
+    );
+END
+
+IF OBJECT_ID('Store_Challan', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Challan](
+        [ID] [bigint] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Supplier] [int] NOT NULL,
+        [Invoice_No] [nvarchar](20) NOT NULL,
+        [Invoice_Date] [datetime] NOT NULL,
+        [Is_Posted] [bit] NOT NULL DEFAULT (0),
+        [Total] [numeric](18, 2) NOT NULL DEFAULT (0),
+        [Entered_By] [int] NOT NULL DEFAULT (1),
+        [Trans_Date] [datetime] NOT NULL DEFAULT (GETDATE())
+    );
+END
+
+IF OBJECT_ID('Store_Challan_Sub', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Challan_Sub](
+        [ID] [bigint] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Challan_No] [bigint] NOT NULL,
+        [Product_ID] [int] NOT NULL,
+        [SLNO] [int] NOT NULL,
+        [Total] [numeric](18, 2) NOT NULL,
+        [Buy_Rate] [numeric](18, 2) NOT NULL,
+        [Quantity] [numeric](18, 2) NOT NULL
+    );
+END
+
+IF OBJECT_ID('Store_Issue', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Issue](
+        [ID] [bigint] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Issue_Department] [int] NOT NULL,
+        [IndentNo] [nvarchar](10) NOT NULL,
+        [Total] [numeric](18, 2) NULL,
+        [Entered_By] [int] NOT NULL,
+        [Trans_Date] [datetime] NOT NULL DEFAULT (GETDATE())
+    );
+END
+
+IF OBJECT_ID('Store_Issue_Sub', 'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[Store_Issue_Sub](
+        [ID] [bigint] IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        [Issue_No] [bigint] NOT NULL,
+        [Product_ID] [int] NULL,
+        [SLNO] [int] NULL,
+        [Buy_Rate] [numeric](18, 2) NULL,
+        [Quantity] [numeric](18, 2) NULL,
+        [Total] [numeric](18, 2) NULL
+    );
+END";
+
+        await using (var cmd = webConn.CreateCommand())
+        {
+            cmd.CommandText = ddl;
+            await cmd.ExecuteNonQueryAsync();
+            _output.WriteLine("Created Store module tables in HPM_Web successfully.");
+        }
+
+        // Copy Store_Product_Category, Supplier_Store, Store_Product from HPM if empty
+        var copyList = new[]
+        {
+            ("Store_Product_Category", "ID, Name"),
+            ("Supplier_Store", "ID, Name, Address, Contact, Amount, Trans_Date"),
+            ("Store_Product", "ID, Name, Unit, Category, Supplier, Re_Order_Level, Balance, Buy_Rate, Sale_Rate, Entered_By, Trans_Date")
+        };
+
+        foreach (var (tbl, cols) in copyList)
+        {
+            await using var chkCmd = webConn.CreateCommand();
+            chkCmd.CommandText = $"SELECT COUNT(*) FROM [{tbl}]";
+            var count = Convert.ToInt32(await chkCmd.ExecuteScalarAsync() ?? 0);
+            if (count == 0)
+            {
+                await using var insCmd = webConn.CreateCommand();
+                insCmd.CommandText = $@"
+SET IDENTITY_INSERT [dbo].[{tbl}] ON;
+INSERT INTO [dbo].[{tbl}] ({cols})
+SELECT {cols} FROM [HPM].[dbo].[{tbl}];
+SET IDENTITY_INSERT [dbo].[{tbl}] OFF;";
+                var inserted = await insCmd.ExecuteNonQueryAsync();
+                _output.WriteLine($"Copied {inserted} rows into {tbl} from HPM");
+            }
+            else
+            {
+                _output.WriteLine($"{tbl} already has {count} rows in HPM_Web");
+            }
+        }
+    }
 }
 
 
