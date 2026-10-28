@@ -156,6 +156,8 @@ public sealed class DoctorsProfile
     public int? ReferralCategoryID { get; set; }
     public bool IsActive { get; set; } = true;
     public int? Priority { get; set; }
+    [StringLength(100)] public string? ConsultationTime { get; set; }
+    [StringLength(100)] public string? OffDay { get; set; } = "Friday";
 }
 
 public sealed class Department

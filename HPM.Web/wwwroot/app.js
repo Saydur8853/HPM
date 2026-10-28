@@ -1131,6 +1131,65 @@ window.hpm = {
             printWindow.print();
             setTimeout(cleanup, 60000);
         }, 350);
+    },
+
+    initDoctorInfiniteScroll: function (containerId, listId, dotNetRef) {
+        this._doctorScrollDotNetRef = dotNetRef;
+        this._doctorSearchContainerId = containerId;
+        this._doctorSuggestionsListId = listId;
+
+        if (!this._doctorOutsideClickHandler) {
+            this._doctorOutsideClickHandler = (event) => {
+                const container = document.getElementById(this._doctorSearchContainerId);
+                const list = document.getElementById(this._doctorSuggestionsListId);
+                if (!container || !list) return;
+                const target = event.target instanceof Element ? event.target : (event.target ? event.target.parentElement : null);
+                if (target && container.contains(target)) {
+                    return;
+                }
+                if (this._doctorScrollDotNetRef) {
+                    this._doctorScrollDotNetRef.invokeMethodAsync('CloseDoctorSuggestionsFromJs').catch(() => {});
+                }
+            };
+            document.addEventListener('pointerdown', this._doctorOutsideClickHandler, true);
+        }
+
+        const listEl = document.getElementById(listId);
+        if (listEl && !listEl._hpmScrollAttached) {
+            listEl._hpmScrollAttached = true;
+            listEl.addEventListener('scroll', () => {
+                if (listEl._hpmLoadingMore) return;
+                const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+                if (remaining <= 70) {
+                    listEl._hpmLoadingMore = true;
+                    if (this._doctorScrollDotNetRef) {
+                        this._doctorScrollDotNetRef.invokeMethodAsync('LoadMoreDoctorsFromJs')
+                            .catch(() => {})
+                            .finally(() => {
+                                listEl._hpmLoadingMore = false;
+                            });
+                    } else {
+                        listEl._hpmLoadingMore = false;
+                    }
+                }
+            }, { passive: true });
+        }
+    },
+
+    resetDoctorScrollTop: function (listId) {
+        const listEl = document.getElementById(listId);
+        if (listEl) {
+            listEl.scrollTop = 0;
+            listEl._hpmLoadingMore = false;
+        }
+    },
+
+    disposeDoctorInfiniteScroll: function () {
+        if (this._doctorOutsideClickHandler) {
+            document.removeEventListener('pointerdown', this._doctorOutsideClickHandler, true);
+            this._doctorOutsideClickHandler = null;
+        }
+        this._doctorScrollDotNetRef = null;
     }
 };
 

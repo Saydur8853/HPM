@@ -15,6 +15,12 @@ public static class ClinicalEncounterWorkflow
         _ => false
     };
 
+    public static string FormatTempPatientId(int appointmentId) =>
+        appointmentId >= 1_000_000 ? $"TMP{appointmentId}" : $"TMP-{appointmentId:000000}";
+
+    public static bool IsTempPatientId(string? patientId) =>
+        !string.IsNullOrWhiteSpace(patientId) && patientId.Trim().StartsWith("TMP", StringComparison.OrdinalIgnoreCase);
+
     public static async Task<PatientEncounter> CheckInAppointmentAsync(
         HpmDbContext db, DoctorAppointment appointment, int userId, CancellationToken cancellationToken = default)
     {
@@ -26,17 +32,34 @@ public static class ClinicalEncounterWorkflow
         if (appointment.Status is "Cancelled" or "NoShow" or "Completed")
             throw new InvalidOperationException($"A {appointment.Status} appointment cannot be checked in.");
 
+        if (string.IsNullOrWhiteSpace(appointment.PatientID))
+        {
+            appointment.PatientID = FormatTempPatientId(appointment.ID);
+        }
+
         await SqlServerConcurrency.AcquireTransactionLockAsync(
             db, $"HPM:EncounterQueue:{appointment.DoctorID}:{appointment.ApptDate:yyyyMMdd}");
         var nextQueue = (await db.PatientEncounters
             .Where(x => x.DoctorID == appointment.DoctorID && x.VisitDate == appointment.ApptDate.Date)
             .MaxAsync(x => (int?)x.QueueNo, cancellationToken) ?? 0) + 1;
 
+        decimal? parsedWeightKg = null;
+        if (!string.IsNullOrWhiteSpace(appointment.Weight))
+        {
+            var cleanWeight = appointment.Weight.Replace("kg", "", StringComparison.OrdinalIgnoreCase).Trim();
+            if (decimal.TryParse(cleanWeight, out var wVal) && wVal > 0)
+            {
+                parsedWeightKg = wVal;
+            }
+        }
+
         var encounter = new PatientEncounter
         {
             PatientID = NullIfWhiteSpace(appointment.PatientID),
             PatientName = appointment.Name.Trim(),
             Age = NullIfWhiteSpace(appointment.Age),
+            Sex = NullIfWhiteSpace(appointment.Sex),
+            WeightKg = parsedWeightKg,
             DoctorID = appointment.DoctorID,
             AppointmentID = appointment.ID,
             QueueNo = nextQueue,

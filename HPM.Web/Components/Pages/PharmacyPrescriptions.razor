@@ -163,6 +163,35 @@
                         </button>
                     </div>
                 }
+                else if (ClinicalEncounterWorkflow.IsTempPatientId(editor.PatientID))
+                {
+                    <div class="rx-patient-hero-badge" style="background:#fffbeb; border:1px solid #fde68a; margin-bottom:12px;">
+                        <div class="rx-patient-hero-info">
+                            <span class="badge" style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d; font-weight:800; font-size:11.5px;">
+                                🪪 TEMP ID: @editor.PatientID
+                            </span>
+                            <span style="font-weight:700; color:#0f172a;">@editor.Name</span>
+                            @if (!string.IsNullOrWhiteSpace(editor.Age))
+                            {
+                                <span>• @editor.Age</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(editor.Sex))
+                            {
+                                <span>• @editor.Sex</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(walkInContactNo))
+                            {
+                                <span>• 📞 @walkInContactNo</span>
+                            }
+                            <span style="font-size:11px; color:#047857; font-weight:700; background:#ecfdf5; padding:2px 8px; border-radius:10px; border:1px solid #a7f3d0;">
+                                ✨ @I18n.T("Auto-registers as Permanent Patient on Save")
+                            </span>
+                        </div>
+                        <button type="button" class="btn btn-secondary" style="padding:3px 10px; font-size:11px;" @onclick="ClearSelectedPatient">
+                            @I18n.T("Change")
+                        </button>
+                    </div>
+                }
                 else
                 {
                     <div class="rx-search-wrapper" style="margin-bottom:12px;">
@@ -171,7 +200,7 @@
                                 <span class="rx-search-icon"><SearchIcon /></span>
                                 <input type="text"
                                        class="rx-search-input"
-                                       placeholder="@I18n.T("Search Registered Patient (Patient ID, Mobile No, or Name)...")"
+                                       placeholder="@I18n.T("Search Patient ID, Temp ID (TMP-...), Mobile No, or Name...")"
                                        @bind="patientSearchQuery"
                                        @bind:event="oninput"
                                        @onkeydown="HandlePatientSearchKeyDown"
@@ -180,9 +209,31 @@
                                 {
                                     <button type="button" class="rx-search-clear" @onclick="ClearPatientSearch">✕</button>
                                 }
-                                @if (showPatientSuggestions && PatientSuggestions.Any())
+                                @if (showPatientSuggestions && (WalkInAppointmentSuggestions.Any() || PatientSuggestions.Any()))
                                 {
                                     <div class="rx-med-dropdown" style="z-index:110;">
+                                        @foreach (var w in WalkInAppointmentSuggestions)
+                                        {
+                                            var tempCode = string.IsNullOrWhiteSpace(w.PatientID) ? ClinicalEncounterWorkflow.FormatTempPatientId(w.ID) : w.PatientID;
+                                            <div class="rx-med-item" style="background:#fffbeb;" @onmousedown:preventDefault @onclick="() => SelectWalkInAppointment(w)">
+                                                <div>
+                                                    <span class="badge" style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d; font-weight:800; font-size:10.5px;">🪪 @tempCode</span>
+                                                    <span style="margin-left:6px; font-weight:700; color:#0f172a;">@w.Name</span>
+                                                    @if (!string.IsNullOrWhiteSpace(w.ContactNo))
+                                                    {
+                                                        <small style="margin-left:6px; color:#64748b;">(@w.ContactNo)</small>
+                                                    }
+                                                </div>
+                                                <div style="display:flex; align-items:center; gap:6px;">
+                                                    <span style="font-size:10.5px; color:#b45309; font-weight:700;">Walk-in Appt #@w.ApptSLNO.ToString("00")</span>
+                                                    @if (!string.IsNullOrWhiteSpace(w.Weight))
+                                                    {
+                                                        <span class="patient-weight-pill">⚖️ @w.Weight kg</span>
+                                                    }
+                                                    <span style="font-size:11px; color:#64748b;">@w.Sex</span>
+                                                </div>
+                                            </div>
+                                        }
                                         @foreach (var p in PatientSuggestions)
                                         {
                                             <div class="rx-med-item" @onmousedown:preventDefault @onclick="() => SelectPatient(p)">
@@ -768,6 +819,9 @@
     private List<DoctorsProfile> doctors = [];
     private List<Prescription> recent = [];
     private List<Registration> registeredPatients = [];
+    private List<DoctorAppointment> walkInAppointments = [];
+    private string? walkInContactNo;
+    private int? linkedAppointmentId;
 
     // IPD Ward Indent State
     private bool isIpdMode;
@@ -862,6 +916,22 @@
                 (p.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (p.Contact?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
             ).Take(6);
+        }
+    }
+
+    private IEnumerable<DoctorAppointment> WalkInAppointmentSuggestions
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(patientSearchQuery)) return Enumerable.Empty<DoctorAppointment>();
+            var q = patientSearchQuery.Trim();
+            return walkInAppointments.Where(w =>
+            {
+                var tempCode = string.IsNullOrWhiteSpace(w.PatientID) ? ClinicalEncounterWorkflow.FormatTempPatientId(w.ID) : w.PatientID;
+                return tempCode.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                       (w.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                       (w.ContactNo?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false);
+            }).Take(5);
         }
     }
 
@@ -1075,6 +1145,8 @@
     private void SelectPatient(Registration p)
     {
         selectedPatient = p;
+        walkInContactNo = p.Contact;
+        linkedAppointmentId = null;
         editor.PatientID = p.PatientID;
         editor.Name = p.Name;
         editor.Age = FormatPatientAge(p.DateOfBirth);
@@ -1091,9 +1163,37 @@
         _ = DetectAssignedDoctorAsync(p.PatientID);
     }
 
+    private void SelectWalkInAppointment(DoctorAppointment w)
+    {
+        selectedPatient = null;
+        linkedAppointmentId = w.ID;
+        walkInContactNo = w.ContactNo;
+        var tempCode = string.IsNullOrWhiteSpace(w.PatientID) ? ClinicalEncounterWorkflow.FormatTempPatientId(w.ID) : w.PatientID;
+        editor.PatientID = tempCode;
+        editor.Name = w.Name;
+        editor.Age = w.Age;
+        editor.Sex = w.Sex ?? "";
+        if (!string.IsNullOrWhiteSpace(w.Weight))
+        {
+            var cleanW = w.Weight.Replace("kg", "", StringComparison.OrdinalIgnoreCase).Trim();
+            weightText = $"{cleanW} kg";
+            if (decimal.TryParse(cleanW, out var wDec)) editor.Weight = wDec;
+        }
+        if (w.DoctorID > 0 && doctors.Any(d => d.ID == w.DoctorID))
+        {
+            doctorId = w.DoctorID;
+            editor.ReferredBy = w.DoctorID;
+        }
+        patientSearchQuery = "";
+        showPatientSuggestions = false;
+        _ = DetectAssignedDoctorAsync(tempCode);
+    }
+
     private void ClearSelectedPatient()
     {
         selectedPatient = null;
+        walkInContactNo = null;
+        linkedAppointmentId = null;
         editor.PatientID = null;
         patientSearchQuery = "";
     }
@@ -1238,6 +1338,17 @@
         // 4. Load recent patients for search dropdown
         registeredPatients = await db.Registrations.AsNoTracking().OrderByDescending(x => x.ID).Take(150).ToListAsync();
 
+        // 4b. Load recent walk-in appointments (with Temporary Patient IDs or unregistered)
+        var recentAppts = await db.DoctorAppointments.AsNoTracking()
+            .Where(x => x.Status != "Cancelled" && x.Status != "NoShow")
+            .OrderByDescending(x => x.ID)
+            .Take(100)
+            .ToListAsync();
+        var regSet = registeredPatients.Select(r => r.PatientID).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        walkInAppointments = recentAppts
+            .Where(a => string.IsNullOrWhiteSpace(a.PatientID) || ClinicalEncounterWorkflow.IsTempPatientId(a.PatientID) || !regSet.Contains(a.PatientID))
+            .ToList();
+
         // 5. Load active admitted inpatients for IPD Indent
         var admissions = await db.PatientAdmissions.AsNoTracking().Where(x => x.IsAdmitted == true).OrderByDescending(x => x.ID).Take(100).ToListAsync();
         var bedIds = admissions.Where(x => x.BedCabinID.HasValue).Select(x => x.BedCabinID!.Value).Distinct().ToList();
@@ -1319,6 +1430,19 @@
         }
     }
 
+    private static DateTime ParseBirthDateFromAge(string? ageText)
+    {
+        if (!string.IsNullOrWhiteSpace(ageText))
+        {
+            var digits = new string(ageText.TakeWhile(c => char.IsDigit(c) || char.IsWhiteSpace(c)).Where(char.IsDigit).ToArray());
+            if (int.TryParse(digits, out var yrs) && yrs >= 0 && yrs <= 130)
+            {
+                return DateTime.Today.AddYears(-yrs);
+            }
+        }
+        return DateTime.Today.AddYears(-30);
+    }
+
     private async Task FindPatientAsync()
     {
         if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
@@ -1329,6 +1453,30 @@
         {
             SelectPatient(p);
             Success(I18n.IsBangla ? $"রোগী '{p.Name}' (PID: {p.PatientID}) এর তথ্য লোড হয়েছে।" : $"Patient '{p.Name}' loaded.");
+            return;
+        }
+
+        // Check if it matches a Walk-in Appointment by Temp ID (TMP-XXXXXX), Name, or Mobile
+        int parsedApptId = 0;
+        if (pid.StartsWith("TMP-", StringComparison.OrdinalIgnoreCase))
+            int.TryParse(pid[4..], out parsedApptId);
+        else if (pid.StartsWith("TMP", StringComparison.OrdinalIgnoreCase))
+            int.TryParse(pid[3..], out parsedApptId);
+
+        var walkInAppt = await db.DoctorAppointments.AsNoTracking()
+            .Where(x => x.PatientID == pid
+                     || (parsedApptId > 0 && x.ID == parsedApptId)
+                     || x.ContactNo == pid
+                     || x.Name.Contains(pid))
+            .OrderByDescending(x => x.ID)
+            .FirstOrDefaultAsync();
+
+        if (walkInAppt != null)
+        {
+            SelectWalkInAppointment(walkInAppt);
+            Success(I18n.IsBangla
+                ? $"ওয়াক-ইন অ্যাপয়েন্টমেন্ট রোগী '{walkInAppt.Name}' (Temp ID: {editor.PatientID}) লোড হয়েছে। প্রেসক্রিপশন সেভ করলে স্থায়ী পেশেন্ট হিসেবে রেজিস্টার হয়ে যাবে।"
+                : $"Walk-in appointment patient '{walkInAppt.Name}' ({editor.PatientID}) loaded. Will auto-register on prescription save.");
         }
         else
         {
@@ -1344,14 +1492,33 @@
         if (!isAdministrator && (!currentDoctorProfileId.HasValue || encounter.DoctorID != currentDoctorProfileId.Value)) { Fail(I18n.T("You can prescribe only for your own patient queue.")); return; }
         if (encounter.Status == EncounterStatuses.Completed) { Fail(I18n.T("This visit is already completed.")); return; }
         var patient = string.IsNullOrWhiteSpace(encounter.PatientID) ? null : await db.Registrations.AsNoTracking().SingleOrDefaultAsync(x => x.PatientID == encounter.PatientID);
+        var linkedAppt = encounter.AppointmentID.HasValue
+            ? await db.DoctorAppointments.AsNoTracking().SingleOrDefaultAsync(x => x.ID == encounter.AppointmentID.Value)
+            : null;
+        selectedPatient = patient;
+        linkedAppointmentId = linkedAppt?.ID;
+        walkInContactNo = patient?.Contact ?? linkedAppt?.ContactNo;
         editor.EncounterID = encounter.ID;
-        editor.PatientID = encounter.PatientID;
+        editor.PatientID = !string.IsNullOrWhiteSpace(encounter.PatientID)
+            ? encounter.PatientID
+            : (linkedAppt != null ? (!string.IsNullOrWhiteSpace(linkedAppt.PatientID) ? linkedAppt.PatientID : ClinicalEncounterWorkflow.FormatTempPatientId(linkedAppt.ID)) : null);
         editor.TicketID = encounter.TicketID;
         editor.Name = encounter.PatientName;
-        editor.Age = encounter.Age;
-        editor.Sex = encounter.Sex ?? patient?.Sex;
+        editor.Age = encounter.Age ?? linkedAppt?.Age;
+        editor.Sex = encounter.Sex ?? linkedAppt?.Sex ?? patient?.Sex;
         editor.BloodGroup = patient?.BloodGroup;
-        if (!string.IsNullOrWhiteSpace(patient?.Weight))
+        if (encounter.WeightKg.HasValue && encounter.WeightKg.Value > 0)
+        {
+            editor.Weight = encounter.WeightKg.Value;
+            weightText = $"{encounter.WeightKg.Value:0.##} kg";
+        }
+        else if (!string.IsNullOrWhiteSpace(linkedAppt?.Weight))
+        {
+            var cleanW = linkedAppt.Weight.Replace("kg", "", StringComparison.OrdinalIgnoreCase).Trim();
+            weightText = $"{cleanW} kg";
+            if (decimal.TryParse(cleanW, out var w)) editor.Weight = w;
+        }
+        else if (!string.IsNullOrWhiteSpace(patient?.Weight))
         {
             weightText = $"{patient.Weight} kg";
             if (decimal.TryParse(patient.Weight, out var w)) editor.Weight = w;
@@ -1442,10 +1609,100 @@
                 }
             }
 
+            string? autoRegisteredPermanentId = null;
+            string? oldTemporaryId = null;
+            Registration? newlyCreatedReg = null;
+            var currentUserId = await CurrentUserIdAsync();
+
             var target = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
                 Prescription target;
                 var day = visitDate.Date;
+
+                // Auto-register walk-in / temporary patient into Registration (Main Patient Master) when prescription is issued
+                var resolvedPatientId = editor.PatientID?.Trim();
+                if (!isIpdMode)
+                {
+                    var isTemp = ClinicalEncounterWorkflow.IsTempPatientId(resolvedPatientId);
+                    var existingReg = !string.IsNullOrWhiteSpace(resolvedPatientId) && !isTemp
+                        ? await db.Registrations.FirstOrDefaultAsync(x => x.PatientID == resolvedPatientId)
+                        : null;
+
+                    if (existingReg is null)
+                    {
+                        oldTemporaryId = resolvedPatientId;
+                        DoctorAppointment? linkedAppt = null;
+                        if (linkedAppointmentId.HasValue)
+                        {
+                            linkedAppt = await db.DoctorAppointments.FirstOrDefaultAsync(x => x.ID == linkedAppointmentId.Value);
+                        }
+                        if (linkedAppt is null && editor.EncounterID.HasValue)
+                        {
+                            var encForAppt = await db.PatientEncounters.AsNoTracking().FirstOrDefaultAsync(x => x.ID == editor.EncounterID.Value);
+                            if (encForAppt?.AppointmentID != null)
+                            {
+                                linkedAppt = await db.DoctorAppointments.FirstOrDefaultAsync(x => x.ID == encForAppt.AppointmentID.Value);
+                            }
+                        }
+                        if (linkedAppt is null && !string.IsNullOrWhiteSpace(resolvedPatientId))
+                        {
+                            int parsedTempApptId = 0;
+                            if (resolvedPatientId.StartsWith("TMP-", StringComparison.OrdinalIgnoreCase))
+                                int.TryParse(resolvedPatientId[4..], out parsedTempApptId);
+                            else if (resolvedPatientId.StartsWith("TMP", StringComparison.OrdinalIgnoreCase))
+                                int.TryParse(resolvedPatientId[3..], out parsedTempApptId);
+
+                            linkedAppt = await db.DoctorAppointments
+                                .Where(x => x.PatientID == resolvedPatientId || (parsedTempApptId > 0 && x.ID == parsedTempApptId))
+                                .OrderByDescending(x => x.ID)
+                                .FirstOrDefaultAsync();
+                        }
+
+                        await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:PatientID");
+                        var nextRegNo = (await db.Registrations.MaxAsync(x => (long?)x.ID) ?? 0) + 1;
+                        var generatedPatientId = $"{DateTime.Today.Year}{nextRegNo:00000}";
+
+                        var newRegistration = new Registration
+                        {
+                            PatientID = generatedPatientId,
+                            Name = editor.Name ?? linkedAppt?.Name ?? "Patient",
+                            DateOfBirth = ParseBirthDateFromAge(editor.Age ?? linkedAppt?.Age),
+                            Sex = !string.IsNullOrWhiteSpace(editor.Sex) ? editor.Sex.Trim() : (!string.IsNullOrWhiteSpace(linkedAppt?.Sex) ? linkedAppt.Sex.Trim() : "Other"),
+                            BloodGroup = editor.BloodGroup?.Trim(),
+                            Weight = editor.Weight.HasValue ? editor.Weight.Value.ToString("0.##") : linkedAppt?.Weight,
+                            Contact = !string.IsNullOrWhiteSpace(walkInContactNo) ? walkInContactNo.Trim() : linkedAppt?.ContactNo,
+                            EnteredBy = currentUserId,
+                            TransDate = DateTime.Now
+                        };
+                        db.Registrations.Add(newRegistration);
+                        newlyCreatedReg = newRegistration;
+                        resolvedPatientId = generatedPatientId;
+                        autoRegisteredPermanentId = generatedPatientId;
+
+                        if (linkedAppt is not null)
+                        {
+                            linkedAppt.PatientID = generatedPatientId;
+                        }
+                        if (!string.IsNullOrWhiteSpace(oldTemporaryId))
+                        {
+                            var otherAppts = await db.DoctorAppointments
+                                .Where(x => x.PatientID == oldTemporaryId)
+                                .ToListAsync();
+                            foreach (var a in otherAppts) a.PatientID = generatedPatientId;
+
+                            var tempEncounters = await db.PatientEncounters
+                                .Where(x => x.PatientID == oldTemporaryId)
+                                .ToListAsync();
+                            foreach (var enc in tempEncounters) enc.PatientID = generatedPatientId;
+
+                            var tempOrders = await db.DiagnosticOrders
+                                .Where(x => x.PatientID == oldTemporaryId)
+                                .ToListAsync();
+                            foreach (var ord in tempOrders) ord.PatientID = generatedPatientId;
+                        }
+                    }
+                }
+
                 if (editor.ID == 0)
                 {
                     await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Prescription:{day:yyyyMMdd}");
@@ -1482,13 +1739,13 @@
                 target.Investigation = editor.Investigation?.Trim();
                 target.Remark = editor.Remark?.Trim();
                 target.ReferredBy = doctorId;
-                target.PatientID = editor.PatientID;
+                target.PatientID = resolvedPatientId;
                 target.EncounterID = (editor.ID == 0 && editor.EncounterID.HasValue && await db.Prescriptions.AnyAsync(x => x.EncounterID == editor.EncounterID.Value))
                     ? null
                     : editor.EncounterID;
                 target.TicketID = editor.TicketID;
                 target.Status = "Signed";
-                target.CreatedBy ??= await CurrentUserIdAsync();
+                target.CreatedBy ??= currentUserId;
                 target.SignedAt = DateTime.Now;
                 target.Medicine = lines.Count > 0
                     ? string.Join("; ", lines.Select(x => $"{MedicineName(x.ServiceID)} ({x.DosagePattern ?? "1+0+1"}) x {x.Days}d = {x.Quantity}"))
@@ -1511,6 +1768,10 @@
                 if (target.EncounterID.HasValue)
                 {
                     var encounter = await db.PatientEncounters.SingleAsync(x => x.ID == target.EncounterID.Value);
+                    if (!string.IsNullOrWhiteSpace(resolvedPatientId))
+                    {
+                        encounter.PatientID = resolvedPatientId;
+                    }
                     encounter.ChiefComplaint = target.Complain;
                     encounter.Diagnosis = target.Diagnosis;
                     encounter.UpdatedAt = DateTime.Now;
@@ -1521,6 +1782,10 @@
             }, System.Data.IsolationLevel.Serializable);
 
             editor = target;
+            if (newlyCreatedReg is not null)
+            {
+                selectedPatient = newlyCreatedReg;
+            }
             lines = target.Medicines.Select(x => new PrescriptionMedicine
             {
                 ID = x.ID,
@@ -1535,7 +1800,17 @@
                 Instruction = x.Instruction
             }).ToList();
 
-            Success(I18n.IsBangla ? $"প্রেসক্রিপশন #RX-{target.ID} সফলভাবে সংরক্ষিত হয়েছে (ভিজিট #{target.VisitNo})।" : $"Prescription #RX-{target.ID} saved with visit #{target.VisitNo}.");
+            if (!string.IsNullOrWhiteSpace(autoRegisteredPermanentId))
+            {
+                var tempNote = !string.IsNullOrWhiteSpace(oldTemporaryId) ? $" ({oldTemporaryId})" : "";
+                Success(I18n.IsBangla
+                    ? $"প্রেসক্রিপশন #RX-{target.ID} সংরক্ষিত হয়েছে এবং ওয়াক-ইন রোগী{tempNote} স্বয়ংক্রিয়ভাবে স্থায়ী পেশেন্ট আইডি #{autoRegisteredPermanentId}-এ রেজিস্টার হয়েছে!"
+                    : $"Prescription #RX-{target.ID} saved! Walk-in patient{tempNote} automatically registered as Permanent Patient #{autoRegisteredPermanentId}.");
+            }
+            else
+            {
+                Success(I18n.IsBangla ? $"প্রেসক্রিপশন #RX-{target.ID} সফলভাবে সংরক্ষিত হয়েছে (ভিজিট #{target.VisitNo})।" : $"Prescription #RX-{target.ID} saved with visit #{target.VisitNo}.");
+            }
             await LoadAsync();
         }
         catch (Exception ex)
@@ -1670,6 +1945,8 @@
         selectedMedicine = null;
         selectedPatient = null;
         selectedInpatient = null;
+        walkInContactNo = null;
+        linkedAppointmentId = null;
         inpatientSearch = "";
         medicineId = 0;
         medicineSearchQuery = "";
