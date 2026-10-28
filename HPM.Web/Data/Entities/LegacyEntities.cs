@@ -7,7 +7,7 @@ public sealed class Registration
     public long ID { get; set; }
     [Required, StringLength(11)] public string PatientID { get; set; } = string.Empty;
     [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
-    public DateTime DateOfBirth { get; set; } = DateTime.Today;
+    public DateTime? DateOfBirth { get; set; }
     [Required, StringLength(10)] public string Sex { get; set; } = string.Empty;
     [StringLength(10)] public string? BloodGroup { get; set; }
     [StringLength(20)] public string? Weight { get; set; }

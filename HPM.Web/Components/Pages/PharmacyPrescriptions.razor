@@ -1659,8 +1659,24 @@
                         }
 
                         await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:PatientID");
-                        var nextRegNo = (await db.Registrations.MaxAsync(x => (long?)x.ID) ?? 0) + 1;
-                        var generatedPatientId = $"{DateTime.Today.Year}{nextRegNo:00000}";
+                        var todayPrefix = $"P{DateTime.Today:yyMMdd}";
+                        var maxExistingToday = await db.Registrations
+                            .Where(x => x.PatientID.StartsWith(todayPrefix))
+                            .OrderByDescending(x => x.PatientID)
+                            .Select(x => x.PatientID)
+                            .FirstOrDefaultAsync();
+
+                        var nextSeq = 1;
+                        if (!string.IsNullOrWhiteSpace(maxExistingToday) && maxExistingToday.Length >= 11)
+                        {
+                            var seqPart = maxExistingToday.Substring(7);
+                            if (int.TryParse(seqPart, out var parsedSeq))
+                            {
+                                nextSeq = parsedSeq + 1;
+                            }
+                        }
+
+                        var generatedPatientId = $"{todayPrefix}{nextSeq:0000}";
 
                         var newRegistration = new Registration
                         {

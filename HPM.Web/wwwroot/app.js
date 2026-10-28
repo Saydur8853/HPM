@@ -1192,6 +1192,39 @@ window.hpm = {
         this._doctorScrollDotNetRef = null;
     },
 
+    initPatientIdScroll: function (listId, dotNetRef, methodName) {
+        const listEl = document.getElementById(listId);
+        if (!listEl) return;
+        if (listEl._hpmPatientScrollAttached) return;
+        listEl._hpmPatientScrollAttached = true;
+        listEl.addEventListener('scroll', () => {
+            if (listEl._hpmPatientLoadingMore) return;
+            const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+            if (remaining <= 80) {
+                listEl._hpmPatientLoadingMore = true;
+                if (dotNetRef) {
+                    dotNetRef.invokeMethodAsync(methodName || 'LoadMorePatientsFromJs')
+                        .catch(() => {})
+                        .finally(() => {
+                            setTimeout(() => {
+                                listEl._hpmPatientLoadingMore = false;
+                            }, 150);
+                        });
+                } else {
+                    listEl._hpmPatientLoadingMore = false;
+                }
+            }
+        }, { passive: true });
+    },
+
+    resetPatientIdScrollTop: function (listId) {
+        const listEl = document.getElementById(listId);
+        if (listEl) {
+            listEl.scrollTop = 0;
+            listEl._hpmPatientLoadingMore = false;
+        }
+    },
+
     initTableAutoScroll: function (elementId, dotNetRef, methodName) {
         var attach = function () {
             var el = document.getElementById(elementId);

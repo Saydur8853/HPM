@@ -122,7 +122,7 @@
                                                             }
                                                             @item.DisplayName
                                                         </span>
-                                                        <span class="appt-doctor-option-id">ID: @doctor.ID</span>
+                                                        <span class="appt-doctor-option-id">ID: D@(doctor.ID)</span>
                                                     </div>
                                                     <div class="appt-doctor-option-sub">
                                                         @item.Degree@if (!string.IsNullOrWhiteSpace(item.DepartmentName)){<text> &bull; @item.DepartmentName</text>}@if(!string.IsNullOrWhiteSpace(item.Room)){<text> &bull; Room @item.Room</text>}
@@ -374,8 +374,8 @@
                                         </div>
                                         @if (showPatientIdSuggestions)
                                         {
-                                            <div class="appt-patient-suggestions">
-                                                @foreach (var patient in patientIdSuggestions.Take(5))
+                                            <div class="appt-patient-suggestions" id="appt-patient-suggestions-list">
+                                                @foreach (var patient in patientIdSuggestions)
                                                 {
                                                     <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatient(patient)">
                                                         <span class="patient-id">@patient.PatientID</span>
@@ -392,6 +392,19 @@
                                                         }
                                                         <span class="patient-contact">@patient.Contact</span>
                                                     </button>
+                                                }
+                                                @if (hasMorePatientSuggestions)
+                                                {
+                                                    <div class="appt-doctor-scroll-hint" @onclick="LoadMorePatientsFromJs" @onmousedown:preventDefault>
+                                                        @if (isLoadingMorePatients)
+                                                        {
+                                                            <span>@I18n.T("Loading more...")</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@I18n.T("Showing") @patientIdSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                        }
+                                                    </div>
                                                 }
                                             </div>
                                         }
@@ -879,6 +892,9 @@
     private bool showDoctorSuggestions;
     private List<Registration> patientIdSuggestions = [];
     private bool showPatientIdSuggestions;
+    private const int PatientBatchSize = 15;
+    private bool hasMorePatientSuggestions = true;
+    private bool isLoadingMorePatients = false;
     private string patientSearchQuery = string.Empty;
     private bool isWalkInMode = true;
     private bool filterByCurrentDoctor = false;
@@ -978,7 +994,7 @@
             var deg = CleanDoctorDegree(d);
             var deptName = d.Department.HasValue && departments.TryGetValue(d.Department.Value, out var dn) ? dn : string.Empty;
             var room = CleanDoctorRoom(d.Room);
-            var haystack = $"{d.ID} {disp} {deg} {deptName} {room} {d.Room}";
+            var haystack = $"D{d.ID} {d.ID} {disp} {deg} {deptName} {room} {d.Room}";
             var item = new DoctorViewItem(d, disp, deg, deptName, room, haystack);
             list.Add(item);
             map[d.ID] = item;
@@ -1027,9 +1043,9 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        dotNetRef ??= DotNetObjectReference.Create(this);
         if (showDoctorSuggestions)
         {
-            dotNetRef ??= DotNetObjectReference.Create(this);
             try
             {
                 await JS.InvokeVoidAsync("hpm.initDoctorInfiniteScroll", "appt-doctor-search-box", "appt-doctor-suggestions-list", dotNetRef);
@@ -1037,6 +1053,16 @@
             catch
             {
                 // Ignore transient JS interop disconnect errors
+            }
+        }
+        if (showPatientIdSuggestions)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "appt-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
+            }
+            catch
+            {
             }
         }
     }
@@ -1095,24 +1121,78 @@ private async Task LoadAppointmentsAsync()
         await LoadPatientIdSuggestionsAsync();
     }
 
-    private async Task LoadPatientIdSuggestionsAsync()
+    private static IQueryable<Registration> BuildPatientQuery(HpmDbContext db, string term)
     {
-        var term = patientSearchQuery.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        patientIdSuggestions = await db.Registrations.AsNoTracking()
+        return db.Registrations.AsNoTracking()
             .Where(x => string.IsNullOrEmpty(term)
                      || x.PatientID.StartsWith(term)
                      || (x.Contact != null && x.Contact.StartsWith(term))
                      || (x.Name != null && x.Name.Contains(term)))
-            .OrderByDescending(x => x.ID)
-            .Take(6)
-            .ToListAsync();
-        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+            .OrderByDescending(x => x.ID);
+    }
+
+    private async Task LoadPatientIdSuggestionsAsync()
+    {
+        var term = patientSearchQuery.Trim();
+        hasMorePatientSuggestions = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            patientIdSuggestions = await q.Take(PatientBatchSize).ToListAsync();
+            hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
+            showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "appt-patient-suggestions-list");
+            }
+            catch { }
+        }
+        catch
+        {
+            patientIdSuggestions.Clear();
+            showPatientIdSuggestions = false;
+            hasMorePatientSuggestions = false;
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadMorePatientsFromJs()
+    {
+        if (isLoadingMorePatients || !hasMorePatientSuggestions || !showPatientIdSuggestions) return;
+        isLoadingMorePatients = true;
+        await InvokeAsync(StateHasChanged);
+
+        var term = patientSearchQuery.Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            var nextBatch = await q.Skip(patientIdSuggestions.Count).Take(PatientBatchSize).ToListAsync();
+            if (nextBatch.Count > 0)
+            {
+                patientIdSuggestions.AddRange(nextBatch);
+                hasMorePatientSuggestions = nextBatch.Count >= PatientBatchSize;
+            }
+            else
+            {
+                hasMorePatientSuggestions = false;
+            }
+        }
+        catch
+        {
+            hasMorePatientSuggestions = false;
+        }
+        finally
+        {
+            isLoadingMorePatients = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private async Task HidePatientSuggestionsAsync()
     {
-        await Task.Delay(150);
+        await Task.Delay(250);
         showPatientIdSuggestions = false;
     }
 
@@ -1820,7 +1900,7 @@ private async Task LoadAppointmentsAsync()
     {
         editor.DoctorID = doctor.ID;
         drawerDoctorId = doctor.ID;
-        doctorSearchText = $"{doctor.ID} - {DoctorDisplayName(doctor)}";
+        doctorSearchText = $"D{doctor.ID} - {DoctorDisplayName(doctor)}";
         showDoctorSuggestions = false;
         filterByCurrentDoctor = true;
         queuePage = 0;
@@ -1955,7 +2035,7 @@ private async Task LoadAppointmentsAsync()
     private void SyncDoctorSearchText()
     {
         var doctor = doctors.FirstOrDefault(x => x.ID == editor.DoctorID);
-        doctorSearchText = doctor is null ? string.Empty : $"{doctor.ID} - {DoctorDisplayName(doctor)}";
+        doctorSearchText = doctor is null ? string.Empty : $"D{doctor.ID} - {DoctorDisplayName(doctor)}";
     }
 
     private void SetPatientMode(bool walkIn)
@@ -2066,10 +2146,12 @@ private async Task LoadAppointmentsAsync()
         }
     }
 
-    private static string Age(DateTime birth)
+    private static string Age(DateTime? birth)
     {
-        var years = DateTime.Today.Year - birth.Year;
-        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        if (!birth.HasValue) return string.Empty;
+        var b = birth.Value;
+        var years = DateTime.Today.Year - b.Year;
+        if (b.Date > DateTime.Today.AddYears(-years)) years--;
         return $"{Math.Max(0, years)}Y";
     }
 

@@ -340,7 +340,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.PatientID).HasColumnName("Patient_ID").HasMaxLength(11);
         e.HasIndex(x => x.PatientID).IsUnique();
         e.Property(x => x.Name).HasMaxLength(100);
-        e.Property(x => x.DateOfBirth).HasColumnName("Date_Of_Birth").HasColumnType("datetime");
+        e.Property(x => x.DateOfBirth).HasColumnName("Date_Of_Birth").HasColumnType("datetime").IsRequired(false);
         e.Property(x => x.Sex).HasMaxLength(10);
         e.Property(x => x.BloodGroup).HasColumnName("Blood_Group").HasMaxLength(10);
         e.Property(x => x.Weight).HasColumnName("Weight").HasMaxLength(20);
