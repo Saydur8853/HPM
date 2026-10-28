@@ -166,3 +166,31 @@ public sealed class SupplierPayment
     public int EnteredBy { get; set; }
     public DateTime TransDate { get; set; }
 }
+
+public sealed class PurchaseRequisition
+{
+    public long ID { get; set; }
+    public int StoreID { get; set; }
+    [Required, StringLength(20)] public string RequisitionNo { get; set; } = string.Empty;
+    [StringLength(20)] public string Status { get; set; } = "Pending";
+    public int RequestedBy { get; set; }
+    public DateTime RequestedAt { get; set; }
+    public int? ReviewedBy { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    [StringLength(500)] public string? Remarks { get; set; }
+    [StringLength(500)] public string? ReviewNote { get; set; }
+    public DateTime TransDate { get; set; }
+    public List<PurchaseRequisitionItem> Items { get; set; } = [];
+}
+
+public sealed class PurchaseRequisitionItem
+{
+    public long ID { get; set; }
+    public long RequisitionID { get; set; }
+    public int SLNO { get; set; }
+    public int ServiceID { get; set; }
+    public decimal RequestedQty { get; set; }
+    public decimal? EstimatedRate { get; set; }
+    [StringLength(200)] public string? Remarks { get; set; }
+    public PurchaseRequisition? Requisition { get; set; }
+}

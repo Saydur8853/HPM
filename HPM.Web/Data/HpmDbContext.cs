@@ -108,6 +108,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<StoreChallanSub> StoreChallanItems => Set<StoreChallanSub>();
     public DbSet<StoreIssue> StoreIssues => Set<StoreIssue>();
     public DbSet<StoreIssueSub> StoreIssueItems => Set<StoreIssueSub>();
+    public DbSet<PurchaseRequisition> PurchaseRequisitions => Set<PurchaseRequisition>();
+    public DbSet<PurchaseRequisitionItem> PurchaseRequisitionItems => Set<PurchaseRequisitionItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -129,6 +131,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureLegacyMigration(modelBuilder);
         ConfigureHospitalProfile(modelBuilder);
         ConfigureCanteen(modelBuilder);
+        ConfigurePurchaseRequisition(modelBuilder);
     }
 
     private static void ConfigureAppUser(ModelBuilder b)
@@ -1205,6 +1208,37 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         opening.HasOne<MedicineStore>().WithMany().HasForeignKey(x => x.StoreID).OnDelete(DeleteBehavior.Restrict);
         opening.HasOne<Service>().WithMany().HasForeignKey(x => x.ServiceID).OnDelete(DeleteBehavior.Restrict);
         opening.HasIndex(x => new { x.StoreID, x.ServiceID }).IsUnique();
+    }
+
+    private static void ConfigurePurchaseRequisition(ModelBuilder b)
+    {
+        var req = b.Entity<PurchaseRequisition>();
+        req.ToTable("Purchase_Requisition");
+        req.HasKey(x => x.ID);
+        req.Property(x => x.RequisitionNo).HasColumnName("Requisition_No").HasMaxLength(20);
+        req.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Pending");
+        req.Property(x => x.StoreID).HasColumnName("Store_ID");
+        req.Property(x => x.RequestedBy).HasColumnName("Requested_By");
+        req.Property(x => x.RequestedAt).HasColumnName("Requested_At").HasColumnType("datetime2");
+        req.Property(x => x.ReviewedBy).HasColumnName("Reviewed_By");
+        req.Property(x => x.ReviewedAt).HasColumnName("Reviewed_At").HasColumnType("datetime2");
+        req.Property(x => x.Remarks).HasMaxLength(500);
+        req.Property(x => x.ReviewNote).HasColumnName("Review_Note").HasMaxLength(500);
+        req.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        req.HasOne<MedicineStore>().WithMany().HasForeignKey(x => x.StoreID).OnDelete(DeleteBehavior.Restrict);
+        req.HasMany(x => x.Items).WithOne(x => x.Requisition).HasForeignKey(x => x.RequisitionID).OnDelete(DeleteBehavior.Cascade);
+        req.HasIndex(x => new { x.StoreID, x.TransDate });
+
+        var item = b.Entity<PurchaseRequisitionItem>();
+        item.ToTable("Purchase_Requisition_Sub");
+        item.HasKey(x => x.ID);
+        item.Property(x => x.RequisitionID).HasColumnName("Requisition_ID");
+        item.Property(x => x.ServiceID).HasColumnName("Service_ID");
+        item.Property(x => x.RequestedQty).HasColumnName("Requested_Qty").HasColumnType("numeric(18,2)");
+        item.Property(x => x.EstimatedRate).HasColumnName("Estimated_Rate").HasColumnType("numeric(18,2)");
+        item.Property(x => x.Remarks).HasMaxLength(200);
+        item.HasOne<Service>().WithMany().HasForeignKey(x => x.ServiceID).OnDelete(DeleteBehavior.Restrict);
+        item.HasIndex(x => new { x.RequisitionID, x.SLNO }).IsUnique();
     }
 
     private static void ConfigureAccounting(ModelBuilder b)
