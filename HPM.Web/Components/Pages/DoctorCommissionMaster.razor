@@ -1,0 +1,1442 @@
+@page "/masters/doctor-commissions"
+@page "/masters/doctor-commission"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@using System.Data
+@using System.Data.Common
+@using System.Text
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+
+<PageTitle>@I18n.T("Doctor Commission & Referral Setup") | @Branding.HospitalName</PageTitle>
+
+<div class="doc-master-page doc-master-classic-fit">
+    <!-- Top Action & Navigation Header -->
+    <div class="doc-master-header">
+        <div class="doc-master-title-col">
+            <a class="doc-back-link" href="masters">← @I18n.T("Master Setup")</a>
+            <h1 class="doc-master-heading">
+                <span>💳 @I18n.T("Doctor Commission & Referral Setup")</span>
+            </h1>
+
+            <!-- Sub-Tabs: Rates vs Payouts -->
+            <div class="doc-section-switcher" role="tablist">
+                <button type="button"
+                        class="doc-section-tab @(commSubTab == "rates" ? "active" : "")"
+                        @onclick="SwitchToRates">
+                    ⚙️ @I18n.T("Commission Rates")
+                </button>
+                <button type="button"
+                        class="doc-section-tab @(commSubTab == "payouts" ? "active" : "")"
+                        @onclick="SwitchToPayoutsAsync">
+                    📊 @I18n.T("Referral Payouts")
+                </button>
+            </div>
+        </div>
+
+        <div class="doc-header-stats">
+            <button type="button" class="btn btn-secondary doc-btn" @onclick="OpenGlobalRatesModal" title="@I18n.T("Configure Hospital-wide Default Commission Rates")">
+                🌐 @I18n.T("Global Default Rates")
+            </button>
+            <button type="button" class="btn btn-secondary doc-btn doc-btn-excel" @onclick="ExportCommissionExcelAsync" title="@I18n.T("Export Commission Data")">
+                📊 @I18n.T("Excel")
+            </button>
+            <button type="button" class="btn btn-secondary doc-btn doc-btn-print" @onclick="PrintCommissionAsync" title="@I18n.T("Print Commission Sheet")">
+                🖨️ @I18n.T("Print")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="doc-alert @messageClass">
+            <span>@(messageClass == "success" ? "✓" : "⚠")</span>
+            <span>@message</span>
+            <button type="button" class="doc-alert-close" @onclick='() => message = string.Empty'>✕</button>
+        </div>
+    }
+
+    <!-- ============================================================== -->
+    <!-- SUB-TAB 1: COMMISSION RATES CONFIGURATION (Idea 3)             -->
+    <!-- ============================================================== -->
+    <div class="doc-master-grid">
+        <div class="doc-card doc-list-card">
+            @if (commSubTab == "rates")
+            {
+                <!-- Filter Header -->
+                <div class="doc-filter-header">
+                    <div class="doc-filter-row">
+                        <div class="doc-search-wrap">
+                            <span class="doc-search-icon">🔍</span>
+                            <input type="text"
+                                   class="classic-input doc-search-input"
+                                   placeholder="@I18n.T("Search doctor ID, name, department for commission rates...")"
+                                   value="@searchQuery"
+                                   @oninput="HandleSearchInput" />
+                            @if (!string.IsNullOrWhiteSpace(searchQuery))
+                            {
+                                <button type="button" class="doc-search-clear" @onclick="ClearSearch">✕</button>
+                            }
+                        </div>
+
+                        <div class="doc-dept-filter-wrap">
+                            <select class="classic-input doc-dept-select" @bind="selectedDepartmentId" @bind:after="ResetCommPage">
+                                <option value="0">-- @I18n.T("All Departments") (@departments.Count) --</option>
+                                @foreach (var dept in departments)
+                                {
+                                    <option value="@dept.ID">@dept.Name</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div class="doc-header-stats" style="margin-left:auto;">
+                            <button type="button" class="doc-stat-pill @(commFilterMode == "All" ? "selected" : "")" @onclick='() => SetFilterMode("All")'>
+                                <span class="stat-label">@I18n.T("Total"):</span>
+                                <span class="stat-value">@doctors.Count</span>
+                            </button>
+                            <button type="button" class="doc-stat-pill priority-pill @(commFilterMode == "Custom" ? "selected" : "")" @onclick='() => SetFilterMode("Custom")'>
+                                <span class="stat-label">⭐ @I18n.T("Custom Rates"):</span>
+                                <span class="stat-value">@doctorSpecificRates.Keys.Count</span>
+                            </button>
+                            <button type="button" class="doc-stat-pill @(commFilterMode == "Global" ? "selected" : "")" @onclick='() => SetFilterMode("Global")'>
+                                <span class="stat-label">🌐 @I18n.T("Global Default"):</span>
+                                <span class="stat-value">@(doctors.Count - doctorSpecificRates.Keys.Count)</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Commission Rates Table with Progressive Auto-Scroll -->
+                <div class="doc-table-wrap" id="commTableWrap">
+                    <table class="doc-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 70px; text-align:center;">ID</th>
+                                <th style="width: 260px;">@I18n.T("Doctor Name & Department")</th>
+                                <th style="width: 140px; text-align:center;">@I18n.T("Commission Mode")</th>
+                                <th>@I18n.T("Category Commission Rates (Summary)")</th>
+                                <th style="width: 110px; text-align:center;">@I18n.T("Action")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!PagedCommissionDoctors.Any())
+                            {
+                                <tr>
+                                    <td colspan="5" class="doc-table-empty">
+                                        <div class="doc-empty-box">
+                                            <span>💳</span>
+                                            <strong>@I18n.T("No doctors found for commission configuration.")</strong>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var doctor in PagedCommissionDoctors)
+                                {
+                                    var hasCustom = doctorSpecificRates.TryGetValue(doctor.ID, out var rates) && rates.Any();
+                                    <tr>
+                                        <td class="text-center font-bold">#@doctor.ID</td>
+                                        <td>
+                                            <div class="doc-cell-profile">
+                                                <div class="doc-avatar">@GetInitials(doctor.Name)</div>
+                                                <div class="doc-info">
+                                                    <strong class="doc-name">@DoctorDisplayName(doctor)</strong>
+                                                    <span class="doc-dept">
+                                                        @(doctor.DepartmentName ?? (departments.FirstOrDefault(d => d.ID == doctor.Department)?.Name ?? I18n.T("General")))
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="text-center">
+                                            @if (hasCustom)
+                                            {
+                                                <span class="doc-comm-pill doc-comm-custom">⭐ @I18n.T("Custom Rates")</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="doc-comm-pill doc-comm-default">🌐 @I18n.T("Global Baseline") (@globalDefaultRate%)</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            <div style="display:flex; flex-wrap:wrap; gap:4px; max-height:48px; overflow:hidden;">
+                                                @foreach (var cat in diagnosticCategories.Take(6))
+                                                {
+                                                    var effRate = GetEffectiveDoctorRate(doctor.ID, cat.ID);
+                                                    <span style="font-size:10px; padding:1px 5px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; color:#334155;">
+                                                        @cat.Name: <strong style="color:#0284c7;">@effRate.ToString("0.#")%</strong>
+                                                    </span>
+                                                }
+                                                @if (diagnosticCategories.Count > 6)
+                                                {
+                                                    <span style="font-size:9.5px; color:#64748b; padding:1px 4px;">+@(diagnosticCategories.Count - 6) more</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td class="text-center">
+                                            <button type="button" class="btn btn-secondary doc-btn" style="height:24px; padding:0 8px;" @onclick="() => OpenDoctorCommissionDrawer(doctor)">
+                                                ⚙️ @I18n.T("Configure")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+
+                    @if (commIsLoadingMore)
+                    {
+                        <div class="doc-scroll-hint">
+                            <span>⏳</span>
+                            <span>@I18n.T("Loading more commission rates...")</span>
+                        </div>
+                    }
+                </div>
+
+                <!-- Pagination Bar -->
+                <div class="doc-table-footer">
+                    <div class="doc-pager-info">
+                        @if (FilteredCommissionDoctors.Any())
+                        {
+                            <span>@I18n.T("Showing") 1-@(Math.Min(commLoadedPages * PageSize, FilteredCommissionDoctors.Count())) @I18n.T("of") @FilteredCommissionDoctors.Count()</span>
+                        }
+                    </div>
+
+                    <div class="doc-pager-controls">
+                        <div class="doc-page-size-selector">
+                            <span>@I18n.T("Rows"):</span>
+                            <select class="classic-input doc-page-size-select" value="@PageSize" @onchange="HandlePageSizeChange">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </div>
+
+                        <div class="doc-pagination-buttons">
+                            <button class="doc-page-btn" type="button" @onclick="GoToFirstPage" disabled="@(CurrentPage <= 1)" title="@I18n.T("First Page")">«</button>
+                            <button class="doc-page-btn" type="button" @onclick="GoToPrevPage" disabled="@(CurrentPage <= 1)" title="@I18n.T("Previous Page")">‹</button>
+                            <span class="doc-page-indicator">@I18n.T("Page") @CurrentPage @I18n.T("of") @TotalCommissionPages</span>
+                            <button class="doc-page-btn" type="button" @onclick="GoToNextPage" disabled="@(CurrentPage >= TotalCommissionPages)" title="@I18n.T("Next Page")">›</button>
+                            <button class="doc-page-btn" type="button" @onclick="GoToLastPage" disabled="@(CurrentPage >= TotalCommissionPages)" title="@I18n.T("Last Page")">»</button>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <!-- ============================================================== -->
+                <!-- SUB-TAB 2: REFERRAL COMMISSION PAYOUTS (Idea 4)                -->
+                <!-- ============================================================== -->
+                <div class="doc-filter-header">
+                    <div class="doc-date-bar">
+                        <label>@I18n.T("From"):</label>
+                        <input type="date" class="doc-date-input" @bind="payoutFromDate" />
+
+                        <label>@I18n.T("To"):</label>
+                        <input type="date" class="doc-date-input" @bind="payoutToDate" />
+
+                        <button type="button" class="btn btn-primary doc-btn doc-calc-btn" @onclick="CalculateReferralPayoutsAsync" disabled="@calculatingPayouts">
+                            ⚡ @(calculatingPayouts ? I18n.T("Calculating...") : I18n.T("Calculate Payouts"))
+                        </button>
+
+                        <button type="button" class="btn btn-ghost doc-btn" style="height:26px; font-size:10.5px;" @onclick="SetPayoutsToday">
+                            @I18n.T("Today")
+                        </button>
+                        <button type="button" class="btn btn-ghost doc-btn" style="height:26px; font-size:10.5px;" @onclick="SetPayoutsThisMonth">
+                            @I18n.T("This Month")
+                        </button>
+                        <button type="button" class="btn btn-ghost doc-btn" style="height:26px; font-size:10.5px;" @onclick="SetPayoutsLastMonth">
+                            @I18n.T("Last Month")
+                        </button>
+                    </div>
+                </div>
+
+                <!-- KPI Cards Summary -->
+                <div class="doc-kpi-grid" style="padding: 6px 10px 0;">
+                    <div class="doc-kpi-card blue">
+                        <span class="doc-kpi-title">📋 @I18n.T("Referred Memos")</span>
+                        <span class="doc-kpi-val">@payoutSummaries.Sum(x => x.TotalMemos).ToString("N0")</span>
+                    </div>
+                    <div class="doc-kpi-card amber">
+                        <span class="doc-kpi-title">💰 @I18n.T("Diagnostic Billed")</span>
+                        <span class="doc-kpi-val">@I18n.CurrencySymbol @payoutSummaries.Sum(x => x.TotalBilled).ToString("N0")</span>
+                    </div>
+                    <div class="doc-kpi-card green">
+                        <span class="doc-kpi-title">💳 @I18n.T("Total Commission Payable")</span>
+                        <span class="doc-kpi-val">@I18n.CurrencySymbol @payoutSummaries.Sum(x => x.TotalCommission).ToString("N0")</span>
+                    </div>
+                    <div class="doc-kpi-card purple">
+                        <span class="doc-kpi-title">📈 @I18n.T("Avg Effective Share")</span>
+                        <span class="doc-kpi-val">
+                            @(payoutSummaries.Sum(x => x.TotalBilled) > 0
+                                ? $"{(payoutSummaries.Sum(x => x.TotalCommission) / payoutSummaries.Sum(x => x.TotalBilled) * 100):0.1}%"
+                                : "0.0%")
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Doctors Referral Payouts Table -->
+                <div class="doc-table-wrap" style="flex:1;">
+                    <table class="doc-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 70px; text-align:center;">ID</th>
+                                <th>@I18n.T("Doctor Name & Department")</th>
+                                <th style="width:120px; text-align:center;">@I18n.T("Memos Referred")</th>
+                                <th style="width:140px; text-align:right;">@I18n.T("Diagnostic Billed")</th>
+                                <th style="width:150px; text-align:right;">@I18n.T("Commission Payable")</th>
+                                <th style="width:110px; text-align:center;">@I18n.T("Effective %")</th>
+                                <th style="width:120px; text-align:center;">@I18n.T("Action")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!payoutSummaries.Any())
+                            {
+                                <tr>
+                                    <td colspan="7" class="doc-table-empty">
+                                        <div class="doc-empty-box">
+                                            <span>📊</span>
+                                            <strong>@I18n.T("No referred diagnostic investigations found in selected date range.")</strong>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var item in payoutSummaries.OrderByDescending(x => x.TotalCommission))
+                                {
+                                    var effPct = item.TotalBilled > 0 ? (item.TotalCommission / item.TotalBilled * 100) : 0;
+                                    <tr>
+                                        <td class="text-center font-bold">#@item.DoctorID</td>
+                                        <td>
+                                            <div class="doc-cell-profile">
+                                                <div class="doc-avatar">@GetInitials(item.DoctorName)</div>
+                                                <div class="doc-info">
+                                                    <strong class="doc-name">@item.DoctorName</strong>
+                                                    <span class="doc-dept">@item.DepartmentName</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="text-center font-bold">@item.TotalMemos</td>
+                                        <td class="text-right">@I18n.CurrencySymbol @item.TotalBilled.ToString("N2")</td>
+                                        <td class="text-right">
+                                            <strong style="color:#16a34a; font-size:12.5px;">
+                                                @I18n.CurrencySymbol @item.TotalCommission.ToString("N2")
+                                            </strong>
+                                        </td>
+                                        <td class="text-center">
+                                            <span class="doc-comm-pill doc-comm-custom">@effPct.ToString("0.1")%</span>
+                                        </td>
+                                        <td class="text-center">
+                                            <button type="button" class="btn btn-secondary doc-btn" style="height:24px; padding:0 8px;" @onclick="() => OpenBreakdownModal(item)">
+                                                📑 @I18n.T("Breakdown")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- SLIDE-OVER DRAWER: CONFIGURE DOCTOR COMMISSION RATES (Idea 3)  -->
+    <!-- ============================================================== -->
+    @if (isCommDrawerOpen && selectedCommDoctor is not null)
+    {
+        <div class="doc-drawer-backdrop" @onclick="() => isCommDrawerOpen = false"></div>
+        <div class="doc-drawer-panel" style="width: 600px;" role="dialog" aria-modal="true">
+            <div class="doc-drawer-header">
+                <div class="doc-drawer-title-wrap">
+                    <span class="doc-drawer-icon">💳</span>
+                    <div>
+                        <h2 class="doc-drawer-title">
+                            @I18n.T("Commission Rates"): @DoctorDisplayName(selectedCommDoctor)
+                        </h2>
+                        <span class="doc-drawer-sub">
+                            ID: #@selectedCommDoctor.ID | @DepartmentName(selectedCommDoctor.Department)
+                        </span>
+                    </div>
+                </div>
+                <button type="button" class="doc-drawer-close" @onclick="() => isCommDrawerOpen = false">✕</button>
+            </div>
+
+            <div class="doc-drawer-body">
+                <!-- Mode Switch Box -->
+                <div class="doc-drawer-section">
+                    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <strong>@I18n.T("Commission Rate Mode")</strong>
+                            <div style="font-size:10.5px; color:#64748b;">
+                                @(useCustomDoctorRates ? I18n.T("Custom percentage overrides active for this doctor.") : I18n.T("Using hospital-wide global baseline rate."))
+                            </div>
+                        </div>
+                        <div class="doc-status-toggle" style="width:190px;">
+                            <button type="button" class="doc-toggle-btn @(!useCustomDoctorRates ? "active" : "")" @onclick="() => useCustomDoctorRates = false">
+                                🌐 @I18n.T("Global Default")
+                            </button>
+                            <button type="button" class="doc-toggle-btn @(useCustomDoctorRates ? "active" : "")" @onclick="() => useCustomDoctorRates = true">
+                                ⭐ @I18n.T("Custom Rates")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                @if (useCustomDoctorRates)
+                {
+                    <div class="doc-drawer-section">
+                        <!-- Quick Preset Bar with Generous Input Box -->
+                        <div class="doc-preset-row">
+                            <span class="doc-preset-label">⚡ @I18n.T("Quick Presets"):</span>
+                            <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToDoctor(15)">15%</button>
+                            <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToDoctor(20)">20%</button>
+                            <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToDoctor(25)">25%</button>
+                            <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToDoctor(30)">30%</button>
+                            <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToDoctor(35)">35%</button>
+
+                            <div class="doc-bulk-input-wrap">
+                                <input type="number" class="classic-input doc-bulk-input" @bind="customBulkRate" min="0" max="100" />
+                                <button type="button" class="btn btn-secondary doc-btn" style="height:25px; padding:0 8px; font-size:10.5px;" @onclick="ApplyCustomBulkToDoctor">
+                                    @I18n.T("Apply to All")
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="doc-section-heading" style="margin-bottom:8px;">
+                            <span>🔬</span>
+                            <span>@I18n.T("Diagnostic Investigation Categories") (@diagnosticCategories.Count)</span>
+                        </div>
+
+                        <div class="doc-cat-matrix">
+                            @foreach (var cat in diagnosticCategories)
+                            {
+                                var currentRate = editDoctorRates.TryGetValue(cat.ID, out var r) ? r : globalDefaultRate;
+                                <div class="doc-cat-card">
+                                    <span class="doc-cat-name" title="@cat.Name">@cat.Name</span>
+                                    <div class="doc-cat-input-wrap">
+                                        <input type="number"
+                                               class="classic-input doc-cat-input"
+                                               value="@currentRate"
+                                               @onchange="(e) => UpdateDoctorCatRate(cat.ID, e.Value)"
+                                               min="0" max="100" step="1" />
+                                        <span style="font-weight:700; color:#64748b; font-size:11px;">%</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="doc-empty-box" style="padding:40px 20px; background:#ffffff; border-radius:8px; border:1px dashed #cbd5e1;">
+                        <span style="font-size:32px;">🌐</span>
+                        <strong style="font-size:13px; color:#1e293b;">@I18n.T("This doctor is using the hospital global default rates.")</strong>
+                        <p style="font-size:11px; text-align:center; max-width:380px;">
+                            @I18n.T("All diagnostic investigations referred by this doctor will receive the baseline rate") (<strong>@globalDefaultRate%</strong>). @I18n.T("To give this doctor special rates, click 'Custom Rates' above.")
+                        </p>
+                    </div>
+                }
+            </div>
+
+            <div class="doc-drawer-footer">
+                <button type="button" class="btn btn-ghost doc-btn" @onclick="() => isCommDrawerOpen = false">
+                    @I18n.T("Cancel")
+                </button>
+                <button type="button" class="btn btn-primary doc-btn doc-btn-add" @onclick="SaveDoctorCommissionRatesAsync" disabled="@savingCommission">
+                    💾 @(savingCommission ? I18n.T("Saving...") : I18n.T("Save Rates"))
+                </button>
+            </div>
+        </div>
+    }
+
+    <!-- ============================================================== -->
+    <!-- MODAL / DRAWER: GLOBAL DEFAULT COMMISSION RATES               -->
+    <!-- ============================================================== -->
+    @if (isGlobalRatesModalOpen)
+    {
+        <div class="doc-drawer-backdrop" @onclick="() => isGlobalRatesModalOpen = false"></div>
+        <div class="doc-drawer-panel" style="width: 600px;" role="dialog" aria-modal="true">
+            <div class="doc-drawer-header">
+                <div class="doc-drawer-title-wrap">
+                    <span class="doc-drawer-icon">🌐</span>
+                    <div>
+                        <h2 class="doc-drawer-title">@I18n.T("Hospital Global Baseline Commission Rates")</h2>
+                        <span class="doc-drawer-sub">@I18n.T("Default referral share for all doctors who do not have custom overrides")</span>
+                    </div>
+                </div>
+                <button type="button" class="doc-drawer-close" @onclick="() => isGlobalRatesModalOpen = false">✕</button>
+            </div>
+
+            <div class="doc-drawer-body">
+                <div class="doc-drawer-section">
+                    <div class="doc-preset-row">
+                        <span class="doc-preset-label">⚡ @I18n.T("Set Baseline for All Categories"):</span>
+                        <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToGlobal(15)">15%</button>
+                        <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToGlobal(20)">20%</button>
+                        <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToGlobal(25)">25%</button>
+                        <button type="button" class="doc-preset-btn" @onclick="() => ApplyPresetToGlobal(30)">30%</button>
+
+                        <div class="doc-bulk-input-wrap">
+                            <input type="number" class="classic-input doc-bulk-input" @bind="customBulkGlobalRate" min="0" max="100" />
+                            <button type="button" class="btn btn-secondary doc-btn" style="height:25px; padding:0 8px; font-size:10.5px;" @onclick="ApplyCustomBulkToGlobal">
+                                @I18n.T("Apply to All")
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="doc-section-heading" style="margin-bottom:8px;">
+                        <span>🔬</span>
+                        <span>@I18n.T("Category-Wise Baseline Percentages")</span>
+                    </div>
+
+                    <div class="doc-cat-matrix">
+                        @foreach (var cat in diagnosticCategories)
+                        {
+                            var r = editGlobalRates.TryGetValue(cat.ID, out var val) ? val : globalDefaultRate;
+                            <div class="doc-cat-card">
+                                <span class="doc-cat-name" title="@cat.Name">@cat.Name</span>
+                                <div class="doc-cat-input-wrap">
+                                    <input type="number"
+                                           class="classic-input doc-cat-input"
+                                           value="@r"
+                                           @onchange="(e) => UpdateGlobalCatRate(cat.ID, e.Value)"
+                                           min="0" max="100" step="1" />
+                                    <span style="font-weight:700; color:#64748b; font-size:11px;">%</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="doc-drawer-footer">
+                <button type="button" class="btn btn-ghost doc-btn" @onclick="() => isGlobalRatesModalOpen = false">
+                    @I18n.T("Cancel")
+                </button>
+                <button type="button" class="btn btn-primary doc-btn doc-btn-add" @onclick="SaveGlobalCommissionRatesAsync" disabled="@savingCommission">
+                    💾 @(savingCommission ? I18n.T("Saving...") : I18n.T("Save Baseline Rates"))
+                </button>
+            </div>
+        </div>
+    }
+
+    <!-- ============================================================== -->
+    <!-- MODAL: DOCTOR REFERRAL MEMOS BREAKDOWN (Idea 4)                -->
+    <!-- ============================================================== -->
+    @if (selectedBreakdownDoctor is not null)
+    {
+        <div class="doc-drawer-backdrop" @onclick="() => selectedBreakdownDoctor = null"></div>
+        <div class="doc-drawer-panel" style="width: 740px;" role="dialog" aria-modal="true">
+            <div class="doc-drawer-header">
+                <div class="doc-drawer-title-wrap">
+                    <span class="doc-drawer-icon">📑</span>
+                    <div>
+                        <h2 class="doc-drawer-title">
+                            @I18n.T("Referral Memos Breakdown"): @selectedBreakdownDoctor.DoctorName
+                        </h2>
+                        <span class="doc-drawer-sub">
+                            @selectedBreakdownDoctor.DepartmentName | @payoutFromDate.ToString("dd MMM yyyy") - @payoutToDate.ToString("dd MMM yyyy")
+                        </span>
+                    </div>
+                </div>
+                <button type="button" class="doc-drawer-close" @onclick="() => selectedBreakdownDoctor = null">✕</button>
+            </div>
+
+            <div class="doc-drawer-body">
+                <div class="doc-kpi-grid">
+                    <div class="doc-kpi-card blue">
+                        <span class="doc-kpi-title">@I18n.T("Total Memos")</span>
+                        <span class="doc-kpi-val">@selectedBreakdownDoctor.TotalMemos</span>
+                    </div>
+                    <div class="doc-kpi-card amber">
+                        <span class="doc-kpi-title">@I18n.T("Diagnostic Total")</span>
+                        <span class="doc-kpi-val">@I18n.CurrencySymbol @selectedBreakdownDoctor.TotalBilled.ToString("N0")</span>
+                    </div>
+                    <div class="doc-kpi-card green">
+                        <span class="doc-kpi-title">@I18n.T("Commission Payable")</span>
+                        <span class="doc-kpi-val">@I18n.CurrencySymbol @selectedBreakdownDoctor.TotalCommission.ToString("N0")</span>
+                    </div>
+                </div>
+
+                <div class="doc-table-wrap" style="max-height:450px;">
+                    <table class="doc-table">
+                        <thead>
+                            <tr>
+                                <th style="width:90px;">Memo #</th>
+                                <th style="width:90px;">@I18n.T("Date")</th>
+                                <th>@I18n.T("Test / Investigation")</th>
+                                <th style="width:80px; text-align:right;">@I18n.T("Rate")</th>
+                                <th style="width:70px; text-align:center;">Comm %</th>
+                                <th style="width:90px; text-align:right;">Comm BDT</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!doctorBreakdownLines.Any())
+                            {
+                                <tr>
+                                    <td colspan="6" class="doc-table-empty">
+                                        <div class="doc-empty-box">
+                                            <span>📄</span>
+                                            <strong>@I18n.T("No detailed investigation lines found.")</strong>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var line in doctorBreakdownLines)
+                                {
+                                    <tr>
+                                        <td class="font-bold">#@line.MemoNo</td>
+                                        <td>@line.Date.ToString("dd/MM/yyyy")</td>
+                                        <td>
+                                            <strong>@line.TestName</strong>
+                                            <div style="font-size:10px; color:#64748b;">@line.CategoryName</div>
+                                        </td>
+                                        <td class="text-right">@line.Rate.ToString("N2")</td>
+                                        <td class="text-center font-bold" style="color:#0284c7;">@line.CommissionPercent.ToString("0.#")%</td>
+                                        <td class="text-right font-bold" style="color:#16a34a;">@line.CommissionAmount.ToString("N2")</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="doc-drawer-footer">
+                <button type="button" class="btn btn-ghost doc-btn" @onclick="() => selectedBreakdownDoctor = null">
+                    @I18n.T("Close")
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string commSubTab = "rates";
+    private string commFilterMode = "All";
+    private string searchQuery = string.Empty;
+    private int selectedDepartmentId = 0;
+    private int PageSize = 20;
+    private int CurrentPage = 1;
+    private int commLoadedPages = 1;
+    private bool commIsLoadingMore = false;
+
+    private List<DoctorRecord> doctors = new();
+    private List<DepartmentOption> departments = new();
+    private List<DiagnosticCategoryOption> diagnosticCategories = new();
+    private Dictionary<int, decimal> globalCategoryRates = new();
+    private Dictionary<int, Dictionary<int, decimal>> doctorSpecificRates = new();
+    private decimal globalDefaultRate = 20m;
+
+    private DoctorRecord? selectedCommDoctor;
+    private bool isCommDrawerOpen = false;
+    private bool useCustomDoctorRates = false;
+    private decimal customBulkRate = 20m;
+    private decimal customBulkGlobalRate = 20m;
+    private Dictionary<int, decimal> editDoctorRates = new();
+    private Dictionary<int, decimal> editGlobalRates = new();
+    private bool isGlobalRatesModalOpen = false;
+    private bool savingCommission = false;
+
+    private DateTime payoutFromDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime payoutToDate = DateTime.Today;
+    private bool calculatingPayouts = false;
+    private List<DoctorPayoutSummary> payoutSummaries = new();
+    private DoctorPayoutSummary? selectedBreakdownDoctor;
+    private List<MemoBreakdownLine> doctorBreakdownLines = new();
+
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private DotNetObjectReference<DoctorCommissionMaster>? dotNetRef;
+    private bool needScrollInit = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadCommissionBaseDataAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender || needScrollInit)
+        {
+            needScrollInit = false;
+            dotNetRef ??= DotNetObjectReference.Create(this);
+            if (commSubTab == "rates")
+            {
+                await JS.InvokeVoidAsync("hpm.initTableAutoScroll", "commTableWrap", dotNetRef, nameof(LoadNextCommPageFromScroll));
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadNextCommPageFromScroll()
+    {
+        if (commIsLoadingMore || commLoadedPages >= TotalCommissionPages) return;
+
+        commIsLoadingMore = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(80);
+
+        commLoadedPages++;
+        CurrentPage = commLoadedPages;
+        commIsLoadingMore = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadCommissionBaseDataAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            departments = await db.Departments
+                .AsNoTracking()
+                .OrderBy(d => d.Name)
+                .Select(d => new DepartmentOption { ID = d.ID, Name = d.Name })
+                .ToListAsync();
+
+            var deptMap = departments.ToDictionary(d => d.ID, d => d.Name);
+
+            doctors = await db.Doctors
+                .AsNoTracking()
+                .OrderBy(d => d.Priority ?? 999)
+                .ThenBy(d => d.Name)
+                .Select(d => new DoctorRecord
+                {
+                    ID = d.ID,
+                    Name = d.Name,
+                    Department = d.Department,
+                    IsActive = d.IsActive
+                })
+                .ToListAsync();
+
+            foreach (var doc in doctors)
+            {
+                if (doc.Department.HasValue && deptMap.TryGetValue(doc.Department.Value, out var dn))
+                {
+                    doc.DepartmentName = dn;
+                }
+            }
+
+            var allCategories = await db.ServiceCategories
+                .AsNoTracking()
+                .OrderBy(c => c.Name)
+                .ToListAsync();
+
+            diagnosticCategories = allCategories
+                .Where(DiagnosticTestRouting.IsDiagnosticCategory)
+                .Select(c => new DiagnosticCategoryOption { ID = c.ID, Name = c.Name })
+                .ToList();
+
+            if (!diagnosticCategories.Any())
+            {
+                diagnosticCategories = allCategories
+                    .Select(c => new DiagnosticCategoryOption { ID = c.ID, Name = c.Name })
+                    .ToList();
+            }
+
+            await LoadCommissionSettingsFromDbAsync(db);
+        }
+        catch (Exception ex)
+        {
+            message = $"Error loading commission data: {ex.Message}";
+            messageClass = "danger";
+        }
+    }
+
+    private async Task LoadCommissionSettingsFromDbAsync(HpmDbContext db)
+    {
+        globalCategoryRates.Clear();
+        doctorSpecificRates.Clear();
+
+        try
+        {
+            var conn = db.Database.GetDbConnection();
+            if (conn.State != ConnectionState.Open) await conn.OpenAsync();
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT DoctorID, CategoryID, CommissionPercent FROM Doctor_Commission_Settings";
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var docId = reader.GetInt32(0);
+                var catId = reader.GetInt32(1);
+                var pct = reader.GetDecimal(2);
+
+                if (docId == 0)
+                {
+                    globalCategoryRates[catId] = pct;
+                }
+                else
+                {
+                    if (!doctorSpecificRates.TryGetValue(docId, out var dict))
+                    {
+                        dict = new Dictionary<int, decimal>();
+                        doctorSpecificRates[docId] = dict;
+                    }
+                    dict[catId] = pct;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private IEnumerable<DoctorRecord> FilteredCommissionDoctors
+    {
+        get
+        {
+            var query = doctors.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                var q = searchQuery.Trim();
+                query = query.Where(d =>
+                    d.ID.ToString().Contains(q) ||
+                    (d.Name != null && d.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (d.DepartmentName != null && d.DepartmentName.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            if (selectedDepartmentId > 0)
+            {
+                query = query.Where(d => d.Department == selectedDepartmentId);
+            }
+
+            if (commFilterMode == "Custom")
+            {
+                query = query.Where(d => doctorSpecificRates.ContainsKey(d.ID));
+            }
+            else if (commFilterMode == "Global")
+            {
+                query = query.Where(d => !doctorSpecificRates.ContainsKey(d.ID));
+            }
+
+            return query;
+        }
+    }
+
+    private IEnumerable<DoctorRecord> PagedCommissionDoctors =>
+        FilteredCommissionDoctors.Take(commLoadedPages * PageSize);
+
+    private int TotalCommissionPages =>
+        Math.Max(1, (int)Math.Ceiling(FilteredCommissionDoctors.Count() / (double)PageSize));
+
+    private decimal GetEffectiveDoctorRate(int doctorId, int categoryId)
+    {
+        if (doctorSpecificRates.TryGetValue(doctorId, out var docRates) && docRates.TryGetValue(categoryId, out var docRate))
+        {
+            return docRate;
+        }
+        if (globalCategoryRates.TryGetValue(categoryId, out var globRate))
+        {
+            return globRate;
+        }
+        return globalDefaultRate;
+    }
+
+    private void HandleSearchInput(ChangeEventArgs e)
+    {
+        searchQuery = e.Value?.ToString() ?? string.Empty;
+        ResetCommPage();
+    }
+
+    private void ClearSearch()
+    {
+        searchQuery = string.Empty;
+        ResetCommPage();
+    }
+
+    private void HandlePageSizeChange(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var sz) && sz > 0)
+        {
+            PageSize = sz;
+            ResetCommPage();
+        }
+    }
+
+    private void SwitchToRates()
+    {
+        commSubTab = "rates";
+        needScrollInit = true;
+    }
+
+    private void SetFilterMode(string mode)
+    {
+        commFilterMode = mode;
+        ResetCommPage();
+    }
+
+    private void ResetCommPage()
+    {
+        CurrentPage = 1;
+        commLoadedPages = 1;
+        needScrollInit = true;
+        _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "commTableWrap");
+    }
+
+    private void GoToFirstPage()
+    {
+        CurrentPage = 1;
+        commLoadedPages = 1;
+        _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "commTableWrap");
+    }
+
+    private void GoToPrevPage()
+    {
+        if (CurrentPage > 1)
+        {
+            CurrentPage--;
+            commLoadedPages = CurrentPage;
+            _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "commTableWrap");
+        }
+    }
+
+    private void GoToNextPage()
+    {
+        if (CurrentPage < TotalCommissionPages)
+        {
+            CurrentPage++;
+            if (commLoadedPages < CurrentPage) commLoadedPages = CurrentPage;
+            _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "commTableWrap");
+        }
+    }
+
+    private void GoToLastPage()
+    {
+        CurrentPage = TotalCommissionPages;
+        commLoadedPages = TotalCommissionPages;
+        _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "commTableWrap");
+    }
+
+    private void OpenDoctorCommissionDrawer(DoctorRecord doctor)
+    {
+        selectedCommDoctor = doctor;
+        editDoctorRates.Clear();
+
+        if (doctorSpecificRates.TryGetValue(doctor.ID, out var existing))
+        {
+            useCustomDoctorRates = true;
+            foreach (var cat in diagnosticCategories)
+            {
+                editDoctorRates[cat.ID] = existing.TryGetValue(cat.ID, out var val) ? val : GetEffectiveDoctorRate(doctor.ID, cat.ID);
+            }
+        }
+        else
+        {
+            useCustomDoctorRates = false;
+            foreach (var cat in diagnosticCategories)
+            {
+                editDoctorRates[cat.ID] = GetEffectiveDoctorRate(doctor.ID, cat.ID);
+            }
+        }
+
+        isCommDrawerOpen = true;
+    }
+
+    private void ApplyPresetToDoctor(decimal pct)
+    {
+        foreach (var cat in diagnosticCategories)
+        {
+            editDoctorRates[cat.ID] = pct;
+        }
+    }
+
+    private void ApplyCustomBulkToDoctor() => ApplyPresetToDoctor(customBulkRate);
+
+    private void UpdateDoctorCatRate(int catId, object? val)
+    {
+        if (decimal.TryParse(val?.ToString(), out var parsed))
+        {
+            editDoctorRates[catId] = Math.Clamp(parsed, 0, 100);
+        }
+    }
+
+    private async Task SaveDoctorCommissionRatesAsync()
+    {
+        if (selectedCommDoctor is null) return;
+        savingCommission = true;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var conn = db.Database.GetDbConnection();
+            if (conn.State != ConnectionState.Open) await conn.OpenAsync();
+
+            using var tran = conn.BeginTransaction();
+
+            using var delCmd = conn.CreateCommand();
+            delCmd.Transaction = tran;
+            delCmd.CommandText = "DELETE FROM Doctor_Commission_Settings WHERE DoctorID = @docId";
+            var pDoc = delCmd.CreateParameter();
+            pDoc.ParameterName = "@docId";
+            pDoc.Value = selectedCommDoctor.ID;
+            delCmd.Parameters.Add(pDoc);
+            await delCmd.ExecuteNonQueryAsync();
+
+            if (useCustomDoctorRates)
+            {
+                foreach (var pair in editDoctorRates)
+                {
+                    using var insCmd = conn.CreateCommand();
+                    insCmd.Transaction = tran;
+                    insCmd.CommandText = "INSERT INTO Doctor_Commission_Settings (DoctorID, CategoryID, CommissionPercent, UpdatedDate) VALUES (@docId, @catId, @pct, GETDATE())";
+
+                    var p1 = insCmd.CreateParameter();
+                    p1.ParameterName = "@docId";
+                    p1.Value = selectedCommDoctor.ID;
+                    insCmd.Parameters.Add(p1);
+
+                    var p2 = insCmd.CreateParameter();
+                    p2.ParameterName = "@catId";
+                    p2.Value = pair.Key;
+                    insCmd.Parameters.Add(p2);
+
+                    var p3 = insCmd.CreateParameter();
+                    p3.ParameterName = "@pct";
+                    p3.Value = pair.Value;
+                    insCmd.Parameters.Add(p3);
+
+                    await insCmd.ExecuteNonQueryAsync();
+                }
+
+                doctorSpecificRates[selectedCommDoctor.ID] = new Dictionary<int, decimal>(editDoctorRates);
+            }
+            else
+            {
+                doctorSpecificRates.Remove(selectedCommDoctor.ID);
+            }
+
+            tran.Commit();
+
+            isCommDrawerOpen = false;
+            messageClass = "success";
+            message = I18n.IsBangla
+                ? $"{DoctorDisplayName(selectedCommDoctor)} এর কমিশন রেট সংরক্ষিত হয়েছে।"
+                : $"Commission rates for {DoctorDisplayName(selectedCommDoctor)} saved successfully.";
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error saving commission rates: {ex.Message}";
+        }
+        finally
+        {
+            savingCommission = false;
+        }
+    }
+
+    private void OpenGlobalRatesModal()
+    {
+        editGlobalRates.Clear();
+        foreach (var cat in diagnosticCategories)
+        {
+            editGlobalRates[cat.ID] = globalCategoryRates.TryGetValue(cat.ID, out var r) ? r : globalDefaultRate;
+        }
+        isGlobalRatesModalOpen = true;
+    }
+
+    private void ApplyPresetToGlobal(decimal pct)
+    {
+        foreach (var cat in diagnosticCategories)
+        {
+            editGlobalRates[cat.ID] = pct;
+        }
+    }
+
+    private void ApplyCustomBulkToGlobal() => ApplyPresetToGlobal(customBulkGlobalRate);
+
+    private void UpdateGlobalCatRate(int catId, object? val)
+    {
+        if (decimal.TryParse(val?.ToString(), out var parsed))
+        {
+            editGlobalRates[catId] = Math.Clamp(parsed, 0, 100);
+        }
+    }
+
+    private async Task SaveGlobalCommissionRatesAsync()
+    {
+        savingCommission = true;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var conn = db.Database.GetDbConnection();
+            if (conn.State != ConnectionState.Open) await conn.OpenAsync();
+
+            using var tran = conn.BeginTransaction();
+
+            foreach (var pair in editGlobalRates)
+            {
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tran;
+                cmd.CommandText = @"
+MERGE INTO Doctor_Commission_Settings AS target
+USING (VALUES (0, @catId, @pct)) AS source (DoctorID, CategoryID, CommissionPercent)
+ON target.DoctorID = source.DoctorID AND target.CategoryID = source.CategoryID
+WHEN MATCHED THEN
+    UPDATE SET CommissionPercent = source.CommissionPercent, UpdatedDate = GETDATE()
+WHEN NOT MATCHED THEN
+    INSERT (DoctorID, CategoryID, CommissionPercent, UpdatedDate)
+    VALUES (source.DoctorID, source.CategoryID, source.CommissionPercent, GETDATE());";
+
+                var p2 = cmd.CreateParameter();
+                p2.ParameterName = "@catId";
+                p2.Value = pair.Key;
+                cmd.Parameters.Add(p2);
+
+                var p3 = cmd.CreateParameter();
+                p3.ParameterName = "@pct";
+                p3.Value = pair.Value;
+                cmd.Parameters.Add(p3);
+
+                await cmd.ExecuteNonQueryAsync();
+                globalCategoryRates[pair.Key] = pair.Value;
+            }
+
+            tran.Commit();
+
+            isGlobalRatesModalOpen = false;
+            messageClass = "success";
+            message = I18n.IsBangla ? "হাসপাতালের গ্লোবাল ডিফল্ট কমিশন রেট সংরক্ষিত হয়েছে।" : "Hospital global baseline commission rates updated successfully.";
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error updating global rates: {ex.Message}";
+        }
+        finally
+        {
+            savingCommission = false;
+        }
+    }
+
+    private async Task SwitchToPayoutsAsync()
+    {
+        commSubTab = "payouts";
+        if (!payoutSummaries.Any())
+        {
+            await CalculateReferralPayoutsAsync();
+        }
+    }
+
+    private void SetPayoutsToday()
+    {
+        payoutFromDate = DateTime.Today;
+        payoutToDate = DateTime.Today;
+        _ = CalculateReferralPayoutsAsync();
+    }
+
+    private void SetPayoutsThisMonth()
+    {
+        payoutFromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        payoutToDate = DateTime.Today;
+        _ = CalculateReferralPayoutsAsync();
+    }
+
+    private void SetPayoutsLastMonth()
+    {
+        var firstOfThis = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        payoutToDate = firstOfThis.AddDays(-1);
+        payoutFromDate = new DateTime(payoutToDate.Year, payoutToDate.Month, 1);
+        _ = CalculateReferralPayoutsAsync();
+    }
+
+    private async Task CalculateReferralPayoutsAsync()
+    {
+        calculatingPayouts = true;
+        payoutSummaries.Clear();
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var start = payoutFromDate.Date;
+            var end = payoutToDate.Date.AddDays(1).AddTicks(-1);
+
+            var services = await db.Services
+                .AsNoTracking()
+                .Select(s => new { s.ID, s.CategoryID, s.Name })
+                .ToListAsync();
+            var serviceCatMap = services.ToDictionary(s => s.ID, s => s.CategoryID ?? 0);
+
+            var memos = await db.EmergencyMemos
+                .AsNoTracking()
+                .Where(m => m.TransDate >= start && m.TransDate <= end && m.DoctorID > 0)
+                .Include(m => m.Items)
+                .ToListAsync();
+
+            var grouped = memos.GroupBy(m => m.DoctorID!.Value);
+            var doctorMap = doctors.ToDictionary(d => d.ID);
+
+            foreach (var grp in grouped)
+            {
+                var docId = grp.Key;
+                doctorMap.TryGetValue(docId, out var docRec);
+                var docName = docRec?.Name ?? $"Doctor #{docId}";
+                var deptName = docRec?.DepartmentName ?? "General";
+
+                decimal docBilled = 0;
+                decimal docCommission = 0;
+                int memoCount = grp.Count();
+
+                foreach (var memo in grp)
+                {
+                    foreach (var sub in memo.Items)
+                    {
+                        var lineBilled = sub.Rate;
+                        docBilled += lineBilled;
+
+                        var catId = serviceCatMap.TryGetValue(sub.TestID, out var cid) ? cid : 0;
+                        var ratePct = GetEffectiveDoctorRate(docId, catId);
+                        docCommission += lineBilled * (ratePct / 100m);
+                    }
+                }
+
+                payoutSummaries.Add(new DoctorPayoutSummary
+                {
+                    DoctorID = docId,
+                    DoctorName = docName,
+                    DepartmentName = deptName,
+                    TotalMemos = memoCount,
+                    TotalBilled = docBilled,
+                    TotalCommission = docCommission
+                });
+            }
+
+            messageClass = "success";
+            message = I18n.IsBangla
+                ? $"{payoutSummaries.Count} জন ডাক্তারের জন্য রেফারাল কমিশন হিসাব করা হয়েছে।"
+                : $"Calculated referral commission for {payoutSummaries.Count} doctors.";
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error calculating payouts: {ex.Message}";
+        }
+        finally
+        {
+            calculatingPayouts = false;
+        }
+    }
+
+    private async Task OpenBreakdownModal(DoctorPayoutSummary summary)
+    {
+        selectedBreakdownDoctor = summary;
+        doctorBreakdownLines.Clear();
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var start = payoutFromDate.Date;
+            var end = payoutToDate.Date.AddDays(1).AddTicks(-1);
+
+            var services = await db.Services
+                .AsNoTracking()
+                .Select(s => new { s.ID, s.CategoryID, s.Name })
+                .ToListAsync();
+            var serviceCatMap = services.ToDictionary(s => s.ID, s => s.CategoryID ?? 0);
+            var serviceNameMap = services.ToDictionary(s => s.ID, s => s.Name ?? "Investigation Item");
+
+            var memos = await db.EmergencyMemos
+                .AsNoTracking()
+                .Where(m => m.TransDate >= start && m.TransDate <= end && m.DoctorID == summary.DoctorID)
+                .Include(m => m.Items)
+                .OrderBy(m => m.TransDate)
+                .ToListAsync();
+
+            var catMap = diagnosticCategories.ToDictionary(c => c.ID, c => c.Name);
+
+            foreach (var memo in memos)
+            {
+                foreach (var sub in memo.Items)
+                {
+                    var catId = serviceCatMap.TryGetValue(sub.TestID, out var cid) ? cid : 0;
+                    var catName = catMap.TryGetValue(catId, out var cn) ? cn : "Diagnostic";
+                    var testName = serviceNameMap.TryGetValue(sub.TestID, out var tn) ? tn : $"Test #{sub.TestID}";
+                    var ratePct = GetEffectiveDoctorRate(summary.DoctorID, catId);
+                    var billed = sub.Rate;
+                    var comm = billed * (ratePct / 100m);
+
+                    doctorBreakdownLines.Add(new MemoBreakdownLine
+                    {
+                        MemoNo = memo.ID,
+                        Date = memo.TransDate,
+                        TestName = testName,
+                        CategoryName = catName,
+                        Rate = billed,
+                        CommissionPercent = ratePct,
+                        CommissionAmount = comm
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error loading breakdown: {ex.Message}";
+        }
+    }
+
+    private async Task ExportCommissionExcelAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+
+            if (commSubTab == "rates")
+            {
+                sb.AppendLine("Doctor ID,Doctor Name,Department,Commission Mode," + string.Join(",", diagnosticCategories.Select(c => EscapeCsv(c.Name))));
+                foreach (var doc in FilteredCommissionDoctors)
+                {
+                    var isCustom = doctorSpecificRates.ContainsKey(doc.ID);
+                    var mode = isCustom ? "Custom" : "Global Baseline";
+                    var rates = diagnosticCategories.Select(c => GetEffectiveDoctorRate(doc.ID, c.ID).ToString("0.#") + "%");
+                    sb.AppendLine($"\"{doc.ID}\",\"{EscapeCsv(doc.Name)}\",\"{EscapeCsv(doc.DepartmentName ?? string.Empty)}\",\"{mode}\"," + string.Join(",", rates));
+                }
+            }
+            else
+            {
+                sb.AppendLine("Doctor ID,Doctor Name,Department,Referred Memos,Total Billed BDT,Commission Payable BDT,Effective Rate %");
+                foreach (var item in payoutSummaries.OrderByDescending(x => x.TotalCommission))
+                {
+                    var eff = item.TotalBilled > 0 ? (item.TotalCommission / item.TotalBilled * 100).ToString("0.1") : "0";
+                    sb.AppendLine($"\"{item.DoctorID}\",\"{EscapeCsv(item.DoctorName)}\",\"{EscapeCsv(item.DepartmentName)}\",\"{item.TotalMemos}\",\"{item.TotalBilled:0.00}\",\"{item.TotalCommission:0.00}\",\"{eff}%\"");
+                }
+            }
+
+            var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var filename = $"Doctor_Commission_{(commSubTab == "rates" ? "Rates" : "Payouts")}_{DateTime.Now:yyyyMMdd_HHmm}.csv";
+            await JS.InvokeVoidAsync("hpm.downloadFile", filename, "text/csv;charset=utf-8", base64);
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Export failed: {ex.Message}";
+        }
+    }
+
+    private async Task PrintCommissionAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            sb.Append("<table class='print-table'><thead><tr>");
+            sb.Append("<th style='width:60px;'>ID</th><th>Doctor Name</th><th>Department</th>");
+            sb.Append("<th style='width:90px;' class='text-center'>Memos</th>");
+            sb.Append("<th style='width:120px;' class='text-right'>Billed BDT</th>");
+            sb.Append("<th style='width:120px;' class='text-right'>Commission BDT</th>");
+            sb.Append("<th style='width:80px;' class='text-center'>Effective %</th>");
+            sb.Append("</tr></thead><tbody>");
+
+            foreach (var item in payoutSummaries.OrderByDescending(x => x.TotalCommission))
+            {
+                var eff = item.TotalBilled > 0 ? $"{(item.TotalCommission / item.TotalBilled * 100):0.1}%" : "0%";
+                sb.Append("<tr>");
+                sb.Append($"<td class='text-center font-bold'>#{item.DoctorID}</td>");
+                sb.Append($"<td><strong>{item.DoctorName}</strong></td>");
+                sb.Append($"<td>{item.DepartmentName}</td>");
+                sb.Append($"<td class='text-center'>{item.TotalMemos}</td>");
+                sb.Append($"<td class='text-right'>{item.TotalBilled:N2}</td>");
+                sb.Append($"<td class='text-right'><strong>{item.TotalCommission:N2}</strong></td>");
+                sb.Append($"<td class='text-center'>{eff}</td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</tbody></table>");
+
+            var metaText = $"Period: {payoutFromDate:dd MMM yyyy} to {payoutToDate:dd MMM yyyy} | Total Commission: {I18n.CurrencySymbol} {payoutSummaries.Sum(x => x.TotalCommission):N2}";
+            await JS.InvokeVoidAsync("hpm.printDoctorList", Branding.HospitalName, "Doctor Referral Commission Statement", metaText, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Print error: {ex.Message}";
+        }
+    }
+
+    private string DoctorDisplayName(DoctorRecord d) =>
+        string.IsNullOrWhiteSpace(d.Name) ? $"Doctor #{d.ID}" : d.Name;
+
+    private string DepartmentName(int? deptId) =>
+        departments.FirstOrDefault(d => d.ID == deptId)?.Name ?? I18n.T("General");
+
+    private static string GetInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "DR";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpper();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpper();
+    }
+
+    private static string EscapeCsv(string? val) =>
+        (val ?? string.Empty).Replace("\"", "\"\"");
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.disposeTableAutoScroll", "commTableWrap");
+        }
+        catch { }
+        dotNetRef?.Dispose();
+    }
+
+    public class DoctorRecord
+    {
+        public int ID { get; set; }
+        public string? Name { get; set; }
+        public int? Department { get; set; }
+        public string? DepartmentName { get; set; }
+        public bool IsActive { get; set; }
+    }
+
+    public class DepartmentOption
+    {
+        public int ID { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public class DiagnosticCategoryOption
+    {
+        public int ID { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public class DoctorPayoutSummary
+    {
+        public int DoctorID { get; set; }
+        public string DoctorName { get; set; } = string.Empty;
+        public string DepartmentName { get; set; } = string.Empty;
+        public int TotalMemos { get; set; }
+        public decimal TotalBilled { get; set; }
+        public decimal TotalCommission { get; set; }
+    }
+
+    public class MemoBreakdownLine
+    {
+        public long MemoNo { get; set; }
+        public DateTime Date { get; set; }
+        public string TestName { get; set; } = string.Empty;
+        public string CategoryName { get; set; } = string.Empty;
+        public decimal Rate { get; set; }
+        public decimal CommissionPercent { get; set; }
+        public decimal CommissionAmount { get; set; }
+    }
+}

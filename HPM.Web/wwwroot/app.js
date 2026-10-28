@@ -1190,6 +1190,67 @@ window.hpm = {
             this._doctorOutsideClickHandler = null;
         }
         this._doctorScrollDotNetRef = null;
+    },
+
+    initTableAutoScroll: function (elementId, dotNetRef, methodName) {
+        var attach = function () {
+            var el = document.getElementById(elementId);
+            if (!el) {
+                setTimeout(function () {
+                    var retryEl = document.getElementById(elementId);
+                    if (retryEl && dotNetRef) {
+                        window.hpm.initTableAutoScroll(elementId, dotNetRef, methodName);
+                    }
+                }, 150);
+                return;
+            }
+
+            if (el._hpmTableScrollHandler) {
+                el.removeEventListener('scroll', el._hpmTableScrollHandler);
+            }
+
+            el._hpmTableScrollLoading = false;
+            el._hpmTableScrollHandler = function () {
+                if (el._hpmTableScrollLoading) return;
+                var remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+                if (remaining <= 120) {
+                    el._hpmTableScrollLoading = true;
+                    dotNetRef.invokeMethodAsync(methodName || 'LoadNextPageFromScroll')
+                        .then(function () {
+                            setTimeout(function () {
+                                el._hpmTableScrollLoading = false;
+                            }, 250);
+                        })
+                        .catch(function () {
+                            el._hpmTableScrollLoading = false;
+                        });
+                }
+            };
+
+            el.addEventListener('scroll', el._hpmTableScrollHandler, { passive: true });
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', attach, { once: true });
+        } else {
+            attach();
+        }
+    },
+
+    disposeTableAutoScroll: function (elementId) {
+        var el = document.getElementById(elementId);
+        if (el && el._hpmTableScrollHandler) {
+            el.removeEventListener('scroll', el._hpmTableScrollHandler);
+            el._hpmTableScrollHandler = null;
+            el._hpmTableScrollLoading = false;
+        }
+    },
+
+    scrollElementToTop: function (elementId) {
+        var el = document.getElementById(elementId);
+        if (el) {
+            el.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     }
 };
 

@@ -3,11 +3,32 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Navigation
 @inject IJSRuntime JS
+@using System.Data
+@using System.Data.Common
 @using System.Text
 @using System.Text.RegularExpressions
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
 
 <PageTitle>@I18n.T("Doctors Directory & Priority Setup") | @Branding.HospitalName</PageTitle>
+
+<style>
+.doc-scroll-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #64748b;
+    background: #f8fafc;
+    border-top: 1px dashed #e2e8f0;
+}
+</style>
 
 <div class="doc-master-page doc-master-classic-fit">
     <!-- Top Action & Statistics Bar -->
@@ -20,23 +41,35 @@
         </div>
 
         <div class="doc-header-stats">
-            <div class="doc-stat-pill">
+            <button type="button"
+                    class="doc-stat-pill @(statusFilter == "All" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("All")'
+                    title="@I18n.T("Show all doctors")">
                 <span class="stat-label">@I18n.T("Total"):</span>
                 <span class="stat-value">@doctors.Count</span>
-            </div>
-            <div class="doc-stat-pill active-pill">
-                <span class="stat-label">@I18n.T("Active"):</span>
+            </button>
+            <button type="button"
+                    class="doc-stat-pill active-pill @(statusFilter == "Active" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Active")'
+                    title="@I18n.T("Filter active doctors")">
+                <span class="stat-label">✓ @I18n.T("Active"):</span>
                 <span class="stat-value">@doctors.Count(x => x.IsActive)</span>
-            </div>
-            <div class="doc-stat-pill inactive-pill">
-                <span class="stat-label">@I18n.T("Inactive"):</span>
+            </button>
+            <button type="button"
+                    class="doc-stat-pill inactive-pill @(statusFilter == "Inactive" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Inactive")'
+                    title="@I18n.T("Filter inactive doctors")">
+                <span class="stat-label">✕ @I18n.T("Inactive"):</span>
                 <span class="stat-value">@doctors.Count(x => !x.IsActive)</span>
-            </div>
-            <div class="doc-stat-pill priority-pill">
+            </button>
+            <button type="button"
+                    class="doc-stat-pill priority-pill @(statusFilter == "Prioritized" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Prioritized")'
+                    title="@I18n.T("Filter prioritized doctors")">
                 <span class="stat-label">⭐ @I18n.T("Prioritized"):</span>
                 <span class="stat-value">@doctors.Count(x => x.Priority.HasValue && x.Priority > 0)</span>
-            </div>
-            <button type="button" class="btn btn-secondary doc-btn" @onclick="Reset">
+            </button>
+            <button type="button" class="btn btn-primary doc-btn doc-btn-add" @onclick="OpenNewDoctor">
                 + @I18n.T("New Doctor")
             </button>
             <button type="button" class="btn btn-secondary doc-btn doc-btn-excel" @onclick="ExportExcelAsync" title="@I18n.T("Download Doctors List as Excel (CSV)")">
@@ -57,169 +90,17 @@
         </div>
     }
 
-    <!-- Main Balanced Grid -->
+    <!-- Doctors Directory Main Grid -->
     <div class="doc-master-grid">
-        <!-- Left Column: Add / Edit Form -->
-        <div class="doc-card doc-form-card">
-            <div class="doc-card-header">
-                <div>
-                    <h2>@(editor.ID == 0 ? I18n.T("Add Consultant Doctor") : $"{I18n.T("Edit Doctor")} #{editor.ID}")</h2>
-                </div>
-                @if (editor.ID > 0)
-                {
-                    <span class="doc-status-badge @(editor.IsActive ? "active" : "inactive")">
-                        @(editor.IsActive ? I18n.T("Active") : I18n.T("Inactive"))
-                    </span>
-                }
-            </div>
-
-            <EditForm Model="editor" OnSubmit="SaveAsync" class="doc-form-body">
-                <div class="doc-form-fields">
-                    <!-- Row 1: Title & Doctor Name -->
-                    <div class="doc-row doc-row-title-name">
-                        <div class="doc-field doc-title-field">
-                            <label class="doc-label">@I18n.T("Title")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Title" placeholder="Dr." />
-                        </div>
-                        <div class="doc-field doc-name-field">
-                            <label class="doc-label">
-                                <span>@I18n.T("Doctor Name")</span>
-                                <span class="req">*</span>
-                            </label>
-                            <InputText class="classic-input" @bind-Value="editor.Name" placeholder="@I18n.T("e.g. Md. Rafiqul Islam")" />
-                        </div>
-                    </div>
-
-                    <!-- Row 2: Doctor Type / Attachment & Degree -->
-                    <div class="doc-row">
-                        <div class="doc-field" style="flex: 1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Doctor Category / Type")</label>
-                            <InputSelect class="classic-input" @bind-Value="editor.Attachment">
-                                <option value="Permanent">@I18n.T("Permanent Doctor")</option>
-                                <option value="Residential">@I18n.T("Residential Doctor")</option>
-                                <option value="Contractual">@I18n.T("Contractual Doctor")</option>
-                                <option value="Visiting">@I18n.T("Visiting / Guest Doctor")</option>
-                                <option value="Consultant">@I18n.T("Consultant Doctor")</option>
-                                <option value="Temporary">@I18n.T("Temporary Doctor")</option>
-                            </InputSelect>
-                        </div>
-                        <div class="doc-field" style="flex: 1.1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Qualifications / Degree")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Degree" placeholder="@I18n.T("e.g. MBBS, FCPS, MD")" />
-                        </div>
-                    </div>
-
-                    <!-- Row 3: Department & Room -->
-                    <div class="doc-row">
-                        <div class="doc-field" style="flex: 1.3; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Department")</label>
-                            <InputSelect class="classic-input" @bind-Value="editor.Department">
-                                <option value="">-- @I18n.T("Select Department") --</option>
-                                @foreach (var d in departments.Where(x => x.IsActive || x.ID == editor.Department))
-                                {
-                                    <option value="@d.ID">@d.Name</option>
-                                }
-                            </InputSelect>
-                        </div>
-                        <div class="doc-field" style="flex: 1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Room / Chamber")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Room" placeholder="Room 204" />
-                        </div>
-                    </div>
-
-                    <!-- Row 4: Contact & Email -->
-                    <div class="doc-row">
-                        <div class="doc-field" style="flex: 1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Contact Mobile")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
-                        </div>
-                        <div class="doc-field" style="flex: 1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Email")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Email" placeholder="doctor@delta.edu.bd" />
-                        </div>
-                    </div>
-
-                    <!-- Row 5: Consultation Schedule, Weekly Off Day & Address -->
-                    <div class="doc-row">
-                        <div class="doc-field" style="flex: 1.1; min-width: 0;">
-                            <label class="doc-label">⏰ @I18n.T("Consultation Hours")</label>
-                            <InputText class="classic-input" @bind-Value="editor.ConsultationTime" placeholder="@I18n.T("e.g. 05:00 PM - 09:00 PM")" />
-                        </div>
-                        <div class="doc-field" style="flex: 0.95; min-width: 0;">
-                            <label class="doc-label">🚫 @I18n.T("Weekly Off Day(s)")</label>
-                            <InputText class="classic-input" @bind-Value="editor.OffDay" placeholder="@I18n.T("e.g. Friday or Friday, Saturday")" />
-                        </div>
-                        <div class="doc-field" style="flex: 1; min-width: 0;">
-                            <label class="doc-label">@I18n.T("Chamber / Hospital Address")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Address" placeholder="@(!string.IsNullOrWhiteSpace(Branding.HospitalName) ? Branding.HospitalName : I18n.T("Chamber or hospital address"))" />
-                        </div>
-                    </div>
-
-                    <!-- Row 6: Priority & Status Control Box -->
-                    <div class="doc-priority-control-box">
-                        <div class="doc-row" style="align-items: flex-start;">
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label" title="@I18n.T("Appointment Priority Serial")">
-                                    ⭐ @I18n.T("Priority Serial")
-                                </label>
-                                <InputNumber class="classic-input doc-priority-input"
-                                             @bind-Value="editor.Priority"
-                                             placeholder="@I18n.T("e.g. 1, 2, 3...")"
-                                             min="1" max="999" />
-                                <span class="doc-help-text">
-                                    @I18n.T("Appointment search sort order.")
-                                </span>
-                            </div>
-
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Doctor Status")</label>
-                                <div class="doc-status-toggle">
-                                    <button type="button"
-                                            class="doc-toggle-btn @(editor.IsActive ? "active" : "")"
-                                            @onclick="() => editor.IsActive = true">
-                                        ✓ @I18n.T("Active")
-                                    </button>
-                                    <button type="button"
-                                            class="doc-toggle-btn @(!editor.IsActive ? "inactive" : "")"
-                                            @onclick="() => editor.IsActive = false">
-                                        ✕ @I18n.T("Inactive")
-                                    </button>
-                                </div>
-                                <span class="doc-help-text">
-                                    @(editor.IsActive ? I18n.T("Doctor appears in appointment dropdown.") : I18n.T("Doctor is hidden from appointment booking."))
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="doc-form-footer">
-                    <button class="btn btn-primary doc-btn" type="submit" disabled="@saving">
-                        💾 @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Doctor") : I18n.T("Update Doctor"))
-                    </button>
-                    @if (editor.ID > 0)
-                    {
-                        <button class="btn btn-ghost doc-btn" type="button" @onclick="DeleteSelectedAsync" style="color:#dc2626;" title="@I18n.T("Delete Doctor")">
-                            🗑️ @I18n.T("Delete")
-                        </button>
-                    }
-                    <button class="btn btn-ghost doc-btn" type="button" @onclick="Reset" title="@I18n.T("Clear Form")">
-                        @I18n.T("Clear")
-                    </button>
-                </div>
-            </EditForm>
-        </div>
-
-        <!-- Right Column: Doctors Directory & List -->
         <div class="doc-card doc-list-card">
+            <!-- Filter Header -->
             <div class="doc-filter-header">
-                <!-- Search & Filters -->
                 <div class="doc-filter-row">
                     <div class="doc-search-wrap">
                         <span class="doc-search-icon"><SearchIcon /></span>
                         <input type="text"
                                class="classic-input doc-search-input"
-                               placeholder="@I18n.T("Search doctor ID, name, category, department, room...")"
+                               placeholder="@I18n.T("Search doctor ID, name, category, department, room, mobile...")"
                                @bind="searchQuery"
                                @bind:event="oninput"
                                @bind:after="ResetPage" />
@@ -236,6 +117,18 @@
                             {
                                 <option value="@d.ID">@d.Name</option>
                             }
+                        </select>
+                    </div>
+
+                    <div class="doc-dept-filter-wrap">
+                        <select class="classic-input doc-category-select" @bind="selectedCategoryFilter" @bind:after="ResetPage">
+                            <option value="">-- @I18n.T("All Categories") --</option>
+                            <option value="Permanent">@I18n.T("Permanent Doctor")</option>
+                            <option value="Residential">@I18n.T("Residential Doctor")</option>
+                            <option value="Contractual">@I18n.T("Contractual Doctor")</option>
+                            <option value="Visiting">@I18n.T("Visiting / Guest Doctor")</option>
+                            <option value="Consultant">@I18n.T("Consultant Doctor")</option>
+                            <option value="Temporary">@I18n.T("Temporary Doctor")</option>
                         </select>
                     </div>
                 </div>
@@ -271,23 +164,25 @@
                 </div>
             </div>
 
-            <!-- Table of Doctors -->
-            <div class="doc-table-wrap">
+            <!-- Full-Width Doctors Directory Table with Auto Next Page on Scroll -->
+            <div class="doc-table-wrap" id="doctorsTableWrap">
                 <table class="doc-table">
                     <thead>
                         <tr>
                             <th style="width: 75px; text-align: center;">@I18n.T("Priority")</th>
                             <th>@I18n.T("Doctor Profile")</th>
-                            <th style="width: 170px;">@I18n.T("Department & Room")</th>
-                            <th style="width: 90px; text-align: center;">@I18n.T("Status")</th>
-                            <th style="width: 65px; text-align: center;">@I18n.T("Action")</th>
+                            <th style="width: 200px;">@I18n.T("Department & Room")</th>
+                            <th style="width: 210px;">@I18n.T("Schedule & Off Day")</th>
+                            <th style="width: 170px;">@I18n.T("Contact")</th>
+                            <th style="width: 85px; text-align: center;">@I18n.T("Status")</th>
+                            <th style="width: 75px; text-align: center;">@I18n.T("Action")</th>
                         </tr>
                     </thead>
                     <tbody>
                         @if (!PagedDoctors.Any())
                         {
                             <tr>
-                                <td colspan="5" class="doc-empty-cell">
+                                <td colspan="7" class="doc-empty-cell">
                                     <div class="doc-empty-box">
                                         <span>📋</span>
                                         <strong>@I18n.T("No doctors match your search or filter.")</strong>
@@ -298,11 +193,18 @@
                         }
                         @foreach (var doctor in PagedDoctors)
                         {
-                            <tr class="@(editor.ID == doctor.ID ? "selected-row" : "") @(!doctor.IsActive ? "inactive-row" : "")">
+                            var hasDegree = !string.IsNullOrWhiteSpace(CleanDoctorDegree(doctor));
+                            var hasRoom = HasValidRoom(doctor.Room);
+                            var hasDept = HasValidDepartment(doctor.Department);
+                            var hasContact = HasValidContact(doctor.Contact);
+                            var isPrioritized = doctor.Priority.HasValue && doctor.Priority > 0;
+                            var offDays = doctor.OffDay?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+
+                            <tr class="@(isPrioritized ? "doc-row-prioritized" : "") @(!doctor.IsActive ? "doc-row-inactive" : "")">
                                 <td style="text-align: center;">
-                                    @if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
+                                    @if (isPrioritized)
                                     {
-                                        <span class="doc-priority-badge" title="@I18n.T("Appointment display priority") #@doctor.Priority">
+                                        <span class="doc-priority-badge" title="@I18n.T("Serial sort priority for appointments")">
                                             ⭐ #@doctor.Priority
                                         </span>
                                     }
@@ -312,59 +214,101 @@
                                     }
                                 </td>
                                 <td>
-                                    <div class="doc-name-cell">
-                                        <div class="doc-name-main">
-                                            <strong>@DoctorDisplayName(doctor)</strong>
-                                            <span class="doc-id-tag">ID: @doctor.ID</span>
-                                            @if (!string.IsNullOrWhiteSpace(doctor.Attachment))
+                                    <div class="doc-cell-profile">
+                                        <div class="doc-avatar">
+                                            @GetDoctorInitials(doctor)
+                                        </div>
+                                        <div class="doc-info">
+                                            <div class="doc-name-line">
+                                                <strong class="doc-name">@DoctorDisplayName(doctor)</strong>
+                                                <span class="doc-id-pill">#@doctor.ID</span>
+                                                <span class="doc-cat-tag @GetAttachmentClass(doctor.Attachment)">
+                                                    @DoctorTypeLabel(doctor.Attachment)
+                                                </span>
+                                            </div>
+                                            @if (hasDegree)
                                             {
-                                                <span class="doc-type-badge @GetAttachmentClass(doctor.Attachment)">@DoctorTypeLabel(doctor.Attachment)</span>
+                                                <div class="doc-degree" title="@CleanDoctorDegree(doctor)">
+                                                    🎓 @CleanDoctorDegree(doctor)
+                                                </div>
                                             }
                                         </div>
-                                        @if (!string.IsNullOrWhiteSpace(CleanDoctorDegree(doctor)))
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="doc-cell-dept">
+                                        @if (hasDept)
                                         {
-                                            <div class="doc-degree-text">@CleanDoctorDegree(doctor)</div>
+                                            <span class="doc-dept-badge">
+                                                🏷️ @DepartmentName(doctor.Department)
+                                            </span>
                                         }
-                                        @if (HasValidContact(doctor.Contact))
+                                        @if (hasRoom)
                                         {
-                                            <div class="doc-contact-text">📞 @doctor.Contact!.Trim()</div>
+                                            <span class="doc-room-badge" title="@I18n.T("Consultation Chamber")">
+                                                🚪 @I18n.T("Room") @CleanDoctorRoom(doctor.Room)
+                                            </span>
+                                        }
+                                        @if (!hasDept && !hasRoom)
+                                        {
+                                            <span class="doc-muted">—</span>
                                         }
                                     </div>
                                 </td>
                                 <td>
-                                    <div class="doc-dept-cell">
-                                        @if (HasValidDepartment(doctor.Department))
-                                        {
-                                            <div class="doc-dept-name">@DepartmentName(doctor.Department)</div>
-                                        }
-                                        @if (HasValidRoom(doctor.Room))
-                                        {
-                                            <div class="doc-room-text">🚪 Room @CleanDoctorRoom(doctor.Room)</div>
-                                        }
+                                    <div class="doc-cell-sched">
                                         @if (!string.IsNullOrWhiteSpace(doctor.ConsultationTime))
                                         {
-                                            <div class="doc-sched-pill" style="font-size:10px; font-weight:700; color:#0284c7; margin-top:2px;">⏰ @doctor.ConsultationTime</div>
+                                            <span class="doc-time-badge" title="@I18n.T("Visiting Hours")">
+                                                🕒 @doctor.ConsultationTime
+                                            </span>
                                         }
-                                        @if (!string.IsNullOrWhiteSpace(doctor.OffDay))
+                                        @if (offDays.Length > 0)
                                         {
-                                            <div class="doc-offday-pill" style="font-size:10px; font-weight:700; color:#dc2626; margin-top:2px;">🚫 Off: @doctor.OffDay</div>
+                                            <div class="doc-offdays-line">
+                                                <span class="doc-off-label">@I18n.T("Off"):</span>
+                                                @foreach (var d in offDays)
+                                                {
+                                                    <span class="doc-off-pill">@d</span>
+                                                }
+                                            </div>
                                         }
-                                        @if (!HasValidDepartment(doctor.Department) && !HasValidRoom(doctor.Room))
+                                        @if (string.IsNullOrWhiteSpace(doctor.ConsultationTime) && offDays.Length == 0)
                                         {
-                                            <span class="doc-text-muted">—</span>
+                                            <span class="doc-muted">—</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="doc-cell-contact">
+                                        @if (hasContact)
+                                        {
+                                            <a class="doc-contact-link" href="tel:@doctor.Contact!.Trim()" title="@I18n.T("Click to call")">
+                                                📞 @doctor.Contact.Trim()
+                                            </a>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(doctor.Email))
+                                        {
+                                            <span class="doc-email" title="@doctor.Email">
+                                                ✉️ @doctor.Email.Trim()
+                                            </span>
+                                        }
+                                        @if (!hasContact && string.IsNullOrWhiteSpace(doctor.Email))
+                                        {
+                                            <span class="doc-muted">—</span>
                                         }
                                     </div>
                                 </td>
                                 <td style="text-align: center;">
                                     <button type="button"
-                                            class="doc-status-btn @(doctor.IsActive ? "btn-active" : "btn-inactive")"
+                                            class="doc-status-btn @(doctor.IsActive ? "active" : "inactive")"
                                             @onclick="() => ToggleDoctorActiveAsync(doctor)"
                                             title="@(doctor.IsActive ? I18n.T("Click to mark Inactive") : I18n.T("Click to mark Active"))">
-                                        @(doctor.IsActive ? I18n.T("Active") : I18n.T("Inactive"))
+                                        @(doctor.IsActive ? "✓ " + I18n.T("Active") : "✕ " + I18n.T("Inactive"))
                                     </button>
                                 </td>
                                 <td style="text-align: center;">
-                                    <button type="button" class="btn btn-secondary doc-edit-btn" @onclick="() => Select(doctor)" title="@I18n.T("Edit Doctor")">
+                                    <button type="button" class="btn btn-secondary doc-edit-btn" @onclick="() => OpenEditDoctor(doctor)" title="@I18n.T("Edit Doctor")">
                                         ✏️ @I18n.T("Edit")
                                     </button>
                                 </td>
@@ -372,45 +316,330 @@
                         }
                     </tbody>
                 </table>
+
+                @if (isLoadingMore)
+                {
+                    <div class="doc-scroll-hint">
+                        <span>⏳</span>
+                        <span>@I18n.T("Loading more doctors...")</span>
+                    </div>
+                }
             </div>
 
-            <!-- Pagination Bar -->
+            <!-- Pagination Bar (Intact with Auto-Scroll Support) -->
             <div class="doc-table-footer">
                 <div class="doc-pager-info">
                     @if (FilteredDoctors.Any())
                     {
-                        <span>@I18n.T("Showing") @((currentPage * PageSize) + 1)-@(Math.Min((currentPage + 1) * PageSize, FilteredDoctors.Count())) @I18n.T("of") @FilteredDoctors.Count()</span>
+                        <span>@I18n.T("Showing") 1-@(Math.Min(loadedPages * PageSize, FilteredDoctors.Count())) @I18n.T("of") @FilteredDoctors.Count()</span>
                     }
                 </div>
 
                 <div class="doc-pager-controls">
-                    <button type="button" class="doc-page-btn" @onclick="() => currentPage = 0" disabled="@(currentPage == 0)" title="@I18n.T("First Page")">«</button>
-                    <button type="button" class="doc-page-btn" @onclick="() => currentPage = Math.Max(0, currentPage - 1)" disabled="@(currentPage == 0)" title="@I18n.T("Previous Page")">‹</button>
-                    <span class="doc-page-indicator">@I18n.T("Page") @(currentPage + 1) @I18n.T("of") @PageCount</span>
-                    <button type="button" class="doc-page-btn" @onclick="() => currentPage = Math.Min(PageCount - 1, currentPage + 1)" disabled="@(currentPage >= PageCount - 1)" title="@I18n.T("Next Page")">›</button>
-                    <button type="button" class="doc-page-btn" @onclick="() => currentPage = Math.Max(0, PageCount - 1)" disabled="@(currentPage >= PageCount - 1)" title="@I18n.T("Last Page")">»</button>
+                    <button type="button" class="doc-page-btn" @onclick="GoToFirstPageAsync" disabled="@(loadedPages <= 1)" title="@I18n.T("First Page")">«</button>
+                    <button type="button" class="doc-page-btn" @onclick="GoToPrevPage" disabled="@(loadedPages <= 1)" title="@I18n.T("Previous Page")">‹</button>
+                    <span class="doc-page-indicator">@I18n.T("Page") @loadedPages @I18n.T("of") @PageCount</span>
+                    <button type="button" class="doc-page-btn" @onclick="GoToNextPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Next Page")">›</button>
+                    <button type="button" class="doc-page-btn" @onclick="GoToLastPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Last Page")">»</button>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- ========================================== -->
+    <!-- SLIDE-OVER DRAWER FOR DOCTOR ADD / EDIT   -->
+    <!-- ========================================== -->
+    @if (isDrawerOpen)
+    {
+        <div class="doc-drawer-backdrop" @onclick="CloseDrawer"></div>
+        <div class="doc-drawer-panel" role="dialog" aria-modal="true">
+            <div class="doc-drawer-header">
+                <div class="doc-drawer-title-wrap">
+                    <span class="doc-drawer-icon">@(editor.ID == 0 ? "➕" : "✏️")</span>
+                    <div>
+                        <h2 class="doc-drawer-title">
+                            @(editor.ID == 0 ? I18n.T("Add Consultant Doctor") : $"{I18n.T("Edit Doctor")} #{editor.ID}")
+                        </h2>
+                        <span class="doc-drawer-sub">
+                            @(editor.ID == 0 ? I18n.T("Create a new doctor profile and chamber schedule") : DoctorDisplayName(editor))
+                        </span>
+                    </div>
+                </div>
+
+                <div class="doc-drawer-header-actions">
+                    @if (editor.ID > 0)
+                    {
+                        <span class="doc-status-badge @(editor.IsActive ? "active" : "inactive")">
+                            @(editor.IsActive ? I18n.T("Active") : I18n.T("Inactive"))
+                        </span>
+                    }
+                    <button type="button" class="doc-drawer-close" @onclick="CloseDrawer" title="@I18n.T("Close")">✕</button>
+                </div>
+            </div>
+
+            <EditForm Model="editor" OnSubmit="SaveAsync" class="doc-drawer-form">
+                <div class="doc-drawer-body">
+                    <!-- Section 1: Doctor Profile -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>👤</span>
+                            <span>@I18n.T("Doctor Profile")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="width: 90px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Title")</label>
+                                <select class="classic-input" @bind="editor.Title">
+                                    <option value="Dr.">Dr.</option>
+                                    <option value="Prof.">Prof.</option>
+                                    <option value="Assoc. Prof.">Assoc. Prof.</option>
+                                    <option value="Asst. Prof.">Asst. Prof.</option>
+                                    <option value="Brig. Gen.">Brig. Gen.</option>
+                                    <option value="Maj. Gen.">Maj. Gen.</option>
+                                    <option value="Col.">Col.</option>
+                                    <option value="Lt. Col.">Lt. Col.</option>
+                                    <option value="Capt.">Capt.</option>
+                                </select>
+                            </div>
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Full Name") <span class="doc-required">*</span></label>
+                                <InputText class="classic-input doc-input-name" @bind-Value="editor.Name" placeholder="@I18n.T("e.g. Shamim Ahsan")" />
+                            </div>
+                        </div>
+
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Qualifications & Degrees")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Degree" placeholder="@I18n.T("e.g. MBBS, FCPS (Surgery), MS")" />
+                            </div>
+                            <div class="doc-field" style="width: 170px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Category / Attachment")</label>
+                                <select class="classic-input" @bind="editor.Attachment">
+                                    <option value="Permanent">@I18n.T("Permanent")</option>
+                                    <option value="Residential">@I18n.T("Residential")</option>
+                                    <option value="Contractual">@I18n.T("Contractual")</option>
+                                    <option value="Visiting">@I18n.T("Visiting / Guest")</option>
+                                    <option value="Consultant">@I18n.T("Consultant")</option>
+                                    <option value="Temporary">@I18n.T("Temporary")</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Department & Chamber -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>🏥</span>
+                            <span>@I18n.T("Department & Chamber")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Department")</label>
+                                <select class="classic-input" @bind="editor.Department">
+                                    <option value="">-- @I18n.T("Select Department") --</option>
+                                    @foreach (var d in departments)
+                                    {
+                                        <option value="@d.ID">@d.Name</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="doc-field" style="width: 140px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Room / Chamber")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Room" placeholder="@I18n.T("e.g. 204, OPD-B")" />
+                            </div>
+                        </div>
+
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Chamber Address")</label>
+                            <InputText class="classic-input" @bind-Value="editor.Address" placeholder="@I18n.T("Hospital or branch address")" />
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Consultation Schedule & Off Days -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>🕒</span>
+                            <span>@I18n.T("Consultation Schedule & Off Days")</span>
+                        </div>
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Visiting Hours / Shift Time")</label>
+                            <InputText class="classic-input" @bind-Value="editor.ConsultationTime" placeholder="@I18n.T("e.g. 05:00 PM - 09:00 PM (Daily)")" />
+                        </div>
+
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Weekly Off Days")</label>
+                            <div class="doc-days-toggle-wrap">
+                                @foreach (var day in WeekDays)
+                                {
+                                    var isSelected = IsOffDaySelected(day);
+                                    <button type="button"
+                                            class="doc-day-chip @(isSelected ? "selected" : "")"
+                                            @onclick="() => ToggleOffDay(day)">
+                                        @(isSelected ? "✓ " : "")@I18n.T(day)
+                                    </button>
+                                }
+                            </div>
+                            <InputText class="classic-input" style="margin-top: 5px;"
+                                       @bind-Value="editor.OffDay"
+                                       placeholder="@I18n.T("Selected off days (e.g. Friday, Saturday)")" />
+                        </div>
+                    </div>
+
+                    <!-- Section 4: Contact & Priority / Status -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>⚙️</span>
+                            <span>@I18n.T("Contact, Priority & Status")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Contact Mobile")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
+                            </div>
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Email")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Email" placeholder="doctor@delta.edu.bd" />
+                            </div>
+                        </div>
+
+                        <div class="doc-priority-control-box" style="margin-top: 10px;">
+                            <div class="doc-row" style="align-items: flex-start;">
+                                <div class="doc-field" style="flex: 1; min-width: 0;">
+                                    <label class="doc-label" title="@I18n.T("Appointment Priority Serial")">
+                                        ⭐ @I18n.T("Priority Serial")
+                                    </label>
+                                    <InputNumber class="classic-input doc-priority-input"
+                                                 @bind-Value="editor.Priority"
+                                                 placeholder="@I18n.T("e.g. 1, 2, 3...")"
+                                                 min="1" max="999" />
+                                    <span class="doc-help-text">
+                                        @I18n.T("Appointment search sort order.")
+                                    </span>
+                                </div>
+
+                                <div class="doc-field" style="flex: 1; min-width: 0;">
+                                    <label class="doc-label">@I18n.T("Doctor Status")</label>
+                                    <div class="doc-status-toggle">
+                                        <button type="button"
+                                                class="doc-toggle-btn @(editor.IsActive ? "active" : "")"
+                                                @onclick="() => editor.IsActive = true">
+                                            ✓ @I18n.T("Active")
+                                        </button>
+                                        <button type="button"
+                                                class="doc-toggle-btn @(!editor.IsActive ? "inactive" : "")"
+                                                @onclick="() => editor.IsActive = false">
+                                            ✕ @I18n.T("Inactive")
+                                        </button>
+                                    </div>
+                                    <span class="doc-help-text">
+                                        @(editor.IsActive ? I18n.T("Doctor appears in appointment dropdown.") : I18n.T("Doctor is hidden from appointment booking."))
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Drawer Footer Actions -->
+                <div class="doc-drawer-footer">
+                    <div>
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-ghost doc-btn" type="button" @onclick="DeleteSelectedAsync" style="color:#dc2626;" title="@I18n.T("Delete Doctor")">
+                                🗑️ @I18n.T("Delete")
+                            </button>
+                        }
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-ghost doc-btn" type="button" @onclick="CloseDrawer">
+                            @I18n.T("Cancel")
+                        </button>
+                        <button class="btn btn-primary doc-btn doc-btn-add" type="submit" disabled="@saving">
+                            💾 @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Doctor") : I18n.T("Update Doctor"))
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+    }
 </div>
 
 @code {
+    private DotNetObjectReference<DoctorsMaster>? dotNetRef;
     private DoctorsProfile editor = new() { Title = "Dr.", Attachment = "Permanent", EnteredBy = 1, TransDate = DateTime.Now, IsActive = true };
     private List<DoctorsProfile> doctors = [];
     private List<Department> departments = [];
+
+    // Filter, search, and progressive auto-loading pagination state
     private string searchQuery = string.Empty;
     private string statusFilter = "All";
     private int? selectedDeptFilter;
-    private const int PageSize = 8;
-    private int currentPage;
+    private string? selectedCategoryFilter;
+    private const int PageSize = 10;
+    private int loadedPages = 1;
+    private bool isLoadingMore = false;
     private string message = string.Empty;
     private string messageClass = "success";
     private bool saving;
+    private bool isDrawerOpen;
 
+    private static readonly string[] WeekDays = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex MultiDotRegex = new(@"\.{2,}", RegexOptions.Compiled);
     private static readonly Regex LeadingZRegex = new(@"^z{2,}[\s._-]*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await Branding.LoadAsync();
+        if (string.IsNullOrWhiteSpace(editor.Address))
+        {
+            editor.Address = GetDefaultHospitalAddress();
+        }
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("hpm.initTableAutoScroll", "doctorsTableWrap", dotNetRef, nameof(LoadNextPageFromScroll));
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadNextPageFromScroll()
+    {
+        if (isLoadingMore || loadedPages >= PageCount) return;
+
+        isLoadingMore = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(100);
+
+        loadedPages++;
+        isLoadingMore = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task GoToFirstPageAsync()
+    {
+        loadedPages = 1;
+        await JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
+    }
+
+    private void GoToPrevPage() => loadedPages = Math.Max(1, loadedPages - 1);
+    private void GoToNextPage() => loadedPages = Math.Min(PageCount, loadedPages + 1);
+    private void GoToLastPage() => loadedPages = PageCount;
+
+    private void ResetPage()
+    {
+        loadedPages = 1;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
+        }
+        catch { }
+    }
 
     public static string CleanDoctorText(string? input)
     {
@@ -456,95 +685,151 @@
         return $"{title} {name}".Trim();
     }
 
-    private static string DoctorTypeLabel(string? attachment) => attachment switch
+    private static string GetDoctorInitials(DoctorsProfile doc)
     {
-        "Permanent" => "Permanent",
-        "Residential" => "Residential",
-        "Contractual" => "Contractual",
-        "Visiting" => "Visiting",
-        "Consultant" => "Consultant",
-        "Temporary" => "Temporary",
-        _ => attachment ?? string.Empty
+        var name = CleanDoctorText(doc.Name);
+        if (string.IsNullOrWhiteSpace(name)) return "DR";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpper();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpper();
+    }
+
+    private static string DoctorTypeLabel(string? raw)
+    {
+        var norm = (raw ?? string.Empty).Trim();
+        return norm switch
+        {
+            "Permanent" => "Permanent",
+            "Residential" => "Residential",
+            "Contractual" => "Contractual",
+            "Visiting" => "Visiting",
+            "Consultant" => "Consultant",
+            "Temporary" => "Temporary",
+            _ => string.IsNullOrWhiteSpace(norm) ? "Doctor" : norm
+        };
+    }
+
+    private static string GetAttachmentClass(string? attachment) => (attachment?.Trim().ToLowerInvariant()) switch
+    {
+        "permanent" => "cat-permanent",
+        "residential" => "cat-residential",
+        "contractual" => "cat-contractual",
+        "visiting" => "cat-visiting",
+        "consultant" => "cat-consultant",
+        _ => "cat-default"
     };
 
-    private static string GetAttachmentClass(string? attachment) => attachment switch
+    private void SetStatusFilter(string filter)
     {
-        "Permanent" => "badge-perm",
-        "Residential" => "badge-res",
-        "Contractual" => "badge-cont",
-        _ => "badge-other"
-    };
+        statusFilter = filter;
+        ResetPage();
+    }
 
     private IEnumerable<DoctorsProfile> FilteredDoctors
     {
         get
         {
-            var list = doctors.AsEnumerable();
+            var query = doctors.AsEnumerable();
 
-            // Status filter
-            if (statusFilter == "Active") list = list.Where(x => x.IsActive);
-            else if (statusFilter == "Inactive") list = list.Where(x => !x.IsActive);
-            else if (statusFilter == "Prioritized") list = list.Where(x => x.Priority.HasValue && x.Priority > 0);
+            if (statusFilter == "Active")
+                query = query.Where(x => x.IsActive);
+            else if (statusFilter == "Inactive")
+                query = query.Where(x => !x.IsActive);
+            else if (statusFilter == "Prioritized")
+                query = query.Where(x => x.Priority.HasValue && x.Priority > 0);
 
-            // Department filter
-            if (selectedDeptFilter.HasValue && selectedDeptFilter.Value > 0)
-                list = list.Where(x => x.Department == selectedDeptFilter.Value);
+            if (selectedDeptFilter.HasValue && selectedDeptFilter > 0)
+                query = query.Where(x => x.Department == selectedDeptFilter.Value);
 
-            // Search query
+            if (!string.IsNullOrWhiteSpace(selectedCategoryFilter))
+                query = query.Where(x => string.Equals(x.Attachment?.Trim(), selectedCategoryFilter, StringComparison.OrdinalIgnoreCase));
+
             if (!string.IsNullOrWhiteSpace(searchQuery))
             {
                 var q = searchQuery.Trim();
-                list = list.Where(d => d.ID.ToString().Contains(q, StringComparison.OrdinalIgnoreCase)
-                                    || (d.Name != null && d.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
-                                    || (d.Title != null && d.Title.Contains(q, StringComparison.OrdinalIgnoreCase))
-                                    || (d.Degree != null && d.Degree.Contains(q, StringComparison.OrdinalIgnoreCase))
-                                    || (d.Attachment != null && d.Attachment.Contains(q, StringComparison.OrdinalIgnoreCase))
-                                    || (d.Room != null && d.Room.Contains(q, StringComparison.OrdinalIgnoreCase))
-                                    || (d.Department.HasValue && departments.Any(dept => dept.ID == d.Department && dept.Name.Contains(q, StringComparison.OrdinalIgnoreCase))));
+                query = query.Where(x =>
+                    x.ID.ToString().Contains(q) ||
+                    (x.Name != null && x.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Degree != null && x.Degree.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Attachment != null && x.Attachment.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Room != null && x.Room.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Contact != null && x.Contact.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Department.HasValue && DepartmentName(x.Department).Contains(q, StringComparison.OrdinalIgnoreCase)));
             }
 
-            // Order by Priority first, then Name
-            return list.OrderBy(x => x.Priority.HasValue && x.Priority.Value > 0 ? 0 : 1)
-                       .ThenBy(x => x.Priority)
-                       .ThenBy(x => x.Name);
+            return query
+                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
+                .ThenBy(x => x.Priority ?? 9999)
+                .ThenByDescending(x => x.IsActive)
+                .ThenBy(x => CleanDoctorText(x.Name));
         }
     }
 
+    private IEnumerable<DoctorsProfile> PagedDoctors => FilteredDoctors.Take(loadedPages * PageSize);
     private int PageCount => Math.Max(1, (int)Math.Ceiling(FilteredDoctors.Count() / (double)PageSize));
-    private IEnumerable<DoctorsProfile> PagedDoctors => FilteredDoctors
-        .Skip(currentPage * PageSize)
-        .Take(PageSize);
-
-    protected override async Task OnInitializedAsync()
-    {
-        I18n.OnLanguageChanged += HandleLanguageChanged;
-        await Branding.LoadAsync();
-        if (string.IsNullOrWhiteSpace(editor.Address))
-        {
-            editor.Address = GetDefaultHospitalAddress();
-        }
-        await LoadAsync();
-    }
-
-    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
     private async Task LoadAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        doctors = await db.Doctors.AsNoTracking()
-            .OrderBy(x => x.Priority.HasValue && x.Priority.Value > 0 ? 0 : 1)
-            .ThenBy(x => x.Priority)
-            .ThenBy(x => x.Name)
-            .ToListAsync();
-        departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            doctors = await db.Doctors
+                .AsNoTracking()
+                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
+                .ThenBy(x => x.Priority ?? 9999)
+                .ThenByDescending(x => x.IsActive)
+                .ThenBy(x => x.Name)
+                .ToListAsync();
+
+            departments = await db.Departments
+                .AsNoTracking()
+                .OrderBy(x => x.Name)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error loading data: {ex.Message}";
+        }
     }
 
-    private void ResetPage() => currentPage = 0;
-    private void SetStatusFilter(string filter)
+    private void OpenNewDoctor()
     {
-        statusFilter = filter;
-        ResetPage();
+        ResetEditor();
+        isDrawerOpen = true;
+    }
+
+    private void OpenEditDoctor(DoctorsProfile doctor)
+    {
+        Select(doctor);
+        isDrawerOpen = true;
+    }
+
+    private void CloseDrawer() => isDrawerOpen = false;
+
+    private bool IsOffDaySelected(string day)
+    {
+        if (string.IsNullOrWhiteSpace(editor.OffDay)) return false;
+        return editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ToggleOffDay(string day)
+    {
+        var current = string.IsNullOrWhiteSpace(editor.OffDay)
+            ? new List<string>()
+            : editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        var existingIndex = current.FindIndex(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
+        if (existingIndex >= 0)
+        {
+            current.RemoveAt(existingIndex);
+        }
+        else
+        {
+            current.Add(day);
+        }
+        editor.OffDay = current.Count > 0 ? string.Join(", ", current) : string.Empty;
     }
 
     private async Task SaveAsync()
@@ -573,6 +858,7 @@
             await db.SaveChangesAsync();
             messageClass = "success";
             message = I18n.IsBangla ? $"ডাক্তার {DoctorDisplayName(editor)} এর তথ্য সংরক্ষিত হয়েছে।" : $"Doctor {DoctorDisplayName(editor)} saved successfully.";
+            isDrawerOpen = false;
             ResetEditor();
             await LoadAsync();
         }
@@ -632,7 +918,9 @@
             Address = !string.IsNullOrWhiteSpace(cleanAddr) ? d.Address : GetDefaultHospitalAddress(),
             ReferralCategoryID = d.ReferralCategoryID,
             IsActive = d.IsActive,
-            Priority = d.Priority
+            Priority = d.Priority,
+            ConsultationTime = d.ConsultationTime,
+            OffDay = d.OffDay
         };
         message = string.Empty;
     }
@@ -664,14 +952,9 @@
         }
         messageClass = "success";
         message = I18n.IsBangla ? "ডাক্তার মুছে ফেলা হয়েছে।" : "Doctor deleted.";
+        isDrawerOpen = false;
         ResetEditor();
         await LoadAsync();
-    }
-
-    private void Reset()
-    {
-        ResetEditor();
-        message = string.Empty;
     }
 
     private void ResetEditor() => editor = NewDoctor();
@@ -691,7 +974,9 @@
             return Branding.HospitalName;
         return "Delta Medical College & Hospital";
     }
+
     private string DepartmentName(int? id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+
     private async Task ExportExcelAsync()
     {
         try
@@ -795,5 +1080,18 @@
             messageClass = "danger";
             message = $"Print error: {ex.Message}";
         }
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.disposeTableAutoScroll", "doctorsTableWrap");
+        }
+        catch { }
+        dotNetRef?.Dispose();
     }
 }
