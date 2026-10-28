@@ -91,19 +91,34 @@
                             <span class="appt-field-label">
                                 <span>@I18n.T("Consultant Doctor")<span class="req">*</span></span>
                             </span>
-                            <div class="appt-doctor-search" id="appt-doctor-search-box">
-                                <input class="classic-input"
-                                       id="appt-doctor-search-input"
-                                       value="@doctorSearchText"
-                                       @oninput="HandleDoctorSearchInputAsync"
-                                       @onfocus="ShowDoctorSuggestions"
-                                       @onkeydown="HandleDoctorSearchKeyDown"
-                                       autocomplete="off"
-                                       placeholder="@I18n.T("Search doctor ID, name, or specialty...")"
-                                       title="@I18n.T("Search doctor")" />
+                            <div class="appt-doctor-search-combo-wrap" id="appt-doctor-search-box" style="position: relative; width: 100%;">
+                                <div style="display: flex; gap: 6px; align-items: center;">
+                                    <select class="classic-input appt-dept-filter-select"
+                                            value="@selectedDepartmentId"
+                                            @onchange="HandleDepartmentFilterChanged"
+                                            style="flex: 0 0 145px; max-width: 155px; height: 28px; font-size: 11px; font-weight: 650; cursor: pointer; background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px;"
+                                            title="@I18n.T("Filter by Department")">
+                                        <option value="0">📂 @I18n.T("All Depts")</option>
+                                        @foreach (var dept in departments.OrderBy(d => d.Value))
+                                        {
+                                            <option value="@dept.Key">@dept.Value</option>
+                                        }
+                                    </select>
+                                    <div class="appt-doctor-search" style="flex: 1; min-width: 0; position: relative;">
+                                        <input class="classic-input"
+                                               id="appt-doctor-search-input"
+                                               value="@doctorSearchText"
+                                               @oninput="HandleDoctorSearchInputAsync"
+                                               @onfocus="ShowDoctorSuggestions"
+                                               @onkeydown="HandleDoctorSearchKeyDown"
+                                               autocomplete="off"
+                                               placeholder="@I18n.T("Search doctor ID, name, or specialty...")"
+                                               title="@I18n.T("Search doctor")" />
+                                    </div>
+                                </div>
                                 @if (showDoctorSuggestions)
                                 {
-                                    <div class="appt-doctor-suggestions" id="appt-doctor-suggestions-list">
+                                    <div class="appt-doctor-suggestions" id="appt-doctor-suggestions-list" style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 120;">
                                         @if (filteredDoctorItems.Count > 0)
                                         {
                                             @foreach (var item in VisibleDoctorItems)
@@ -146,7 +161,14 @@
                                             }
                                             else
                                             {
-                                                <div class="appt-doctor-empty">@I18n.T("No doctor found")</div>
+                                                <div class="appt-doctor-empty">
+                                                    @I18n.T("No doctor found")
+                                                    @if (selectedDepartmentId > 0)
+                                                    {
+                                                        <text> in this department </text>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 ms-1" style="font-size: 11px; vertical-align: baseline;" @onmousedown:preventDefault @onclick="ResetDeptFilter">(@I18n.T("Show All"))</button>
+                                                    }
+                                                </div>
                                             }
                                         }
                                     </div>
@@ -1004,18 +1026,31 @@
         UpdateFilteredDoctors();
     }
 
+    private int selectedDepartmentId = 0;
+
+    private void ResetDeptFilter()
+    {
+        selectedDepartmentId = 0;
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
+    }
+
     private void UpdateFilteredDoctors()
     {
         var term = doctorSearchText.Trim();
-        if (string.IsNullOrWhiteSpace(term) || editor.DoctorID > 0)
+        IEnumerable<DoctorViewItem> query = doctorViewItems;
+
+        if (selectedDepartmentId > 0)
         {
-            filteredDoctorItems = doctorViewItems;
-            return;
+            query = query.Where(x => x.Doctor.Department == selectedDepartmentId);
         }
 
-        filteredDoctorItems = doctorViewItems
-            .Where(x => x.SearchHaystack.Contains(term, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        if (!string.IsNullOrWhiteSpace(term) && (editor.DoctorID <= 0 || !doctorSearchText.StartsWith($"D{editor.DoctorID}")))
+        {
+            query = query.Where(x => x.SearchHaystack.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        filteredDoctorItems = query.ToList();
     }
 
     protected override async Task OnInitializedAsync()
@@ -1423,6 +1458,7 @@ private async Task LoadAppointmentsAsync()
     {
         editor = NewAppointment();
         editor.DoctorID = 0;
+        selectedDepartmentId = 0;
         editor.Sex = null;
         selectedPatientSex = null;
         doctorSearchText = string.Empty;
@@ -1460,6 +1496,14 @@ private async Task LoadAppointmentsAsync()
         originalDate = a.ApptDate;
         apptDatePart = a.ApptDate.Date;
         apptTimePart = a.ApptDate.ToString("HH:mm");
+        if (doctorById.TryGetValue(a.DoctorID, out var dItem) && dItem.Doctor.Department.HasValue)
+        {
+            selectedDepartmentId = dItem.Doctor.Department.Value;
+        }
+        else
+        {
+            selectedDepartmentId = 0;
+        }
         patientSearchQuery = ClinicalEncounterWorkflow.IsTempPatientId(a.PatientID) ? string.Empty : (a.PatientID ?? string.Empty);
         isWalkInMode = string.IsNullOrWhiteSpace(a.PatientID) || ClinicalEncounterWorkflow.IsTempPatientId(a.PatientID);
         selectedPatientSex = !string.IsNullOrWhiteSpace(a.PatientID) && patientSexMap.TryGetValue(a.PatientID, out var s) ? s : null;
@@ -1696,6 +1740,27 @@ private async Task LoadAppointmentsAsync()
         return string.IsNullOrWhiteSpace(deg) ? disp : $"{disp} {deg}".Trim();
     }
 
+    private async Task HandleDepartmentFilterChanged(ChangeEventArgs e)
+    {
+        selectedDepartmentId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        if (editor.DoctorID > 0)
+        {
+            if (selectedDepartmentId > 0 && SelectedDoctor?.Department != selectedDepartmentId)
+            {
+                editor.DoctorID = 0;
+                doctorSearchText = string.Empty;
+            }
+        }
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
+        showDoctorSuggestions = true;
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.resetDoctorScrollTop", "appt-doctor-suggestions-list");
+        }
+        catch { }
+    }
+
     private async Task HandleDoctorSearchInputAsync(ChangeEventArgs e)
     {
         doctorSearchText = e.Value?.ToString() ?? string.Empty;
@@ -1900,6 +1965,10 @@ private async Task LoadAppointmentsAsync()
     {
         editor.DoctorID = doctor.ID;
         drawerDoctorId = doctor.ID;
+        if (doctor.Department.HasValue && doctor.Department.Value > 0)
+        {
+            selectedDepartmentId = doctor.Department.Value;
+        }
         doctorSearchText = $"D{doctor.ID} - {DoctorDisplayName(doctor)}";
         showDoctorSuggestions = false;
         filterByCurrentDoctor = true;
