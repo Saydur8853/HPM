@@ -3,141 +3,456 @@
 @rendermode InteractiveServer
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 @implements IDisposable
+@using HPM.Web.Data.Entities
+@using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Diagnostic Masters") | @Branding.HospitalName</PageTitle>
+<PageTitle>@GetPageTitle() | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Diagnostic & Lab")</span>
-        <h1>@I18n.T("Lab Parameters", "Lab Test Parameters Setup")</h1>
-        <p>@I18n.T("Configure investigation test parameters, normal reference ranges and measurement units.")</p>
+<div class="diagnostic-classic-fit">
+    <!-- Compact Top Action, Section Switcher & Status Bar -->
+    <div class="diagnostic-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>🔬</span>
+                <span>@GetSectionTitle()</span>
+            </h1>
+            <!-- Section Switcher Tabs -->
+            <div class="diagnostic-mode-toggle" role="tablist" aria-label="Diagnostic Master Sections">
+                <button type="button" class="mode-toggle-btn @(currentSection == "pathology-head" ? "active" : "")" @onclick='() => SwitchSection("pathology-head")' title="@I18n.T("Pathology Group Heads")">
+                    🧪 @I18n.T("Pathology Head")
+                </button>
+                <button type="button" class="mode-toggle-btn @(currentSection == "consultant" ? "active" : "")" @onclick='() => SwitchSection("consultant")' title="@I18n.T("Lab Reporting Consultants & Signatories")">
+                    👨‍⚕️ @I18n.T("Consultants")
+                </button>
+                <button type="button" class="mode-toggle-btn @(currentSection == "parameters" ? "active" : "")" @onclick='() => SwitchSection("parameters")' title="@I18n.T("Investigation Parameters & Reference Ranges")">
+                    📋 @I18n.T("Parameters")
+                </button>
+            </div>
+            <span class="tickets-count-pill">
+                @GetRecordCount() @I18n.T("Records")
+            </span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass.Contains("danger") ? "⚠" : "✓") @message
+                </span>
+            }
+        </div>
+
+        <DiagnosticNavTabs />
+
+        <div class="tickets-top-actions">
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("New Entry")">
+                + @I18n.T("New")
+            </button>
+            <NavLink href="masters" class="btn btn-ghost tickets-btn" title="@I18n.T("Back to Master Setup Hub")">
+                ⚙️ @I18n.T("All Masters")
+            </NavLink>
+        </div>
     </div>
-    <NavLink href="masters" class="btn btn-secondary">&larr; @I18n.T("Master setup")</NavLink>
-</div>
 
-@if (!string.IsNullOrWhiteSpace(message))
-{
-    <div class="alert @messageClass">@message</div>
-}
+    <!-- Main Balanced Workspace Grid: Left Form Card, Right Data Grid Card -->
+    <div class="diagnostic-classic-workspace">
+        <!-- Left Panel: Compact Form Card -->
+        <div class="diagnostic-form-card" style="flex: 1;">
+            <div class="diagnostic-card-header">
+                <h2>@GetFormCardTitle()</h2>
+                <span class="diagnostic-badge">
+                    @(IsEditing ? $"ID #{GetEditingId()}" : "NEW")
+                </span>
+            </div>
 
-<div class="master-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(editor.ID == 0 ? I18n.T("Add Test", "Add Test Parameter") : I18n.T("Edit", "Edit Parameter"))</h2>
-                <p>@I18n.T("Test parameter names, units and normal ranges.", "Test parameter names, units and normal ranges.")</p>
+            <div class="diagnostic-form-body" style="overflow-y:auto; padding:12px 16px;">
+                @if (currentSection == "pathology-head")
+                {
+                    <div style="display:flex; flex-direction:column; gap:10px;">
+                        <label style="margin:0;">
+                            <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Pathology Group Head Name") *</span>
+                            <input class="classic-input" @bind="headEditor.Name" placeholder="e.g. WIDAL TEST:, Lipid Profile (Fasting):, Complete Blood Count:" style="height:32px; font-weight:600;" />
+                            <small style="color:#64748b; font-size:10px; margin-top:3px; display:block;">
+                                @I18n.T("This heading groups related parameters together on patient lab reports.")
+                            </small>
+                        </label>
+
+                        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+                            <button class="btn btn-primary" type="button" @onclick="SaveHeadAsync" style="padding:6px 16px;">
+                                @(headEditor.ID == 0 ? "✓ " + I18n.T("Save Group Head") : "✓ " + I18n.T("Update Group Head"))
+                            </button>
+                            @if (headEditor.ID > 0)
+                            {
+                                <button class="btn btn-danger" type="button" @onclick="DeleteHeadAsync" style="padding:6px 12px;">
+                                    🗑️ @I18n.T("Delete")
+                                </button>
+                            }
+                            <button class="btn btn-ghost" type="button" @onclick="Reset" style="padding:6px 12px;">
+                                @I18n.T("Clear")
+                            </button>
+                        </div>
+                    </div>
+                }
+                else if (currentSection == "consultant")
+                {
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <label style="margin:0;">
+                            <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Consultant / Specialist Name") *</span>
+                            <input class="classic-input" @bind="consultantEditor.Name" placeholder="e.g. Dr. Mashud Parvez / Md. Forhad Hossain" style="height:30px; font-weight:600;" />
+                        </label>
+                        <label style="margin:0;">
+                            <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Degree & Qualifications")</span>
+                            <input class="classic-input" @bind="consultantEditor.Degree" placeholder="e.g. MBBS, MD (Pathology) / M.Sc (Biochemistry)" style="height:28px;" />
+                        </label>
+                        <label style="margin:0;">
+                            <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Designation & Lab Department")</span>
+                            <input class="classic-input" @bind="consultantEditor.Others" placeholder="e.g. Associate Professor & Head, Dept. of Pathology" style="height:28px;" />
+                        </label>
+                        <label style="margin:0;">
+                            <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Hospital / Medical Institution")</span>
+                            <input class="classic-input" @bind="consultantEditor.Institution" placeholder="e.g. Delta Medical College & Hospital" style="height:28px;" />
+                        </label>
+                        <div style="display:flex; align-items:center; gap:8px; margin-top:2px;">
+                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; font-weight:600; color:#334155; margin:0;">
+                                <input type="checkbox" @bind="consultantEditor.Is_Active" />
+                                <span>@I18n.T("Active Signatory for Reports")</span>
+                            </label>
+                        </div>
+
+                        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+                            <button class="btn btn-primary" type="button" @onclick="SaveConsultantAsync" style="padding:5px 14px;">
+                                @(consultantEditor.ID == 0 ? "✓ " + I18n.T("Save Consultant") : "✓ " + I18n.T("Update Consultant"))
+                            </button>
+                            @if (consultantEditor.ID > 0)
+                            {
+                                <button class="btn btn-danger" type="button" @onclick="DeleteConsultantAsync" style="padding:5px 10px;">
+                                    🗑️ @I18n.T("Delete")
+                                </button>
+                            }
+                            <button class="btn btn-ghost" type="button" @onclick="Reset" style="padding:5px 10px;">
+                                @I18n.T("Clear")
+                            </button>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <label style="margin:0;">
+                            <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Select Test / Investigation") *</span>
+                            <select class="classic-input tickets-select" @bind="paramEditor.ServiceID" style="height:30px;">
+                                <option value="0">@I18n.T("-- Select Investigation --")</option>
+                                @foreach (var s in labServices)
+                                {
+                                    <option value="@s.ID">@s.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label style="margin:0;">
+                            <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Parameter Name") *</span>
+                            <input class="classic-input" @bind="paramEditor.ParameterName" placeholder="e.g. Hemoglobin, SGPT/ALT, Serum Creatinine" style="height:28px; font-weight:600;" />
+                        </label>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                            <label style="margin:0;">
+                                <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Unit")</span>
+                                <input class="classic-input" @bind="paramEditor.Unit" placeholder="e.g. g/dL, mg/dL, U/L" style="height:28px;" />
+                            </label>
+                            <label style="margin:0;">
+                                <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Sort Order")</span>
+                                <input type="number" class="classic-input" @bind="paramEditor.SortOrder" style="height:28px;" />
+                            </label>
+                        </div>
+                        <label style="margin:0;">
+                            <span style="font-size:11px; font-weight:600; color:#475569;">@I18n.T("Reference Normal Range")</span>
+                            <input class="classic-input" @bind="paramEditor.ReferenceRange" placeholder="e.g. Male: 13.5-17.5 g/dL, Female: 12.0-15.5 g/dL" style="height:28px;" />
+                        </label>
+
+                        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+                            <button class="btn btn-primary" type="button" @onclick="SaveParamAsync" style="padding:5px 14px;">
+                                @(paramEditor.ID == 0 ? "✓ " + I18n.T("Save Parameter") : "✓ " + I18n.T("Update Parameter"))
+                            </button>
+                            @if (paramEditor.ID > 0)
+                            {
+                                <button class="btn btn-danger" type="button" @onclick="DeleteParamAsync" style="padding:5px 10px;">
+                                    🗑️ @I18n.T("Delete")
+                                </button>
+                            }
+                            <button class="btn btn-ghost" type="button" @onclick="Reset" style="padding:5px 10px;">
+                                @I18n.T("Clear")
+                            </button>
+                        </div>
+                    </div>
+                }
             </div>
         </div>
 
-        <EditForm Model="editor" OnSubmit="SaveAsync">
-            <div class="form-grid">
-                <label class="span-2">
-                    <span>@I18n.T("Select Test / Investigation") *</span>
-                    <select @bind="editor.ServiceID" style="width:100%;">
-                        <option value="0">@I18n.T("-- Select Test --")</option>
-                        @foreach (var s in labServices)
-                        {
-                            <option value="@s.ID">@s.Name</option>
-                        }
-                    </select>
-                </label>
-                <label class="span-2">
-                    <span>@I18n.T("Parameter Name") *</span>
-                    <InputText @bind-Value="editor.ParameterName" placeholder="e.g. Hemoglobin (Hb), Fasting Blood Glucose, SGPT/ALT" />
-                </label>
-                <label>
-                    <span>@I18n.T("Unit")</span>
-                    <InputText @bind-Value="editor.Unit" placeholder="e.g. g/dL, mg/dL, U/L, %" />
-                </label>
-                <label>
-                    <span>@I18n.T("Serial No", "Sort Order")</span>
-                    <InputNumber @bind-Value="editor.SortOrder" />
-                </label>
-                <label class="span-2">
-                    <span>@I18n.T("Reference Normal Range")</span>
-                    <InputText @bind-Value="editor.ReferenceRange" placeholder="e.g. Male: 13.5-17.5 g/dL, Female: 12.0-15.5 g/dL or 70 - 100 mg/dL" />
-                </label>
-            </div>
-
-            <div class="form-actions">
-                <button class="btn btn-primary" type="submit">@(editor.ID == 0 ? I18n.T("Save") : I18n.T("Update"))</button>
-                @if (editor.ID > 0)
-                {
-                    <button class="btn btn-ghost" type="button" @onclick="DeleteAsync">@I18n.T("Delete")</button>
-                }
-                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear")</button>
-            </div>
-        </EditForm>
-    </div>
-
-    <div class="panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@I18n.T("Lab Parameters")</h2>
-                <p>@I18n.T("Select an investigation to view its parameter template")</p>
-            </div>
-            <select class="date-filter" style="min-width:180px;" @bind="selectedFilterServiceId" @bind:after="FilterParameters">
-                <option value="0">@I18n.T("All investigations", "All investigations")</option>
-                @foreach (var s in labServices)
-                {
-                    <option value="@s.ID">@s.Name</option>
-                }
-            </select>
-        </div>
-
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Investigation Details", "Investigation")</th>
-                        <th>@I18n.T("Parameter Name", "Parameter")</th>
-                        <th>@I18n.T("Unit")</th>
-                        <th>@I18n.T("Reference Normal Range")</th>
-                        <th>#</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (filteredParameters.Count == 0)
+        <!-- Right Panel: Data Grid & Queue Card -->
+        <div class="diagnostic-queue-card" style="flex: 1.45;">
+            <div class="diagnostic-card-header">
+                <h2>@GetQueueCardTitle()</h2>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    @if (currentSection == "parameters")
                     {
-                        <tr>
-                            <td colspan="6"><div class="empty-state small">@I18n.T("No records found.")</div></td>
-                        </tr>
+                        <select class="classic-input tickets-select" style="min-width:180px; height:26px; font-size:11px;" @bind="selectedFilterServiceId" @bind:after="FilterParameters">
+                            <option value="0">@I18n.T("All Investigations")</option>
+                            @foreach (var s in labServices)
+                            {
+                                <option value="@s.ID">@s.Name</option>
+                            }
+                        </select>
                     }
-                    @foreach (var p in filteredParameters)
-                    {
-                        <tr>
-                            <td><b>@ServiceName(p.ServiceID)</b></td>
-                            <td>@p.ParameterName</td>
-                            <td><span class="pill">@(string.IsNullOrWhiteSpace(p.Unit) ? "—" : p.Unit)</span></td>
-                            <td><small>@(string.IsNullOrWhiteSpace(p.ReferenceRange) ? "—" : p.ReferenceRange)</small></td>
-                            <td>@p.SortOrder</td>
-                            <td>
-                                <button class="icon-btn" @onclick="() => Select(p)">@I18n.T("Edit")</button>
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
+                    <input type="text"
+                           class="classic-input"
+                           placeholder="@I18n.T("Search records...")"
+                           @bind="searchQuery"
+                           @bind:event="oninput"
+                           style="width:160px; height:26px; font-size:11px;" />
+                    <span class="diagnostic-badge">@GetFilteredCount()</span>
+                </div>
+            </div>
+
+            <div class="diagnostic-queue-body" style="overflow-y:auto; padding:6px 8px; max-height:calc(100vh - 165px);">
+                @if (currentSection == "pathology-head")
+                {
+                    <table class="classic-table" style="font-size:11.5px; width:100%;">
+                        <thead>
+                            <tr>
+                                <th style="width:50px;">ID</th>
+                                <th>@I18n.T("Group Head Name")</th>
+                                <th style="width:60px; text-align:right;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!FilteredHeads.Any())
+                            {
+                                <tr><td colspan="3" style="text-align:center; padding:20px; color:#94a3b8;">@I18n.T("No group heads found.")</td></tr>
+                            }
+                            @foreach (var h in FilteredHeads)
+                            {
+                                <tr style="@(headEditor.ID == h.ID ? "background:#e0f2fe; font-weight:700;" : "")">
+                                    <td><span class="pill" style="font-size:10px;">#@h.ID</span></td>
+                                    <td><b>@h.Name</b></td>
+                                    <td style="text-align:right;">
+                                        <button class="btn btn-ghost" style="padding:2px 8px; font-size:10.5px;" @onclick="() => SelectHead(h)">
+                                            ✏️ @I18n.T("Edit")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else if (currentSection == "consultant")
+                {
+                    <table class="classic-table" style="font-size:11px; width:100%;">
+                        <thead>
+                            <tr>
+                                <th style="width:40px;">#</th>
+                                <th>@I18n.T("Consultant Name")</th>
+                                <th>@I18n.T("Degree")</th>
+                                <th>@I18n.T("Designation")</th>
+                                <th style="width:65px; text-align:center;">@I18n.T("Status")</th>
+                                <th style="width:55px; text-align:right;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!FilteredConsultants.Any())
+                            {
+                                <tr><td colspan="6" style="text-align:center; padding:20px; color:#94a3b8;">@I18n.T("No consultants found.")</td></tr>
+                            }
+                            @foreach (var c in FilteredConsultants)
+                            {
+                                <tr style="@(consultantEditor.ID == c.ID ? "background:#e0f2fe; font-weight:700;" : "")">
+                                    <td><span class="pill" style="font-size:10px;">#@c.ID</span></td>
+                                    <td><b>@c.Name</b></td>
+                                    <td><small>@(c.Degree ?? "—")</small></td>
+                                    <td><small>@(c.Others ?? "—")</small></td>
+                                    <td style="text-align:center;">
+                                        <span class="pill @(c.Is_Active ? "pill-success" : "")" style="font-size:10px; font-weight:700;">
+                                            @(c.Is_Active ? "Active" : "Inactive")
+                                        </span>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <button class="btn btn-ghost" style="padding:2px 8px; font-size:10.5px;" @onclick="() => SelectConsultant(c)">
+                                            ✏️ @I18n.T("Edit")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                else
+                {
+                    <table class="classic-table" style="font-size:11px; width:100%;">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("Investigation")</th>
+                                <th>@I18n.T("Parameter")</th>
+                                <th style="width:70px; text-align:center;">@I18n.T("Unit")</th>
+                                <th>@I18n.T("Reference Normal Range")</th>
+                                <th style="width:40px; text-align:center;">#</th>
+                                <th style="width:55px; text-align:right;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!FilteredParams.Any())
+                            {
+                                <tr><td colspan="6" style="text-align:center; padding:20px; color:#94a3b8;">@I18n.T("No parameters found.")</td></tr>
+                            }
+                            @foreach (var p in FilteredParams)
+                            {
+                                <tr style="@(paramEditor.ID == p.ID ? "background:#e0f2fe; font-weight:700;" : "")">
+                                    <td><b>@ServiceName(p.ServiceID)</b></td>
+                                    <td>@p.ParameterName</td>
+                                    <td style="text-align:center;"><span class="pill" style="font-size:10px;">@(string.IsNullOrWhiteSpace(p.Unit) ? "—" : p.Unit)</span></td>
+                                    <td><small style="color:#475569;">@(string.IsNullOrWhiteSpace(p.ReferenceRange) ? "—" : p.ReferenceRange)</small></td>
+                                    <td style="text-align:center;">@p.SortOrder</td>
+                                    <td style="text-align:right;">
+                                        <button class="btn btn-ghost" style="padding:2px 8px; font-size:10.5px;" @onclick="() => SelectParam(p)">
+                                            ✏️ @I18n.T("Edit")
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
         </div>
     </div>
 </div>
 
 @code {
-    private LabTestParameter editor = new();
+    [SupplyParameterFromQuery(Name = "section")]
+    public string? QuerySection { get; set; }
+
+    private string currentSection = "pathology-head";
+    private string searchQuery = "";
+    private int selectedFilterServiceId = 0;
+    private string message = "";
+    private string messageClass = "success";
+
+    // Entities & Lists
+    private PathologyGroupHead headEditor = new();
+    private List<PathologyGroupHead> heads = [];
+
+    private LabConsultant consultantEditor = new();
+    private List<LabConsultant> consultants = [];
+
+    private LabTestParameter paramEditor = new() { SortOrder = 1 };
     private List<LabTestParameter> parameters = [];
     private List<LabTestParameter> filteredParameters = [];
     private List<Service> labServices = [];
-    private int selectedFilterServiceId = 0;
 
-    private string message = "";
-    private string messageClass = "success";
+    // Filtered Views
+    private IEnumerable<PathologyGroupHead> FilteredHeads => string.IsNullOrWhiteSpace(searchQuery)
+        ? heads
+        : heads.Where(h => h.Name.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                        || h.ID.ToString().Contains(searchQuery.Trim()));
+
+    private IEnumerable<LabConsultant> FilteredConsultants => string.IsNullOrWhiteSpace(searchQuery)
+        ? consultants
+        : consultants.Where(c => c.Name.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+                              || (c.Degree?.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                              || (c.Others?.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<LabTestParameter> FilteredParams => filteredParameters.Where(p =>
+        string.IsNullOrWhiteSpace(searchQuery)
+        || p.ParameterName.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+        || ServiceName(p.ServiceID).Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase)
+        || (p.Unit?.Contains(searchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private bool IsEditing => currentSection switch
+    {
+        "pathology-head" => headEditor.ID > 0,
+        "consultant" => consultantEditor.ID > 0,
+        _ => paramEditor.ID > 0
+    };
+
+    private int GetEditingId() => currentSection switch
+    {
+        "pathology-head" => headEditor.ID,
+        "consultant" => consultantEditor.ID,
+        _ => paramEditor.ID
+    };
+
+    private int GetRecordCount() => currentSection switch
+    {
+        "pathology-head" => heads.Count,
+        "consultant" => consultants.Count,
+        _ => parameters.Count
+    };
+
+    private int GetFilteredCount() => currentSection switch
+    {
+        "pathology-head" => FilteredHeads.Count(),
+        "consultant" => FilteredConsultants.Count(),
+        _ => FilteredParams.Count()
+    };
+
+    private string GetPageTitle() => currentSection switch
+    {
+        "pathology-head" => I18n.T("Pathology Group Heads"),
+        "consultant" => I18n.T("Lab Reporting Consultants"),
+        _ => I18n.T("Lab Test Parameters")
+    };
+
+    private string GetSectionTitle() => currentSection switch
+    {
+        "pathology-head" => I18n.T("Pathology Group Head Setup"),
+        "consultant" => I18n.T("Lab Reporting Consultants"),
+        _ => I18n.T("Lab Test Parameters Setup")
+    };
+
+    private string GetFormCardTitle() => currentSection switch
+    {
+        "pathology-head" => headEditor.ID == 0 ? I18n.T("Add Pathology Head") : $"{I18n.T("Edit Head")} #{headEditor.ID}",
+        "consultant" => consultantEditor.ID == 0 ? I18n.T("Add Consultant") : $"{I18n.T("Edit Consultant")} #{consultantEditor.ID}",
+        _ => paramEditor.ID == 0 ? I18n.T("Add Parameter") : $"{I18n.T("Edit Parameter")} #{paramEditor.ID}"
+    };
+
+    private string GetQueueCardTitle() => currentSection switch
+    {
+        "pathology-head" => I18n.T("Pathology Group Head Directory"),
+        "consultant" => I18n.T("Reporting Specialists Directory"),
+        _ => I18n.T("Parameters Directory")
+    };
 
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        ApplySectionFromQuery();
         await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        ApplySectionFromQuery();
+    }
+
+    private void ApplySectionFromQuery()
+    {
+        var target = (QuerySection ?? "").Trim().ToLowerInvariant();
+        if (target is "pathology-head" or "consultant" or "parameters")
+        {
+            if (currentSection != target)
+            {
+                currentSection = target;
+                Reset();
+            }
+        }
+        else
+        {
+            currentSection = "pathology-head";
+        }
+    }
+
+    private void SwitchSection(string sec)
+    {
+        if (currentSection == sec) return;
+        currentSection = sec;
+        Navigation.NavigateTo($"/diagnostic/masters?section={sec}", replace: false);
+        Reset();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
@@ -145,6 +460,8 @@
     private async Task LoadAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        heads = await db.PathologyGroupHeads.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        consultants = await db.LabConsultants.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         labServices = await db.Services.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         parameters = await db.LabTestParameters.AsNoTracking().OrderBy(x => x.ServiceID).ThenBy(x => x.SortOrder).ToListAsync();
         FilterParameters();
@@ -157,66 +474,163 @@
             : parameters.Where(x => x.ServiceID == selectedFilterServiceId).ToList();
     }
 
-    private async Task SaveAsync()
+    // --- Pathology Head Methods ---
+    private async Task SaveHeadAsync()
     {
-        if (editor.ServiceID <= 0 || string.IsNullOrWhiteSpace(editor.ParameterName))
+        if (string.IsNullOrWhiteSpace(headEditor.Name))
         {
-            Fail(I18n.IsBangla ? "টেস্ট এবং প্যারামিটারের নাম আবশ্যক।" : "Investigation service and parameter name are required.");
+            Fail(I18n.IsBangla ? "গ্রুপ হেডের নাম আবশ্যক।" : "Pathology group head name is required.");
             return;
         }
 
         await using var db = await DbFactory.CreateDbContextAsync();
-        if (editor.ID == 0)
+        if (headEditor.ID == 0)
         {
-            db.LabTestParameters.Add(editor);
+            db.PathologyGroupHeads.Add(headEditor);
         }
         else
         {
-            var entity = await db.LabTestParameters.FindAsync(editor.ID);
-            if (entity == null) { Fail(I18n.IsBangla ? "প্যারামিটার পাওয়া যায়নি।" : "Parameter not found."); return; }
-            db.Entry(entity).CurrentValues.SetValues(editor);
+            var entity = await db.PathologyGroupHeads.FindAsync(headEditor.ID);
+            if (entity == null) { Fail(I18n.T("Record not found.")); return; }
+            db.Entry(entity).CurrentValues.SetValues(headEditor);
         }
 
-        try
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "প্যাথলজি গ্রুপ হেড সংরক্ষিত হয়েছে।" : "Pathology group head saved successfully.");
+        Reset();
+        await LoadAsync();
+    }
+
+    private void SelectHead(PathologyGroupHead h)
+    {
+        headEditor = new PathologyGroupHead { ID = h.ID, Name = h.Name };
+        message = "";
+    }
+
+    private async Task DeleteHeadAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.T($"Delete group head '{headEditor.Name}'?"))) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.PathologyGroupHeads.FindAsync(headEditor.ID);
+        if (entity != null)
         {
+            db.PathologyGroupHeads.Remove(entity);
             await db.SaveChangesAsync();
-            Success(I18n.IsBangla ? "ল্যাব প্যারামিটার সংরক্ষিত হয়েছে।" : "Lab parameter saved successfully.");
-            var curService = editor.ServiceID;
+            Success(I18n.T("Group head deleted."));
             Reset();
-            editor.ServiceID = curService;
             await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            Fail(I18n.IsBangla ? $"প্যারামিটার সংরক্ষণ করা যায়নি: {ex.Message}" : $"Could not save parameter: {ex.Message}");
         }
     }
 
-    private void Select(LabTestParameter item)
+    // --- Consultant Methods ---
+    private async Task SaveConsultantAsync()
     {
-        editor = new LabTestParameter
+        if (string.IsNullOrWhiteSpace(consultantEditor.Name))
         {
-            ID = item.ID,
-            ServiceID = item.ServiceID,
-            ParameterName = item.ParameterName,
-            Unit = item.Unit,
-            ReferenceRange = item.ReferenceRange,
-            SortOrder = item.SortOrder
+            Fail(I18n.IsBangla ? "কনসালট্যান্টের নাম আবশ্যক।" : "Consultant name is required.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (consultantEditor.ID == 0)
+        {
+            db.LabConsultants.Add(consultantEditor);
+        }
+        else
+        {
+            var entity = await db.LabConsultants.FindAsync(consultantEditor.ID);
+            if (entity == null) { Fail(I18n.T("Record not found.")); return; }
+            db.Entry(entity).CurrentValues.SetValues(consultantEditor);
+        }
+
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ল্যাব কনসালট্যান্ট সংরক্ষিত হয়েছে।" : "Lab consultant saved successfully.");
+        Reset();
+        await LoadAsync();
+    }
+
+    private void SelectConsultant(LabConsultant c)
+    {
+        consultantEditor = new LabConsultant
+        {
+            ID = c.ID,
+            Name = c.Name,
+            Degree = c.Degree,
+            Others = c.Others,
+            Institution = c.Institution,
+            Is_Active = c.Is_Active
         };
         message = "";
     }
 
-    private async Task DeleteAsync()
+    private async Task DeleteConsultantAsync()
     {
-        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্যারামিটার '{editor.ParameterName}' মুছে ফেলতে চান?" : $"Delete parameter '{editor.ParameterName}'?")) return;
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.T($"Delete consultant '{consultantEditor.Name}'?"))) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.LabConsultants.FindAsync(consultantEditor.ID);
+        if (entity != null)
+        {
+            db.LabConsultants.Remove(entity);
+            await db.SaveChangesAsync();
+            Success(I18n.T("Consultant deleted."));
+            Reset();
+            await LoadAsync();
+        }
+    }
+
+    // --- Parameter Methods ---
+    private async Task SaveParamAsync()
+    {
+        if (paramEditor.ServiceID <= 0 || string.IsNullOrWhiteSpace(paramEditor.ParameterName))
+        {
+            Fail(I18n.IsBangla ? "টেস্ট এবং প্যারামিটারের নাম আবশ্যক।" : "Investigation and parameter name are required.");
+            return;
+        }
 
         await using var db = await DbFactory.CreateDbContextAsync();
-        var entity = await db.LabTestParameters.FindAsync(editor.ID);
+        if (paramEditor.ID == 0)
+        {
+            db.LabTestParameters.Add(paramEditor);
+        }
+        else
+        {
+            var entity = await db.LabTestParameters.FindAsync(paramEditor.ID);
+            if (entity == null) { Fail(I18n.T("Parameter not found.")); return; }
+            db.Entry(entity).CurrentValues.SetValues(paramEditor);
+        }
+
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ল্যাব প্যারামিটার সংরক্ষিত হয়েছে।" : "Lab parameter saved successfully.");
+        var curService = paramEditor.ServiceID;
+        Reset();
+        paramEditor.ServiceID = curService;
+        await LoadAsync();
+    }
+
+    private void SelectParam(LabTestParameter p)
+    {
+        paramEditor = new LabTestParameter
+        {
+            ID = p.ID,
+            ServiceID = p.ServiceID,
+            ParameterName = p.ParameterName,
+            Unit = p.Unit,
+            ReferenceRange = p.ReferenceRange,
+            SortOrder = p.SortOrder
+        };
+        message = "";
+    }
+
+    private async Task DeleteParamAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.T($"Delete parameter '{paramEditor.ParameterName}'?"))) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.LabTestParameters.FindAsync(paramEditor.ID);
         if (entity != null)
         {
             db.LabTestParameters.Remove(entity);
             await db.SaveChangesAsync();
-            Success(I18n.IsBangla ? "প্যারামিটার মুছে ফেলা হয়েছে।" : "Parameter deleted.");
+            Success(I18n.T("Parameter deleted."));
             Reset();
             await LoadAsync();
         }
@@ -224,17 +638,15 @@
 
     private void Reset()
     {
-        editor = new LabTestParameter { SortOrder = 1 };
+        headEditor = new PathologyGroupHead();
+        consultantEditor = new LabConsultant { Is_Active = true };
+        paramEditor = new LabTestParameter { SortOrder = 1 };
+        searchQuery = "";
         message = "";
     }
 
     private string ServiceName(int id) => labServices.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
-
-    private void Success(string text) { messageClass = "alert success"; message = text; }
-    private void Fail(string text) { messageClass = "alert danger"; message = text; }
-
-    public void Dispose()
-    {
-        I18n.OnLanguageChanged -= HandleLanguageChanged;
-    }
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 }

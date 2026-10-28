@@ -560,6 +560,323 @@ namespace HPM.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenCategory", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Canteen_Category", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenChallan", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("Discount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<DateTime>("InvoiceDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Invoice_Date");
+
+                    b.Property<string>("InvoiceNo")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Invoice_No");
+
+                    b.Property<bool>("IsPosted")
+                        .HasColumnType("bit")
+                        .HasColumnName("Is_Posted");
+
+                    b.Property<int>("Supplier")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Trans_Date");
+
+                    b.Property<decimal>("VAT")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Canteen_Challan", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenChallanSub", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("BuyRate")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<long>("ChallanNo")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Challan_No");
+
+                    b.Property<decimal>("Discount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("SLNO")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ServiceID")
+                        .HasColumnType("int")
+                        .HasColumnName("Service_ID");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("VAT")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ChallanNo");
+
+                    b.HasIndex("ServiceID");
+
+                    b.ToTable("Canteen_Challan_Sub", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenDebtor", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<decimal>("Balance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Designation")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Canteen_Debtor", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenDebtorLedger", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("Balance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<long>("BillNo")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Bill_No");
+
+                    b.Property<decimal>("Credit")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("Debit")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("DebtorID")
+                        .HasColumnType("int")
+                        .HasColumnName("Debtor_ID");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("DebtorID");
+
+                    b.ToTable("Canteen_Debtor_Ledger", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenProduct", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<decimal?>("Balance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("BuyRate")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<int>("CategoryID")
+                        .HasColumnType("int")
+                        .HasColumnName("Category_ID");
+
+                    b.Property<bool?>("IsKitchenItem")
+                        .HasColumnType("bit")
+                        .HasColumnName("IsKitchen_Item");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int?>("ReorderLevel")
+                        .HasColumnType("int")
+                        .HasColumnName("Reorder_Level");
+
+                    b.Property<decimal?>("SaleRate")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("Sale_Rate");
+
+                    b.Property<string>("Unit")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("CategoryID");
+
+                    b.ToTable("Canteen_Products", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenSale", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<string>("Contact")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("CustomerName")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("Customer_Name");
+
+                    b.Property<string>("CustomerType")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasColumnName("Customer_Type");
+
+                    b.Property<decimal?>("Discount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<decimal?>("Paid")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal?>("ServiceCharge")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Service_Charge");
+
+                    b.Property<string>("TokenNo")
+                        .HasMaxLength(5)
+                        .HasColumnType("nvarchar(5)")
+                        .HasColumnName("Token_No");
+
+                    b.Property<decimal?>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Trans_Date");
+
+                    b.Property<decimal?>("VAT")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Canteen_Sales", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenSaleSub", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<long>("BillNo")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Bill_No");
+
+                    b.Property<decimal?>("BuyRate")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<decimal?>("Quantity")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("Rate")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int?>("SLNO")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ServiceID")
+                        .HasColumnType("int")
+                        .HasColumnName("Service_ID");
+
+                    b.Property<decimal?>("Total")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("BillNo");
+
+                    b.HasIndex("ServiceID");
+
+                    b.ToTable("Canteen_Sales_Sub", (string)null);
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.CashMemoDInvestigation", b =>
                 {
                     b.Property<long>("ID")
@@ -928,6 +1245,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Department_Category_ID");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true)
+                        .HasColumnName("Is_Active");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -935,17 +1258,22 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("Name")
+                        .IsUnique();
+
                     b.ToTable("Department", (string)null);
 
                     b.HasData(
                         new
                         {
                             ID = 1,
+                            IsActive = true,
                             Name = "Emergency"
                         },
                         new
                         {
                             ID = 2,
+                            IsActive = true,
                             Name = "Medicine"
                         });
                 });
@@ -961,6 +1289,19 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal>("AdjustmentAmount")
                         .HasColumnType("numeric(18,2)")
                         .HasColumnName("Adjustment_Amount");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Cancellation_Reason");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Cancelled_At");
+
+                    b.Property<int?>("CancelledBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Cancelled_By");
 
                     b.Property<int>("EnteredBy")
                         .HasColumnType("int")
@@ -982,6 +1323,28 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal>("RefundAmount")
                         .HasColumnType("numeric(18,2)")
                         .HasColumnName("Refund_Amount");
+
+                    b.Property<string>("RefundMethod")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Refund_Method");
+
+                    b.Property<string>("RefundReceivedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Refund_Received_By");
+
+                    b.Property<string>("RefundReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Refund_Reference");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Posted");
 
                     b.Property<DateTime>("TransDate")
                         .HasColumnType("datetime")
@@ -1172,6 +1535,11 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("nvarchar(11)")
                         .HasColumnName("Patient_ID");
 
+                    b.Property<string>("Sex")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("Sex");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -1182,6 +1550,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<DateTime>("TransDate")
                         .HasColumnType("datetime")
                         .HasColumnName("Trans_Date");
+
+                    b.Property<string>("Weight")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Weight");
 
                     b.HasKey("ID");
 
@@ -1235,6 +1608,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Entered_By");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true)
+                        .HasColumnName("Is_Active");
+
                     b.Property<string>("Name")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
@@ -1246,6 +1625,10 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("POSerial")
                         .HasColumnType("int")
                         .HasColumnName("PO_Serial");
+
+                    b.Property<int?>("Priority")
+                        .HasColumnType("int")
+                        .HasColumnName("Priority");
 
                     b.Property<int?>("ReferralCategoryID")
                         .HasColumnType("int")
@@ -1275,6 +1658,7 @@ namespace HPM.Web.Data.Migrations
                             Degree = "MBBS",
                             Department = 1,
                             EnteredBy = 1,
+                            IsActive = true,
                             Name = "Duty Doctor",
                             Room = "ER-01",
                             Title = "Dr.",
@@ -1887,6 +2271,56 @@ namespace HPM.Web.Data.Migrations
                     b.ToTable("IPD_Patient_Service_Item", (string)null);
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.LabConsultant", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<int?>("Consultent2")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Degree")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("Institution")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<bool>("Is_Active")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("Module")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<string>("Others")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<byte[]>("Signature")
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<string>("Title1")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Title2")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Lab_Consultent");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.LabSampleCollection", b =>
                 {
                     b.Property<long>("ID")
@@ -1903,13 +2337,41 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Collected_By");
 
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Completed_At");
+
+                    b.Property<int?>("CompletedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Completed_By");
+
                     b.Property<long>("MemoID")
                         .HasColumnType("bigint")
                         .HasColumnName("Memo_ID");
 
+                    b.Property<DateTime?>("ProcessingStartedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Processing_Started_At");
+
+                    b.Property<int?>("ProcessingStartedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Processing_Started_By");
+
+                    b.Property<DateTime?>("ReceivedAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Received_At");
+
+                    b.Property<int?>("ReceivedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Received_By");
+
                     b.Property<string>("Remarks")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ScheduledAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Scheduled_At");
 
                     b.Property<int>("ServiceID")
                         .HasColumnType("int")
@@ -1924,6 +2386,10 @@ namespace HPM.Web.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Workstation")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.HasKey("ID");
 
@@ -1981,6 +2447,19 @@ namespace HPM.Web.Data.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
 
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Cancellation_Reason");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Cancelled_At");
+
+                    b.Property<int?>("CancelledBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Cancelled_By");
+
                     b.Property<string>("Flag")
                         .HasMaxLength(30)
                         .HasColumnType("nvarchar(30)");
@@ -2018,13 +2497,20 @@ namespace HPM.Web.Data.Migrations
 
                     b.Property<string>("ResultValue")
                         .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)")
                         .HasColumnName("Result_Value");
 
                     b.Property<int>("ServiceID")
                         .HasColumnType("int")
                         .HasColumnName("Service_ID");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Active");
 
                     b.Property<string>("Unit")
                         .HasMaxLength(50)
@@ -2634,6 +3120,24 @@ namespace HPM.Web.Data.Migrations
                     b.HasKey("ID");
 
                     b.ToTable("OPD_Ticket", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.PathologyGroupHead", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Pathology_Group_Head");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.PatientAdmission", b =>
@@ -3522,8 +4026,18 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("Days")
                         .HasColumnType("int");
 
+                    b.Property<string>("DosagePattern")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("DosagePattern");
+
                     b.Property<decimal?>("Dose")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Instruction")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Instruction");
 
                     b.Property<decimal?>("Interval")
                         .HasColumnType("decimal(18,2)");
@@ -3631,6 +4145,10 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("nvarchar(200)")
                         .HasColumnName("Permanent_Village");
 
+                    b.Property<string>("PhotoData")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("Photo_Data");
+
                     b.Property<string>("PresentDistrict")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)")
@@ -3660,6 +4178,11 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("datetime")
                         .HasColumnName("Trans_Date");
 
+                    b.Property<string>("Weight")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Weight");
+
                     b.HasKey("ID");
 
                     b.HasIndex("PatientID")
@@ -3683,6 +4206,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("CategoryID")
                         .HasColumnType("int")
                         .HasColumnName("Category_ID");
+
+                    b.Property<string>("DiagnosticType")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Diagnostic_Type");
 
                     b.Property<int?>("GenericID")
                         .HasColumnType("int")
@@ -3936,12 +4464,21 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true)
+                        .HasColumnName("Is_Active");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
 
                     b.ToTable("Ticket_Type", (string)null);
 
@@ -3950,6 +4487,7 @@ namespace HPM.Web.Data.Migrations
                         {
                             ID = 1,
                             Amount = 50m,
+                            IsActive = true,
                             Name = "Consultation Fee"
                         });
                 });
@@ -4232,6 +4770,65 @@ namespace HPM.Web.Data.Migrations
                         .HasForeignKey("BedCabinID")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenChallanSub", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CanteenChallan", "Challan")
+                        .WithMany("Items")
+                        .HasForeignKey("ChallanNo")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.CanteenProduct", "Product")
+                        .WithMany()
+                        .HasForeignKey("ServiceID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Challan");
+
+                    b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenDebtorLedger", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CanteenDebtor", "Debtor")
+                        .WithMany()
+                        .HasForeignKey("DebtorID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Debtor");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenProduct", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CanteenCategory", "Category")
+                        .WithMany()
+                        .HasForeignKey("CategoryID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenSaleSub", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.CanteenSale", "Sale")
+                        .WithMany("Items")
+                        .HasForeignKey("BillNo")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.CanteenProduct", "Product")
+                        .WithMany()
+                        .HasForeignKey("ServiceID")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Sale");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.CashMemoDInvestigation", b =>
@@ -4683,6 +5280,16 @@ namespace HPM.Web.Data.Migrations
             modelBuilder.Entity("HPM.Web.Data.Entities.AccountVoucher", b =>
                 {
                     b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenChallan", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.CanteenSale", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.CashMemoDInvestigation", b =>

@@ -443,30 +443,21 @@
         if (activeTransferSource == null || targetBedId <= 0) return;
         isSubmitting = true;
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync();
-
         try
         {
+            var receipt = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             var sourceBed = await db.BedCabins.FindAsync(activeTransferSource.Bed.ID);
             var targetBed = await db.BedCabins.FindAsync(targetBedId);
             var admission = await db.PatientAdmissions.FirstOrDefaultAsync(x => x.ID == activeTransferSource.Occupancy.AdmissionID);
 
             if (sourceBed == null || targetBed == null || admission == null)
-            {
-                Fail(I18n.IsBangla ? "বেড স্থানান্তর ত্রুটি: রেকর্ড পাওয়া যায়নি।" : "Bed transfer error: Record not found.");
-                CloseTransferModal();
-                return;
-            }
+                throw new InvalidOperationException(I18n.IsBangla ? "বেড স্থানান্তর ত্রুটি: রেকর্ড পাওয়া যায়নি।" : "Bed transfer error: Record not found.");
 
             var targetHasActiveAdmission = await db.PatientAdmissions
                 .AnyAsync(x => x.IsAdmitted == true && x.BedCabinID == targetBed.ID && x.ID != admission.ID);
             if (targetBed.IsAllocated || targetBed.Status != BedStatuses.Available || targetHasActiveAdmission)
-            {
-                Fail(I18n.IsBangla ? "নির্বাচিত গন্তব্য বেডটি ইতিমধ্যে অন্য রোগীর জন্য বরাদ্দকৃত।" : "Selected destination bed is already allocated.");
-                CloseTransferModal();
-                return;
-            }
+                throw new InvalidOperationException(I18n.IsBangla ? "নির্বাচিত গন্তব্য বেডটি ইতিমধ্যে অন্য রোগীর জন্য বরাদ্দকৃত।" : "Selected destination bed is already allocated.");
 
             var activeMovement = await db.BedCabinTransactions
                 .Where(x => x.RegNo == admission.RegNo && x.EndDate == null)
@@ -475,11 +466,7 @@
 
             if (transferDate < (admission.AdmissionDate ?? DateTime.MinValue)
                 || (activeMovement != null && transferDate <= activeMovement.StartDate))
-            {
-                Fail(I18n.IsBangla ? "স্থানান্তরের সময় অবশ্যই ভর্তি ও বর্তমান বেড বরাদ্দের পরের হতে হবে।" : "Transfer time must be after the admission and current bed-allocation time.");
-                isSubmitting = false;
-                return;
-            }
+                throw new InvalidOperationException(I18n.IsBangla ? "স্থানান্তরের সময় অবশ্যই ভর্তি ও বর্তমান বেড বরাদ্দের পরের হতে হবে।" : "Transfer time must be after the admission and current bed-allocation time.");
 
             var openTransactions = await db.BedCabinTransactions
                 .Where(x => x.RegNo == admission.RegNo && x.EndDate == null)
@@ -562,17 +549,17 @@
             });
 
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
-
-            lastTransfer = new TransferReceipt(admission.RegNo, admission.PatientID, activeTransferSource.Occupancy.PatientName,
+            return new TransferReceipt(admission.RegNo, admission.PatientID, activeTransferSource.Occupancy.PatientName,
                 sourceBed.Name, targetBed.Name, targetRate, transferDate, transferRemarks);
-            Success(I18n.IsBangla ? $"রোগী {admission.RegNo}-কে {sourceBed.Name} থেকে {targetBed.Name}-এ সফলভাবে স্থানান্তর করা হয়েছে। স্লিপ প্রিন্টের জন্য প্রস্তুত।" : $"Patient {admission.RegNo} successfully transferred from {sourceBed.Name} to {targetBed.Name}. Transfer slip is ready to print.");
+            });
+
+            lastTransfer = receipt;
+            Success(I18n.IsBangla ? $"রোগী {receipt.RegNo}-কে {receipt.FromBed} থেকে {receipt.ToBed}-এ সফলভাবে স্থানান্তর করা হয়েছে। স্লিপ প্রিন্টের জন্য প্রস্তুত।" : $"Patient {receipt.RegNo} successfully transferred from {receipt.FromBed} to {receipt.ToBed}. Transfer slip is ready to print.");
             CloseTransferModal();
             await LoadAsync();
         }
         catch (Exception ex)
         {
-            await tx.RollbackAsync();
             Fail(I18n.IsBangla ? $"স্থানান্তর ব্যর্থ হয়েছে: {ex.Message}" : $"Transfer failed: {ex.Message}");
             CloseTransferModal();
         }

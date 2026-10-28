@@ -21,7 +21,9 @@ public sealed class SqlServerAtomicityTests
         services.AddLogging();
         services.AddDataProtection();
         services.AddSingleton<AuthenticationStateProvider, WorkflowAndModelTests.TestAuthenticationStateProvider>();
-        services.AddDbContextFactory<HpmDbContext>(options => options.UseSqlServer(connectionString), ServiceLifetime.Scoped);
+        services.AddDbContextFactory<HpmDbContext>(options => options.UseSqlServer(
+            connectionString,
+            sql => sql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(1), null)), ServiceLifetime.Scoped);
         services.AddIdentityCore<AppUser>(options =>
             {
                 options.Password.RequiredLength = 8;
@@ -34,6 +36,7 @@ public sealed class SqlServerAtomicityTests
             .AddEntityFrameworkStores<HpmDbContext>()
             .AddDefaultTokenProviders();
         services.AddSingleton<UserAdministrationService>();
+        services.AddSingleton<HospitalSetupService>();
 
         await using var provider = services.BuildServiceProvider();
         await using var setupScope = provider.CreateAsyncScope();
@@ -42,8 +45,20 @@ public sealed class SqlServerAtomicityTests
         try
         {
             await setupDb.Database.MigrateAsync();
-            var roleManager = setupScope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
-            foreach (var role in RoleNames.All) Assert.True((await roleManager.CreateAsync(new IdentityRole<int>(role))).Succeeded);
+            var hospitalSetup = provider.GetRequiredService<HospitalSetupService>();
+            var setup = await hospitalSetup.CompleteAsync(
+                "Automated Test Hospital",
+                "superadmin",
+                "Strong@Test123",
+                "Strong@Test123");
+            Assert.True(setup.Succeeded, setup.Error);
+
+            await using (var verifySetupScope = provider.CreateAsyncScope())
+            {
+                var verifySetupDb = verifySetupScope.ServiceProvider.GetRequiredService<HpmDbContext>();
+                Assert.True(await verifySetupDb.HospitalProfiles.AnyAsync(x => x.ID == 1 && x.IsSetupComplete));
+                Assert.True(await verifySetupDb.Users.AnyAsync(x => x.UserName == "superadmin"));
+            }
 
             var administration = provider.GetRequiredService<UserAdministrationService>();
             var created = await administration.CreateAsync(

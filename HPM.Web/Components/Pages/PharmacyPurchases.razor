@@ -333,21 +333,21 @@
             return;
         }
         isSaving=true;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        await using var tx=await db.Database.BeginTransactionAsync();
         try
         {
+            var h = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
             if(await db.MedicineReceivingChallans.AnyAsync(x=>x.Supplier==supplierId&&x.InvoiceNo==invoiceNo.Trim()))
                 throw new InvalidOperationException(I18n.IsBangla ? "এই সরবরাহকারীর এই ইনভয়েস নম্বরটি ইতিমধ্যে বিদ্যমান।" : "This supplier invoice already exists.");
             var uid=await CurrentUserIdAsync();
             var now=DateTime.Now;
-            var h=new MedicineReceivingChallan{Supplier=supplierId,InvoiceNo=invoiceNo.Trim(),InvoiceDate=invoiceDate,IsPosted=true,Total=GrossTotal,Discount=discount,VAT=vat,StoreID=storeId,EnteredBy=uid,TransDate=now};
-            db.MedicineReceivingChallans.Add(h);
+            var header=new MedicineReceivingChallan{Supplier=supplierId,InvoiceNo=invoiceNo.Trim(),InvoiceDate=invoiceDate,IsPosted=true,Total=GrossTotal,Discount=discount,VAT=vat,StoreID=storeId,EnteredBy=uid,TransDate=now};
+            db.MedicineReceivingChallans.Add(header);
             await db.SaveChangesAsync();
             var sl=1;
             foreach(var x in lines)
             {
-                var item=new MedicineReceivingChallanItem{ChallanNo=h.ID,ServiceID=x.ServiceID,SLNO=sl++,Total=x.Total,BuyRate=x.BuyRate,SaleRate=x.SaleRate,Quantity=x.Quantity,Discount=0,VAT=0,ExpireDate=x.ExpireDate,BatchNo=x.BatchNo};
+                var item=new MedicineReceivingChallanItem{ChallanNo=header.ID,ServiceID=x.ServiceID,SLNO=sl++,Total=x.Total,BuyRate=x.BuyRate,SaleRate=x.SaleRate,Quantity=x.Quantity,Discount=0,VAT=0,ExpireDate=x.ExpireDate,BatchNo=x.BatchNo};
                 db.MedicineReceivingChallanItems.Add(item);
                 await db.SaveChangesAsync();
                 var stock=await db.MedicineStoreBalances.FirstOrDefaultAsync(b=>b.MedicineStoreID==storeId&&b.ServiceID==x.ServiceID&&b.BatchNo==x.BatchNo&&b.ExpireDate==x.ExpireDate);
@@ -361,17 +361,17 @@
             }
             var net=GrossTotal-discount+vat;
             var previous=await db.SupplierLedgers.Where(x=>x.SupplierID==supplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
-            db.SupplierLedgers.Add(new SupplierLedger{SupplierID=supplierId,ChallanNo=h.ID,Debit=0,Credit=net,Balance=previous+net,TransDate=now});
+            db.SupplierLedgers.Add(new SupplierLedger{SupplierID=supplierId,ChallanNo=header.ID,Debit=0,Credit=net,Balance=previous+net,TransDate=now});
             if(net>0)
-                AccountingPosting.AddPostedVoucher(db,"Purchase",invoiceDate,$"Medicine purchase from {SupplierName(supplierId)}",$"PHARMACY-PURCHASE:{h.ID}",uid,(AccountingPosting.MedicinePurchase,net,0),(AccountingPosting.SupplierPayable,0,net));
+                AccountingPosting.AddPostedVoucher(db,"Purchase",invoiceDate,$"Medicine purchase from {SupplierName(supplierId)}",$"PHARMACY-PURCHASE:{header.ID}",uid,(AccountingPosting.MedicinePurchase,net,0),(AccountingPosting.SupplierPayable,0,net));
             await db.SaveChangesAsync();
-            await tx.CommitAsync();
+            return header;
+            });
             savedChallan=h;
             Success(I18n.IsBangla ? $"ক্রয় চালান #{h.ID} সফলভাবে সংরক্ষিত ও স্টক আপডেট হয়েছে।" : $"Purchase challan #{h.ID} posted, stock and accounts updated.");
             await LoadAsync();
         }
         catch(Exception ex){
-            await tx.RollbackAsync();
             Fail(I18n.IsBangla ? $"ক্রয় চালান সংরক্ষণ করা যায়নি: {ex.Message}" : $"Purchase posting failed: {ex.Message}");
         }
         finally{isSaving=false;}

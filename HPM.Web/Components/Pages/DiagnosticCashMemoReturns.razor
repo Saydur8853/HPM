@@ -7,117 +7,845 @@
 @implements IDisposable
 @using System.Data
 @using System.Security.Claims
+@using HPM.Web.Security
+@using HPM.Web.Services
 
-<PageTitle>@I18n.T("Cash Memo Return") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Cash Memo Return & Refund") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Investigation")</span>
-        <h1>@I18n.T("Cash Memo Return & Refund")</h1>
-        <p>@I18n.T("Return selected investigations and adjust cash or the IPD patient account.")</p>
-    </div>
-    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New Return")</button>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(message))
-{
-    <div class="alert @messageClass">@message</div>
-}
-
-<div class="module-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(savedReturn is null ? I18n.T("Find original investigation memo") : $"{I18n.T("Return Voucher")} #{savedReturn.ID}")</h2>
-                <p>@I18n.T("Memo ID or LAB barcode can be used.")</p>
-            </div>
-            @if (savedReturn is not null) { <span class="badge">@I18n.T("POSTED")</span> }
+<div class="diagnostic-classic-fit">
+    <!-- Compact Top Action & Status Bar -->
+    <div class="diagnostic-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>↩️</span>
+                <span>@I18n.T("Cash Memo Return & Refund")</span>
+            </h1>
+            <span class="tickets-count-pill" title="@I18n.T("Total historical returns")">
+                @recent.Count @I18n.T("Returns")
+            </span>
+            @if (todayReturnsCount > 0)
+            {
+                <span class="tickets-count-pill" style="background:#f0fdf4; border-color:#86efac; color:#166534;" title="@I18n.T("Today's returns summary")">
+                    ⚡ @todayReturnsCount @I18n.T("Today") · @I18n.FormatCurrency(todayRefundTotal)
+                </span>
+            }
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass.Contains("danger") ? "⚠" : "✓") @message
+                </span>
+            }
         </div>
 
-        @if (savedReturn is null)
-        {
-            <div class="form-grid" style="padding-top:16px;">
-                <label>
-                    <span>@I18n.T("Memo ID") *</span>
-                    <input @bind="memoLookup" @bind:event="oninput" @onkeydown="HandleLookupKeyDown" placeholder="LAB-123 or 123" />
-                </label>
-                <label><span>&nbsp;</span><button type="button" class="btn btn-secondary" @onclick="FindMemoAsync">@I18n.T("Load Cash Memo")</button></label>
-            </div>
-        }
+        <DiagnosticNavTabs />
 
-        @if (memo is not null)
-        {
-            <div class="print-grid">
-                <div><span>@I18n.T("Memo ID"):</span> <b>#@memo.ID</b></div>
-                <div><span>@I18n.T("Patient Name"):</span> <b>@memo.PatientName</b></div>
-                <div><span>@I18n.T("Patient Type"):</span> <b>@(memo.PatientType == "2" ? $"IPD · {memo.RegNo}" : "OPD")</b></div>
-                <div><span>@I18n.T("Date"):</span> <b>@memo.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
-                <div><span>@I18n.T("Original Net"):</span> <b>@I18n.FormatCurrency(originalNet)</b></div>
-                <div><span>@I18n.T("Previously Adjusted"):</span> <b>@I18n.FormatCurrency(priorAdjustment)</b></div>
+        <div class="tickets-top-actions">
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("Start a new return search")">
+                + @I18n.T("New Return")
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Balanced Workspace Grid: Left Return Workspace, Right Recent Returns Operational Center -->
+    <div class="diagnostic-classic-workspace diagnostic-returns-workspace">
+        <!-- Left Panel: Return Form Card -->
+        <div class="diagnostic-form-card" style="display:flex; flex-direction:column; min-height:0; overflow:hidden;">
+            <div class="diagnostic-card-header">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <h2>@(savedReturn is null ? (memo is null ? I18n.T("Find Original Investigation Memo") : $"{I18n.T("Process Return for Memo")} #{memo.ID}") : $"{I18n.T("Return Voucher")} #{savedReturn.ID}")</h2>
+                    @if (savedReturn is not null)
+                    {
+                        <span class="diagnostic-badge" style="@(savedReturn.Status == "Posted" ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;")">
+                            @(savedReturn.Status == "Posted" ? "✓ " + I18n.T("COMPLETED") : "⛔ " + I18n.T("CANCELLED"))
+                        </span>
+                    }
+                    else if (memo is not null)
+                    {
+                        <span class="diagnostic-badge" style="background:#e0f2fe; color:#0369a1;">
+                            @I18n.T("MEMO LOADED")
+                        </span>
+                    }
+                </div>
+                @if (memo is not null || savedReturn is not null)
+                {
+                    <button type="button" class="btn btn-ghost" style="font-size:11px; padding:3px 10px; color:#475569;" @onclick="Reset" title="@I18n.T("Clear and start another return")">
+                        ↩ @I18n.T("Search Another Memo")
+                    </button>
+                }
             </div>
 
-            <div class="data-table-wrap">
-                <table class="data-table">
-                    <thead><tr><th></th><th>@I18n.T("Investigation / Test")</th><th class="num">@I18n.T("Sold Qty")</th><th class="num">@I18n.T("Returnable")</th><th class="num">@I18n.T("Return Qty")</th><th class="num">@I18n.T("Rate")</th><th class="num">@I18n.T("Amount")</th></tr></thead>
+            <div class="diagnostic-form-body" style="flex:1 1 auto; overflow-y:auto; padding:12px 16px;">
+                @if (savedReturn is null)
+                {
+                    <!-- Hero Search Bar -->
+                    <div class="return-search-hero">
+                        <span class="return-search-icon">🔍</span>
+                        <div class="return-search-input-wrap">
+                            <input class="return-search-input"
+                                   @bind="memoLookup"
+                                   @bind:event="oninput"
+                                   @bind:after="QueueMemoSuggestionsAsync"
+                                   @onkeydown="HandleLookupKeyDown"
+                                   autocomplete="off"
+                                   placeholder="@I18n.T("Search by Memo ID, Patient ID, mobile or patient name...")" />
+                            @if (!string.IsNullOrWhiteSpace(memoLookup))
+                            {
+                                <button type="button" class="return-search-clear-btn" @onclick="ClearSearch" title="@I18n.T("Clear search")">✕</button>
+                            }
+                            @if ((searchingMemos || memoMatches.Count > 0) && memo is null)
+                            {
+                                <div class="return-memo-suggestions">
+                                    @if (searchingMemos)
+                                    {
+                                        <div class="return-memo-searching">
+                                            <span>⏳</span> @I18n.T("Searching diagnostic cash memos...")
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var match in memoMatches)
+                                        {
+                                            <button type="button" class="return-memo-suggestion" @onclick="() => LoadMemoByIdAsync(match.ID)">
+                                                <span class="return-memo-suggestion-id">#@match.ID</span>
+                                                <div class="return-memo-suggestion-info">
+                                                    <span class="return-memo-suggestion-name">@match.PatientName</span>
+                                                    <span class="return-memo-suggestion-sub">PID: @(match.PatientID ?? I18n.T("Walk-in")) · 📞 @(match.Contact ?? "—")</span>
+                                                </div>
+                                                <div class="return-memo-suggestion-meta">
+                                                    <span class="return-memo-suggestion-badge @(match.PatientType == "2" ? "ipd" : "opd")">
+                                                        @(match.PatientType == "2" ? $"IPD · {match.RegNo}" : "OPD")
+                                                    </span>
+                                                    <small style="color:#64748b; font-size:10px;">@match.TransDate.ToString("dd MMM yyyy")</small>
+                                                </div>
+                                            </button>
+                                        }
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <button type="button" class="return-search-action-btn" @onclick="FindMemoAsync" disabled="@searchingMemos">
+                            @if (searchingMemos)
+                            {
+                                <span>⏳</span>
+                            }
+                            else
+                            {
+                                <SearchIcon />
+                            }
+                            <span>@I18n.T("Load Memo")</span>
+                        </button>
+                    </div>
+                }
+
+                @if (savedReturn is null && memo is null)
+                {
+                    <!-- Process Flow Steps Indicator -->
+                    <div class="return-process-steps">
+                        <div class="return-process-step active">
+                            <span class="return-step-num">1</span>
+                            <div class="return-step-label">
+                                <strong>@I18n.T("Find Memo")</strong>
+                                <span>@I18n.T("Search or pick below")</span>
+                            </div>
+                        </div>
+                        <span class="return-step-arrow">➔</span>
+                        <div class="return-process-step pending">
+                            <span class="return-step-num">2</span>
+                            <div class="return-step-label">
+                                <strong>@I18n.T("Select Tests")</strong>
+                                <span>@I18n.T("Qty & return reason")</span>
+                            </div>
+                        </div>
+                        <span class="return-step-arrow">➔</span>
+                        <div class="return-process-step pending">
+                            <span class="return-step-num">3</span>
+                            <div class="return-step-label">
+                                <strong>@I18n.T("Review & Refund")</strong>
+                                <span>@I18n.T("Post safely")</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Safety Notice Alert -->
+                    <div class="return-policy-alert">
+                        <span class="return-policy-alert-icon">🛡️</span>
+                        <div>
+                            <strong>@I18n.T("Return Policy & Safety Notice"):</strong>
+                            <span>@I18n.T("Completed/verified test results and final-billed IPD admissions cannot be returned. Cash refunds require Cashier authorization.")</span>
+                        </div>
+                    </div>
+
+                    <!-- Recently Billed Diagnostic Memos (Quick Select) -->
+                    <div class="return-quick-bills-card">
+                        <div class="return-quick-bills-header">
+                            <span class="return-quick-bills-title">
+                                <span>⚡</span> @I18n.T("Recent Diagnostic Bills")
+                                <span class="return-quick-bills-badge">@I18n.T("Quick Select")</span>
+                            </span>
+                            <small style="color:#64748b; font-size:10.5px;">@I18n.T("Click to load for return")</small>
+                        </div>
+                        <div style="overflow-x:auto;">
+                            <table class="return-quick-bills-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:75px;">@I18n.T("Memo #")</th>
+                                        <th>@I18n.T("Patient Name")</th>
+                                        <th style="width:90px;">@I18n.T("Type")</th>
+                                        <th style="width:110px;">@I18n.T("Date")</th>
+                                        <th class="num" style="width:100px; text-align:right;">@I18n.T("Net Bill")</th>
+                                        <th style="width:130px; text-align:right;"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (recentBills.Count == 0)
+                                    {
+                                        <tr>
+                                            <td colspan="6" style="text-align:center; padding:18px; color:#94a3b8;">
+                                                @I18n.T("No recent diagnostic bills found.")
+                                            </td>
+                                        </tr>
+                                    }
+                                    @foreach (var bill in recentBills)
+                                    {
+                                        <tr>
+                                            <td><strong style="color:#0284c7;">#@bill.ID</strong></td>
+                                            <td>
+                                                <strong style="color:#1e293b;">@bill.PatientName</strong>
+                                                <small style="display:block; color:#64748b; font-size:10px;">PID: @(bill.PatientID ?? I18n.T("Walk-in")) · 📞 @(bill.Contact ?? "—")</small>
+                                            </td>
+                                            <td>
+                                                <span class="return-memo-suggestion-badge @(bill.PatientType == "2" ? "ipd" : "opd")">
+                                                    @(bill.PatientType == "2" ? $"IPD · {bill.RegNo}" : "OPD")
+                                                </span>
+                                            </td>
+                                            <td style="color:#64748b; font-size:11px;">@bill.TransDate.ToString("dd MMM, hh:mm tt")</td>
+                                            <td style="text-align:right; font-weight:700; color:#0f172a;">@I18n.FormatCurrency(Math.Max(0, bill.Total - bill.Discount))</td>
+                                            <td style="text-align:right;">
+                                                <button type="button" class="return-quick-bills-btn" @onclick="() => LoadMemoByIdAsync(bill.ID)">
+                                                    ↩ @I18n.T("Select for Return")
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (memo is not null && savedReturn is null)
+                {
+                    <!-- Patient & Memo Summary Banner -->
+                    <div class="return-patient-banner">
+                        <div class="return-patient-header-row">
+                            <div class="return-patient-id-block">
+                                <div class="return-patient-avatar">
+                                    @(string.IsNullOrWhiteSpace(memo.PatientName) ? "P" : memo.PatientName.Substring(0, 1).ToUpper())
+                                </div>
+                                <div class="return-patient-name-wrap">
+                                    <div class="return-patient-name">
+                                        <span>@memo.PatientName</span>
+                                        <span class="return-memo-suggestion-badge @(memo.PatientType == "2" ? "ipd" : "opd")">
+                                            @(memo.PatientType == "2" ? $"IPD · Reg #{memo.RegNo} {(string.IsNullOrWhiteSpace(memo.Bed) ? "" : $"· Bed {memo.Bed}")}" : "OPD Walk-in")
+                                        </span>
+                                    </div>
+                                    <div class="return-patient-meta">
+                                        <span><strong>@I18n.T("Memo"):</strong> #@memo.ID</span>
+                                        <span>•</span>
+                                        <span><strong>PID:</strong> @(memo.PatientID ?? I18n.T("Walk-in"))</span>
+                                        @if (!string.IsNullOrWhiteSpace(memo.Age) || !string.IsNullOrWhiteSpace(memo.Sex))
+                                        {
+                                            <span>•</span>
+                                            <span>@memo.Age / @memo.Sex</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(memo.Contact))
+                                        {
+                                            <span>•</span>
+                                            <span>📞 @memo.Contact</span>
+                                        }
+                                        <span>•</span>
+                                        <span>📅 @memo.TransDate.ToString("dd MMM yyyy, hh:mm tt")</span>
+                                        @if (memo.DoctorID is not null)
+                                        {
+                                            <span>•</span>
+                                            <span>👨‍⚕️ @DoctorName(memo.DoctorID)</span>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="return-patient-change-btn" @onclick="Reset" title="@I18n.T("Clear and change memo")">
+                                ✕ @I18n.T("Change Memo")
+                            </button>
+                        </div>
+
+                        <!-- Financial Snapshot Pills -->
+                        <div class="return-patient-financial-pills">
+                            <div class="return-patient-fin-pill">
+                                <span>@I18n.T("Original Gross")</span>
+                                <strong>@I18n.FormatCurrency(originalGross)</strong>
+                            </div>
+                            <div class="return-patient-fin-pill">
+                                <span>@I18n.T("Discount")</span>
+                                <strong style="color:#0284c7;">@I18n.FormatCurrency(memo.Discount)</strong>
+                            </div>
+                            <div class="return-patient-fin-pill">
+                                <span>@I18n.T("Net Total")</span>
+                                <strong>@I18n.FormatCurrency(originalNet)</strong>
+                            </div>
+                            <div class="return-patient-fin-pill">
+                                <span>@I18n.T("Paid Amount")</span>
+                                <strong style="color:#15803d;">@I18n.FormatCurrency(memo.Paid)</strong>
+                            </div>
+                            <div class="return-patient-fin-pill @(originalReceivable > 0 ? "due" : "")">
+                                <span>@I18n.T("Due / IPD Ledger")</span>
+                                <strong>@I18n.FormatCurrency(originalReceivable)</strong>
+                            </div>
+                            @if (priorAdjustment > 0)
+                            {
+                                <div class="return-patient-fin-pill adj">
+                                    <span>@I18n.T("Prior Returns")</span>
+                                    <strong>@I18n.FormatCurrency(priorAdjustment)</strong>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Items Return Selection Table Card -->
+                    <div class="return-items-table-card">
+                        <div class="return-items-table-toolbar">
+                            <span class="return-items-table-title">
+                                <span>🧪</span> @I18n.T("Select Investigation Items for Return")
+                            </span>
+                            @if (lines.Any(x => x.CanReturn))
+                            {
+                                <label class="return-select-all-label">
+                                    <input type="checkbox" checked="@selectAllChecked" @onchange="ToggleSelectAll" />
+                                    <span>@I18n.T("Select All Returnable")</span>
+                                </label>
+                            }
+                        </div>
+
+                        <div class="return-items-table-wrap">
+                            <table class="return-items-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:40px; text-align:center;"></th>
+                                        <th>@I18n.T("Investigation / Test")</th>
+                                        <th style="width:130px;">@I18n.T("Lab Status")</th>
+                                        <th class="num" style="width:65px; text-align:right;">@I18n.T("Sold")</th>
+                                        <th class="num" style="width:75px; text-align:right;">@I18n.T("Remain")</th>
+                                        <th class="num" style="width:105px; text-align:center;">@I18n.T("Return Qty")</th>
+                                        <th class="num" style="width:85px; text-align:right;">@I18n.T("Rate")</th>
+                                        <th class="num" style="width:95px; text-align:right;">@I18n.T("Amount")</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var line in lines)
+                                    {
+                                        <tr class="@(line.Selected ? "selected-row" : (!line.CanReturn ? "blocked-row" : ""))" @onclick="() => ToggleLineSelection(line)">
+                                            <td style="text-align:center;" @onclick:stopPropagation="true">
+                                                <input class="return-item-check"
+                                                       type="checkbox"
+                                                       checked="@line.Selected"
+                                                       @onchange="() => ToggleLineSelection(line)"
+                                                       disabled="@(!line.CanReturn)"
+                                                       aria-label="@I18n.T("Select investigation")" />
+                                            </td>
+                                            <td>
+                                                <strong style="color:#0f172a;">@ServiceName(line.Item.TestID)</strong>
+                                            </td>
+                                            <td>
+                                                @if (line.Remaining <= 0)
+                                                {
+                                                    <span class="return-status-badge returned">✓ @I18n.T("Returned")</span>
+                                                }
+                                                else if (line.IsReported)
+                                                {
+                                                    <span class="return-status-badge reported" title="@I18n.T("Result has already been verified/reported")">🔒 @I18n.T("Report Done")</span>
+                                                }
+                                                else if (!isAdministrator && (line.SampleStatus is "InProcess" or "Completed"))
+                                                {
+                                                    <span class="return-status-badge inlab" title="@I18n.T("Sample is currently processing in laboratory")">⏳ @I18n.T("In Lab")</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="return-status-badge ready">● @I18n.T("Available")</span>
+                                                }
+                                            </td>
+                                            <td class="num" style="text-align:right;">@line.Item.Quantity</td>
+                                            <td class="num" style="text-align:right;"><b>@line.Remaining</b></td>
+                                            <td style="text-align:center;" @onclick:stopPropagation="true">
+                                                @if (line.CanReturn && line.Selected)
+                                                {
+                                                    <div class="return-qty-stepper">
+                                                        <button type="button" class="return-qty-btn" @onclick="() => DecrementQty(line)" disabled="@(line.Quantity <= 1)">−</button>
+                                                        <input type="number"
+                                                               class="return-qty-input"
+                                                               @bind="line.Quantity"
+                                                               min="1"
+                                                               max="@line.Remaining" />
+                                                        <button type="button" class="return-qty-btn" @onclick="() => IncrementQty(line)" disabled="@(line.Quantity >= line.Remaining)">+</button>
+                                                    </div>
+                                                }
+                                                else
+                                                {
+                                                    <span style="color:#64748b;">@(line.Selected ? line.Quantity : "—")</span>
+                                                }
+                                            </td>
+                                            <td class="num" style="text-align:right;">@I18n.FormatCurrency(line.Item.Rate)</td>
+                                            <td class="num" style="text-align:right;">
+                                                <b style="color:@(line.Selected ? "#15803d" : "#94a3b8");">
+                                                    @I18n.FormatCurrency(line.Selected ? line.Item.Rate * line.Quantity : 0)
+                                                </b>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Return Reason & Quick Chips -->
+                    <div class="return-reason-section">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <label style="margin:0; font-size:11.5px; font-weight:700; color:#334155;">
+                                @I18n.T("Return Reason") <span class="required-mark">*</span>
+                            </label>
+                            <small style="color:#64748b; font-size:10.5px;">@I18n.T("Choose a quick reason or type custom details")</small>
+                        </div>
+                        <div class="return-reason-chips">
+                            @foreach (var r in commonReasons)
+                            {
+                                <button type="button" class="return-reason-chip @(reason == r ? "active" : "")" @onclick="() => SelectCommonReason(r)">
+                                    @r
+                                </button>
+                            }
+                        </div>
+                        <input class="classic-input"
+                               @bind="reason"
+                               maxlength="500"
+                               placeholder="@I18n.T("Enter specific justification for return / cancellation...")"
+                               style="height:34px; width:100%; border-radius:7px;" />
+                    </div>
+
+                    <!-- Financial Impact KPI Cards -->
+                    <div class="return-settlement-grid">
+                        <div class="return-settlement-card">
+                            <span class="label">@I18n.T("Selected Tests")</span>
+                            <span class="value">@I18n.FormatCurrency(selectedGross)</span>
+                        </div>
+                        <div class="return-settlement-card">
+                            <span class="label">@I18n.T("Net Adjustment")</span>
+                            <span class="value">@I18n.FormatCurrency(estimatedAdjustment)</span>
+                        </div>
+                        <div class="return-settlement-card @(estimatedReceivableAdjustment > 0 ? "due-kpi" : "")">
+                            <span class="label">@I18n.T("Due / IPD Deducted")</span>
+                            <span class="value">@I18n.FormatCurrency(estimatedReceivableAdjustment)</span>
+                        </div>
+                        <div class="return-settlement-card refund-kpi">
+                            <span class="label">💵 @I18n.T("Cash Refund Payable")</span>
+                            <span class="value">@I18n.FormatCurrency(estimatedCashRefund)</span>
+                        </div>
+                    </div>
+
+                    <!-- Refund Settlement Details (When Cash Refund > 0) -->
+                    @if (estimatedCashRefund > 0)
+                    {
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                            <label style="margin:0;">
+                                <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Refund Method") <span class="required-mark">*</span></span>
+                                <select class="classic-input" @bind="refundMethod" style="height:32px; border-radius:6px;">
+                                    <option value="Cash">@I18n.T("Cash")</option>
+                                </select>
+                            </label>
+                            <label style="margin:0;">
+                                <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Refund Reference")</span>
+                                <input class="classic-input" @bind="refundReference" maxlength="100" placeholder="@I18n.T("Voucher / reference number (optional)")" style="height:32px; border-radius:6px;" />
+                            </label>
+                            <div style="grid-column:span 2;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+                                    <span style="font-size:11.5px; font-weight:700; color:#334155;">@I18n.T("Refund Received By") <span class="required-mark">*</span></span>
+                                    <button type="button" class="btn btn-ghost" style="padding:1px 6px; font-size:10px; color:#0284c7;" @onclick="() => refundReceivedBy = memo.PatientName">
+                                        @I18n.T("Same as Patient")
+                                    </button>
+                                </div>
+                                <input class="classic-input" @bind="refundReceivedBy" maxlength="100" placeholder="@I18n.T("Patient or attendant name who received the cash")" style="height:32px; border-radius:6px; width:100%;" />
+                            </div>
+                            @if (!canIssueCashRefund)
+                            {
+                                <div class="alert danger" style="grid-column:span 2; margin:0; padding:6px 10px; font-size:11px;">
+                                    ⚠️ @I18n.T("Cash refunds require Cashier or Administrator authorization.")
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <!-- Post Action Bar -->
+                    <div class="return-action-bar">
+                        <button type="button" class="btn btn-secondary" @onclick="Reset" style="padding:7px 16px;">
+                            @I18n.T("Cancel")
+                        </button>
+                        <button type="button" class="btn btn-primary" @onclick="PostAsync" disabled="@(!CanPostReturn)" style="padding:7px 20px; font-weight:700; display:inline-flex; align-items:center; gap:6px;">
+                            @(saving ? I18n.T("Posting…") : (estimatedCashRefund > 0 ? $"✓ {I18n.T("Post Return & Refund")} ({I18n.FormatCurrency(estimatedCashRefund)})" : $"✓ {I18n.T("Post Return & Ledger Adjustment")}"))
+                        </button>
+                    </div>
+                }
+
+                @if (savedReturn is not null && memo is not null)
+                {
+                    <!-- Official Return Voucher Display -->
+                    <div class="return-voucher-card">
+                        <div class="return-voucher-header">
+                            <div class="return-voucher-title">
+                                <span>🧾</span>
+                                <h2>@I18n.T("Return Voucher") #@savedReturn.ID</h2>
+                                <span class="diagnostic-badge" style="@(savedReturn.Status == "Posted" ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;")">
+                                    @(savedReturn.Status == "Posted" ? "✓ " + I18n.T("COMPLETED") : "⛔ " + I18n.T("CANCELLED"))
+                                </span>
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button type="button" class="btn btn-secondary" @onclick="PrintAsync" style="padding:5px 14px; font-size:11.5px;">
+                                    🖨️ @I18n.T("Print Voucher")
+                                </button>
+                                @if (isAdministrator && savedReturn.Status == "Posted")
+                                {
+                                    <button type="button" class="btn" @onclick="OpenVoidReturnModal" disabled="@saving" style="padding:5px 14px; font-size:11.5px; background:#dc2626; border-color:#b91c1c; color:#fff;">
+                                        ⛔ @I18n.T("Cancel Return")
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="return-voucher-body">
+                            <div class="return-voucher-grid">
+                                <div>
+                                    <span>@I18n.T("Original Memo")</span>
+                                    <strong>#@memo.ID</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Patient Name")</span>
+                                    <strong>@memo.PatientName</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Patient Type")</span>
+                                    <strong>@(memo.PatientType == "2" ? $"IPD · {memo.RegNo}" : "OPD")</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Return Date")</span>
+                                    <strong>@savedReturn.TransDate.ToString("dd MMM yyyy, hh:mm tt")</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Bill Adjustment")</span>
+                                    <strong>@I18n.FormatCurrency(savedReturn.AdjustmentAmount)</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Due Adjustment")</span>
+                                    <strong style="color:#b45309;">@I18n.FormatCurrency(savedReturn.ReceivableAdjustment)</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Cash Refund")</span>
+                                    <strong style="color:#15803d; font-size:14px;">@I18n.FormatCurrency(savedReturn.RefundAmount)</strong>
+                                </div>
+                                <div>
+                                    <span>@I18n.T("Refund Receiver")</span>
+                                    <strong>@(savedReturn.RefundReceivedBy ?? "—")</strong>
+                                </div>
+                            </div>
+
+                            <div style="margin-bottom:12px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+                                <span style="font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase;">@I18n.T("Return Reason"):</span>
+                                <p style="margin:3px 0 0; font-size:12px; color:#1e293b; font-weight:600;">@savedReturn.Reason</p>
+                            </div>
+
+                            <!-- Returned Items Table -->
+                            <table class="return-items-table" style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
+                                <thead>
+                                    <tr>
+                                        <th>@I18n.T("Investigation / Test")</th>
+                                        <th class="num" style="width:70px; text-align:right;">@I18n.T("Qty")</th>
+                                        <th class="num" style="width:100px; text-align:right;">@I18n.T("Rate")</th>
+                                        <th class="num" style="width:110px; text-align:right;">@I18n.T("Total Amount")</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var line in lines)
+                                    {
+                                        <tr>
+                                            <td><strong>@ServiceName(line.Item.TestID)</strong></td>
+                                            <td class="num" style="text-align:right;">@line.Quantity</td>
+                                            <td class="num" style="text-align:right;">@I18n.FormatCurrency(line.Item.Rate)</td>
+                                            <td class="num" style="text-align:right; font-weight:700; color:#15803d;">@I18n.FormatCurrency(line.Item.Rate * line.Quantity)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+
+                            <!-- Audit Information -->
+                            <div class="return-voucher-audit-box">
+                                <span>👤 @I18n.T("Processed by"): <strong>@UserDisplayName(savedReturn.EnteredBy)</strong></span>
+                                <span>📅 @savedReturn.TransDate.ToString("dd MMM yyyy, hh:mm tt")</span>
+                            </div>
+
+                            @if (savedReturn.Status == "Cancelled")
+                            {
+                                <div class="return-voucher-void-banner">
+                                    <strong>⛔ @I18n.T("CANCELLED / REVERSED"):</strong>
+                                    <span>@I18n.T("This return was cancelled by") <strong>@UserDisplayName(savedReturn.CancelledBy)</strong> @I18n.T("on") @savedReturn.CancelledAt?.ToString("dd MMM yyyy, hh:mm tt").</span>
+                                    <div style="margin-top:4px;"><b>@I18n.T("Reason"):</b> @savedReturn.CancellationReason</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!-- Right Panel: Recent Returns Operational Center -->
+        <div class="diagnostic-queue-card" style="display:flex; flex-direction:column; min-height:0; overflow:hidden;">
+            <div class="diagnostic-card-header">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Recent Returns")</h2>
+                    <span class="diagnostic-badge">@recent.Count</span>
+                </div>
+            </div>
+
+            <!-- Toolbar: Search & Filter Tabs -->
+            <div class="return-recent-toolbar">
+                <div class="return-recent-search">
+                    <span class="return-recent-search-icon">🔍</span>
+                    <input class="return-recent-search-input"
+                           @bind="recentFilter"
+                           @bind:event="oninput"
+                           placeholder="@I18n.T("Filter voucher #, memo #, patient...")" />
+                    @if (!string.IsNullOrWhiteSpace(recentFilter))
+                    {
+                        <button type="button" class="return-recent-search-clear" @onclick="() => recentFilter = string.Empty" title="@I18n.T("Clear filter")">✕</button>
+                    }
+                </div>
+                <div class="return-recent-filter-pills">
+                    <button type="button" class="return-recent-filter-btn @(recentStatusFilter == "all" ? "active" : "")" @onclick='() => recentStatusFilter = "all"'>
+                        @I18n.T("All") (@recent.Count)
+                    </button>
+                    <button type="button" class="return-recent-filter-btn @(recentStatusFilter == "today" ? "active" : "")" @onclick='() => recentStatusFilter = "today"'>
+                        @I18n.T("Today") (@recent.Count(r => r.TransDate.Date == DateTime.Today))
+                    </button>
+                    <button type="button" class="return-recent-filter-btn @(recentStatusFilter == "posted" ? "active" : "")" @onclick='() => recentStatusFilter = "posted"'>
+                        @I18n.T("Completed") (@recent.Count(r => r.Status == "Posted"))
+                    </button>
+                    <button type="button" class="return-recent-filter-btn @(recentStatusFilter is "cancelled" or "voided" ? "active" : "")" @onclick='() => recentStatusFilter = "cancelled"'>
+                        @I18n.T("Cancelled") (@recent.Count(r => r.Status == "Cancelled"))
+                    </button>
+                </div>
+            </div>
+
+            @if (todayReturnsCount > 0)
+            {
+                <div class="return-recent-stat-strip">
+                    <span>💵 @I18n.T("Today's Disbursed Refunds"):</span>
+                    <strong>@I18n.FormatCurrency(todayRefundTotal)</strong>
+                </div>
+            }
+
+            <div class="diagnostic-queue-body" style="flex:1 1 auto; overflow-y:auto; padding:0;">
+                <table class="return-recent-table">
+                    <thead>
+                        <tr>
+                            <th style="width:78px;">@I18n.T("Voucher")</th>
+                            <th>@I18n.T("Memo / Patient")</th>
+                            <th style="width:85px;">@I18n.T("Date & Time")</th>
+                            <th class="text-right" style="width:88px; text-align:right;">@I18n.T("Refund")</th>
+                            <th class="text-right" style="width:64px; text-align:right;">@I18n.T("Action")</th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        @foreach (var line in lines)
+                        @if (!FilteredRecentReturns.Any())
                         {
                             <tr>
-                                <td><InputCheckbox @bind-Value="line.Selected" disabled="@(savedReturn is not null || line.Remaining <= 0)" /></td>
-                                <td><b>@ServiceName(line.Item.TestID)</b></td>
-                                <td class="num">@line.Item.Quantity</td>
-                                <td class="num">@line.Remaining</td>
-                                <td class="num"><InputNumber @bind-Value="line.Quantity" min="1" max="@line.Remaining" disabled="@(savedReturn is not null || !line.Selected)" style="width:75px;" /></td>
-                                <td class="num">@I18n.FormatCurrency(line.Item.Rate)</td>
-                                <td class="num">@I18n.FormatCurrency(line.Selected ? line.Item.Rate * line.Quantity : 0)</td>
+                                <td colspan="5" style="text-align:center; padding:32px 12px; color:#94a3b8;">
+                                    <div style="font-size:20px; margin-bottom:6px;">🔍</div>
+                                    <strong style="display:block; color:#64748b; font-size:12px;">@I18n.T("No matching return records found")</strong>
+                                    <small style="color:#94a3b8;">@I18n.T("Try modifying your filter keyword or selected tab.")</small>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var entry in FilteredRecentReturns)
+                        {
+                            <tr class="@(savedReturn?.ID == entry.ID ? "selected" : "")">
+                                <td>
+                                    <div class="return-voucher-cell">
+                                        <span class="return-voucher-num">#@entry.ID</span>
+                                        @if (entry.Status == "Cancelled")
+                                        {
+                                            <span class="return-status-tag cancelled">@I18n.T("Cancelled")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="return-status-tag completed">@I18n.T("Completed")</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <strong style="color:#0284c7; font-size:11px;">#@entry.MemoID</strong>
+                                        <span style="color:#0f172a; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:140px;">
+                                            @(entry.Memo?.PatientName ?? I18n.T("Walk-in Patient"))
+                                        </span>
+                                    </div>
+                                    <div style="color:#64748b; font-size:9.5px; margin-top:2px; display:flex; align-items:center; gap:5px;">
+                                        <span class="return-memo-suggestion-badge @(entry.Memo?.PatientType == "2" ? "ipd" : "opd")" style="font-size:8.5px; padding:1px 4px;">
+                                            @(entry.Memo?.PatientType == "2" ? "IPD" : "OPD")
+                                        </span>
+                                        <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:130px;">
+                                            @(string.IsNullOrWhiteSpace(entry.RefundReceivedBy) ? (entry.Memo?.PatientName ?? "—") : entry.RefundReceivedBy)
+                                        </span>
+                                    </div>
+                                </td>
+                                <td style="color:#475569; font-size:10.5px; line-height:1.25;">
+                                    <div style="font-weight:600;">@entry.TransDate.ToString("dd MMM yyyy")</div>
+                                    <small style="color:#94a3b8; font-size:9.5px;">@entry.TransDate.ToString("hh:mm tt")</small>
+                                </td>
+                                <td class="text-right" style="text-align:right;">
+                                    <strong style="color:#15803d; font-size:12px; display:block;">@I18n.FormatCurrency(entry.RefundAmount)</strong>
+                                    @if (entry.ReceivableAdjustment > 0)
+                                    {
+                                        <small style="display:block; color:#b45309; font-size:9px; font-weight:600;">+@I18n.FormatCurrency(entry.ReceivableAdjustment) due</small>
+                                    }
+                                </td>
+                                <td class="text-right" style="text-align:right;">
+                                    <button type="button" class="return-row-view-btn" @onclick="() => OpenReturnAsync(entry.ID)" title="@I18n.T("View return details")">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                            <polyline points="14 2 14 8 20 8"></polyline>
+                                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                                        </svg>
+                                        <span>@I18n.T("View")</span>
+                                    </button>
+                                </td>
                             </tr>
                         }
                     </tbody>
                 </table>
             </div>
 
-            <div class="form-grid">
-                <label class="span-2">
-                    <span>@I18n.T("Return Reason") *</span>
-                    <textarea @bind="reason" maxlength="500" disabled="@(savedReturn is not null)"></textarea>
-                </label>
-                <label><span>@I18n.T("Bill Adjustment")</span><input value="@I18n.FormatCurrency(estimatedAdjustment)" disabled /></label>
-                <label><span>@I18n.T("Cash Refund")</span><input value="@I18n.FormatCurrency(estimatedCashRefund)" disabled /></label>
-                <label><span>@I18n.T("Due / IPD Adjustment")</span><input value="@I18n.FormatCurrency(estimatedReceivableAdjustment)" disabled /></label>
+            <div class="return-recent-footer">
+                <span>@I18n.T("Showing") <b>@FilteredRecentReturns.Count()</b> @I18n.T("of") <b>@recent.Count</b> @I18n.T("returns")</span>
+                <span>@DateTime.Today.ToString("dd MMM yyyy")</span>
             </div>
-
-            <div class="form-actions">
-                @if (savedReturn is null)
-                {
-                    <button class="btn btn-primary" @onclick="PostAsync" disabled="@saving">@(saving ? I18n.T("Saving…") : I18n.T("Post Return & Adjustment"))</button>
-                }
-                else
-                {
-                    <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print Voucher")</button>
-                }
-            </div>
-        }
-    </div>
-
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Recent Cash Memo Returns")</h2><p>@recent.Count @I18n.T("return(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead><tr><th>@I18n.T("Return")</th><th>@I18n.T("Memo")</th><th>@I18n.T("Date")</th><th>@I18n.T("Reason")</th><th class="num">@I18n.T("Adjustment")</th><th></th></tr></thead>
-                <tbody>
-                    @foreach (var entry in recent)
-                    {
-                        <tr><td><b>#@entry.ID</b></td><td>#@entry.MemoID</td><td>@entry.TransDate.ToString("dd MMM yy")</td><td>@entry.Reason</td><td class="num">@I18n.FormatCurrency(entry.AdjustmentAmount)</td><td><button class="icon-btn" @onclick="() => OpenReturnAsync(entry.ID)">@I18n.T("View")</button></td></tr>
-                    }
-                </tbody>
-            </table>
         </div>
     </div>
 </div>
 
+@if (showPostConfirmation && memo is not null)
+{
+    <div class="return-confirm-backdrop" role="presentation">
+        <section class="return-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="return-confirm-title">
+            <div class="return-confirm-header">
+                <div class="return-confirm-icon">↩</div>
+                <div>
+                    <h3 id="return-confirm-title">@I18n.T("Confirm Return & Refund")</h3>
+                    <p>@I18n.T("Review the return details carefully before posting to accounts.")</p>
+                </div>
+                <button type="button" class="return-confirm-close" @onclick="ClosePostConfirmation" aria-label="@I18n.T("Cancel")">×</button>
+            </div>
+
+            <div class="return-confirm-body">
+                <div class="return-confirm-memo">
+                    <div><span>@I18n.T("Memo")</span><strong>#@memo.ID</strong></div>
+                    <div><span>@I18n.T("Patient")</span><strong>@memo.PatientName (@(memo.PatientType == "2" ? $"IPD · {memo.RegNo}" : "OPD"))</strong></div>
+                    <div><span>@I18n.T("Reason")</span><strong>@reason</strong></div>
+                </div>
+
+                <div class="return-confirm-section-title">@I18n.T("Selected investigations")</div>
+                <div class="return-confirm-items">
+                    @foreach (var line in lines.Where(x => x.Selected))
+                    {
+                        <div class="return-confirm-item">
+                            <span>@ServiceName(line.Item.TestID) <small>× @line.Quantity</small></span>
+                            <strong>@I18n.FormatCurrency(line.Item.Rate * line.Quantity)</strong>
+                        </div>
+                    }
+                </div>
+
+                <div class="return-confirm-totals">
+                    <div><span>@I18n.T("Bill Adjustment")</span><strong>@I18n.FormatCurrency(estimatedAdjustment)</strong></div>
+                    @if (estimatedReceivableAdjustment > 0)
+                    {
+                        <div class="due"><span>@I18n.T("Due / IPD Adjustment")</span><strong>@I18n.FormatCurrency(estimatedReceivableAdjustment)</strong></div>
+                    }
+                    <div class="refund"><span>💵 @I18n.T("Cash Refund")</span><strong>@I18n.FormatCurrency(estimatedCashRefund)</strong></div>
+                </div>
+
+                @if (estimatedCashRefund > 0)
+                {
+                    <div class="return-confirm-receiver">
+                        <span>@I18n.T("Refund Received By")</span>
+                        <strong>@refundReceivedBy</strong>
+                    </div>
+                }
+
+                <div class="return-confirm-warning">
+                    <span>!</span>
+                    <p><strong>@I18n.T("Important"):</strong> @I18n.T("Posting will update the bill, central cash, accounting entries and cancel active sample/test tracking. Please verify with patient.")</p>
+                </div>
+            </div>
+
+            <div class="return-confirm-actions">
+                <button type="button" class="btn btn-secondary" @onclick="ClosePostConfirmation">@I18n.T("Cancel")</button>
+                <button type="button" class="btn btn-primary return-confirm-submit" @onclick="ConfirmPostAsync" disabled="@saving">
+                    @(saving ? I18n.T("Posting…") : "✓ " + I18n.T("Confirm & Post Return"))
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (showVoidConfirmation && savedReturn is not null && memo is not null)
+{
+    <div class="return-confirm-backdrop" role="presentation">
+        <section class="return-confirm-modal void-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="void-confirm-title">
+            <div class="return-confirm-header void-confirm-header">
+                <div class="return-confirm-icon void-confirm-icon">!</div>
+                <div>
+                    <h3 id="void-confirm-title">@I18n.T("Cancel & Reverse Return")</h3>
+                    <p>@I18n.T("This action cancels the return voucher, reinstates tests and reverses accounting entries.")</p>
+                </div>
+                <button type="button" class="return-confirm-close" @onclick="CloseVoidReturnModal" aria-label="@I18n.T("Cancel")">×</button>
+            </div>
+
+            <div class="return-confirm-body">
+                <div class="void-confirm-summary">
+                    <div><span>@I18n.T("Return Voucher")</span><strong>#@savedReturn.ID</strong></div>
+                    <div><span>@I18n.T("Original Memo")</span><strong>#@memo.ID</strong></div>
+                    <div><span>@I18n.T("Bill Adjustment")</span><strong>@I18n.FormatCurrency(savedReturn.AdjustmentAmount)</strong></div>
+                    <div><span>@I18n.T("Cash Refund")</span><strong>@I18n.FormatCurrency(savedReturn.RefundAmount)</strong></div>
+                </div>
+
+                <label class="void-reason-field">
+                    <span>@I18n.T("Cancellation Reason") <span class="required-mark">*</span></span>
+                    <textarea class="classic-input" @bind="voidReason" @bind:event="oninput" maxlength="500" rows="3" autofocus placeholder="@I18n.T("Enter a clear reason for cancelling and reversing this return...")"></textarea>
+                    <small>@I18n.T("This reason will be saved in the permanent audit history.")</small>
+                </label>
+
+                <div class="return-confirm-warning void-confirm-warning">
+                    <span>!</span>
+                    <p><strong>@I18n.T("Important"):</strong> @I18n.T("The refund, central cash deduction and IPD adjustments will be reversed. Returned investigations may become active again.")</p>
+                </div>
+            </div>
+
+            <div class="return-confirm-actions">
+                <button type="button" class="btn btn-secondary" @onclick="CloseVoidReturnModal">@I18n.T("Keep Return")</button>
+                <button type="button" class="btn void-confirm-submit" @onclick="ConfirmVoidReturnAsync" disabled="@(saving || string.IsNullOrWhiteSpace(voidReason))">
+                    @(saving ? I18n.T("Reversing…") : "⛔ " + I18n.T("Cancel & Reverse Return"))
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
 @if (savedReturn is not null && memo is not null)
 {
-    <div id="diagnostic-return-print" class="print-sheet panel print-document">
+    <div id="diagnostic-return-print" class="print-sheet panel print-document" style="display:none;">
         <PrintDocumentHeader Title="Investigation Return / Refund Voucher" Subtitle="@Branding.LabHeaderDept" DocNo="@($"RET-{savedReturn.ID}")" DocNoLabel="Return #" BarcodeCode="@($"DRET-{savedReturn.ID}")" />
         <div class="print-grid">
             <div><span>@I18n.T("Original Memo"):</span> <b>#@memo.ID</b></div><div><span>@I18n.T("Patient Name"):</span> <b>@memo.PatientName</b></div>
@@ -126,7 +854,7 @@
         <table class="data-table"><thead><tr><th>@I18n.T("Investigation / Test")</th><th class="num">@I18n.T("Qty")</th><th class="num">@I18n.T("Rate")</th><th class="num">@I18n.T("Amount")</th></tr></thead><tbody>
             @foreach (var line in lines.Where(x => x.Selected)) { <tr><td>@ServiceName(line.Item.TestID)</td><td class="num">@line.Quantity</td><td class="num">@I18n.FormatCurrency(line.Item.Rate)</td><td class="num">@I18n.FormatCurrency(line.Item.Rate * line.Quantity)</td></tr> }
         </tbody></table>
-        <div class="print-total"><div><span>@I18n.T("Reason"):</span> <b>@savedReturn.Reason</b></div><div><span>@I18n.T("Due / IPD Adjustment"):</span> <b>@I18n.FormatCurrency(savedReturn.ReceivableAdjustment)</b></div><div class="grand"><span>@I18n.T("Cash Refund"):</span> <b>@I18n.FormatCurrency(savedReturn.RefundAmount)</b></div></div>
+        <div class="print-total"><div><span>@I18n.T("Reason"):</span> <b>@savedReturn.Reason</b></div><div><span>@I18n.T("Refund Method"):</span> <b>@(savedReturn.RefundMethod ?? "—") @(string.IsNullOrWhiteSpace(savedReturn.RefundReference) ? "" : $"· {savedReturn.RefundReference}")</b></div><div><span>@I18n.T("Refund Received By"):</span> <b>@(savedReturn.RefundReceivedBy ?? "—")</b></div><div><span>@I18n.T("Due / IPD Adjustment"):</span> <b>@I18n.FormatCurrency(savedReturn.ReceivableAdjustment)</b></div><div class="grand"><span>@I18n.T("Cash Refund"):</span> <b>@I18n.FormatCurrency(savedReturn.RefundAmount)</b></div></div>
         <PrintDocumentFooter SignTitle1="Patient / Attendant" SignTitle2="Authorized By" SignTitle3="Cashier" />
     </div>
 }
@@ -134,6 +862,10 @@
 @code {
     private List<Service> services = [];
     private List<DiagnosticCashMemoReturn> recent = [];
+    private List<CashMemoDInvestigation> recentBills = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<int, string> userDisplayNames = [];
+    private List<CashMemoDInvestigation> memoMatches = [];
     private List<ReturnLine> lines = [];
     private CashMemoDInvestigation? memo;
     private DiagnosticCashMemoReturn? savedReturn;
@@ -142,10 +874,49 @@
     private string message = "";
     private string messageClass = "success";
     private bool saving;
+    private bool showPostConfirmation;
+    private bool showVoidConfirmation;
+    private bool searchingMemos;
+    private CancellationTokenSource? memoSearchCts;
+    private bool isAdministrator;
+    private bool canIssueCashRefund;
+    private string refundMethod = "Cash";
+    private string refundReference = "";
+    private string refundReceivedBy = "";
+    private string voidReason = "";
     private decimal originalGross;
     private decimal originalNet;
     private decimal priorAdjustment;
     private decimal priorRefund;
+    private string recentFilter = "";
+    private string recentStatusFilter = "all";
+    private bool selectAllChecked;
+
+    private readonly string[] commonReasons =
+    [
+        "Patient Refused / Cancelled",
+        "Doctor Changed Investigation",
+        "Sample Cannot Be Collected",
+        "Wrong Investigation Selected",
+        "Duplicate Billing",
+        "Financial Constraints"
+    ];
+
+    private int todayReturnsCount => recent.Count(x => x.TransDate.Date == DateTime.Today && x.Status == "Posted");
+    private decimal todayRefundTotal => recent.Where(x => x.TransDate.Date == DateTime.Today && x.Status == "Posted").Sum(x => x.RefundAmount);
+
+    private IEnumerable<DiagnosticCashMemoReturn> FilteredRecentReturns =>
+        recent.Where(r =>
+            (string.IsNullOrWhiteSpace(recentFilter) ||
+             r.ID.ToString().Contains(recentFilter, StringComparison.OrdinalIgnoreCase) ||
+             r.MemoID.ToString().Contains(recentFilter, StringComparison.OrdinalIgnoreCase) ||
+             (r.Memo?.PatientName != null && r.Memo.PatientName.Contains(recentFilter, StringComparison.OrdinalIgnoreCase)) ||
+             (r.Memo?.Contact != null && r.Memo.Contact.Contains(recentFilter, StringComparison.OrdinalIgnoreCase)) ||
+             (r.RefundReceivedBy != null && r.RefundReceivedBy.Contains(recentFilter, StringComparison.OrdinalIgnoreCase))) &&
+            (recentStatusFilter == "all" ||
+             (recentStatusFilter == "posted" && r.Status == "Posted") ||
+             ((recentStatusFilter is "cancelled" or "voided") && r.Status == "Cancelled") ||
+             (recentStatusFilter == "today" && r.TransDate.Date == DateTime.Today)));
 
     private decimal selectedGross => lines.Where(x => x.Selected).Sum(x => x.Item.Rate * x.Quantity);
     private decimal estimatedAdjustment => originalGross <= 0 ? 0 : Math.Min(Math.Max(0, originalNet - priorAdjustment), Math.Round(originalNet * selectedGross / originalGross, 2));
@@ -153,113 +924,338 @@
     private decimal priorReceivableAdjustment => Math.Max(0, priorAdjustment - priorRefund);
     private decimal estimatedReceivableAdjustment => Math.Min(estimatedAdjustment, Math.Max(0, originalReceivable - priorReceivableAdjustment));
     private decimal estimatedCashRefund => Math.Max(0, estimatedAdjustment - estimatedReceivableAdjustment);
+    private bool CanPostReturn => !saving
+        && memo is not null
+        && lines.Any(x => x.Selected && x.Quantity > 0 && x.Quantity <= x.Remaining)
+        && !string.IsNullOrWhiteSpace(reason)
+        && (estimatedCashRefund <= 0 || (canIssueCashRefund && !string.IsNullOrWhiteSpace(refundReceivedBy)));
 
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        canIssueCashRefund = isAdministrator || principal.IsInRole(RoleNames.Cashier);
         await using var db = await DbFactory.CreateDbContextAsync();
         services = await db.Services.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
-        recent = await db.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+        doctors = await db.Doctors.AsNoTracking().ToListAsync();
+        userDisplayNames = await db.Users.AsNoTracking()
+            .ToDictionaryAsync(u => u.Id, u => string.IsNullOrWhiteSpace(u.DisplayName) ? (u.UserName ?? $"User #{u.Id}") : u.DisplayName);
+        await LoadRecentReturnsAsync(db);
+        recentBills = await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.ModuleID == 2)
+            .OrderByDescending(x => x.ID)
+            .Take(8)
+            .ToListAsync();
+    }
+
+    private async Task LoadRecentReturnsAsync(HpmDbContext db)
+    {
+        recent = await db.DiagnosticCashMemoReturns.AsNoTracking()
+            .Include(x => x.Memo)
+            .OrderByDescending(x => x.ID)
+            .Take(100)
+            .ToListAsync();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
     private async Task HandleLookupKeyDown(KeyboardEventArgs e) { if (e.Key == "Enter") await FindMemoAsync(); }
 
+    private async Task QueueMemoSuggestionsAsync()
+    {
+        memoSearchCts?.Cancel();
+        memoSearchCts?.Dispose();
+        memoSearchCts = new CancellationTokenSource();
+        var token = memoSearchCts.Token;
+        var raw = memoLookup.Trim();
+
+        if (memo is not null || raw.Length < 2)
+        {
+            memoMatches = [];
+            searchingMemos = false;
+            return;
+        }
+
+        searchingMemos = true;
+        try
+        {
+            await Task.Delay(300, token);
+            memoMatches = await SearchMemoMatchesAsync(raw, token);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            if (!token.IsCancellationRequested) searchingMemos = false;
+        }
+    }
+
+    private async Task<List<CashMemoDInvestigation>> SearchMemoMatchesAsync(string raw, CancellationToken token = default)
+    {
+        var lookup = raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase) ? raw[4..] : raw;
+        var hasMemoId = long.TryParse(lookup, out var memoId) && memoId > 0;
+        await using var db = await DbFactory.CreateDbContextAsync(token);
+        return await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.ModuleID == 2 &&
+                ((hasMemoId && x.ID == memoId) ||
+                 (x.PatientID != null && x.PatientID.Contains(raw)) ||
+                 (x.Contact != null && x.Contact.Contains(raw)) ||
+                 (x.PatientName != null && x.PatientName.Contains(raw))))
+            .OrderByDescending(x => x.ID)
+            .Take(10)
+            .ToListAsync(token);
+    }
+
     private async Task FindMemoAsync()
     {
         var raw = memoLookup.Trim();
         if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase)) raw = raw[4..];
-        if (!long.TryParse(raw, out var id) || id <= 0) { Fail(I18n.T("Enter a valid diagnostic memo ID.")); return; }
+        if (long.TryParse(raw, out var id) && id > 0)
+        {
+            await LoadMemoByIdAsync(id);
+            return;
+        }
+        if (raw.Length < 2) { Fail(I18n.T("Enter at least two characters to search.")); return; }
+        memoSearchCts?.Cancel();
+        searchingMemos = true;
+        memoMatches = await SearchMemoMatchesAsync(raw);
+        searchingMemos = false;
+        memo = null;
+        savedReturn = null;
+        if (memoMatches.Count == 0) { Fail(I18n.T("No matching diagnostic cash memo was found.")); return; }
+        if (memoMatches.Count == 1) { await LoadMemoByIdAsync(memoMatches[0].ID); return; }
+        Success(I18n.T("Select the correct diagnostic memo from the matches below."));
+    }
+
+    private async Task LoadMemoByIdAsync(long id)
+    {
         await using var db = await DbFactory.CreateDbContextAsync();
         memo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == id && x.ModuleID == 2);
         if (memo is null) { Fail(I18n.T("Diagnostic cash memo was not found.")); return; }
-        var returned = await db.DiagnosticCashMemoReturnItems.AsNoTracking().Where(x => x.CashMemoItem!.MemoID == id).GroupBy(x => x.CashMemoItemID).ToDictionaryAsync(x => x.Key, x => x.Sum(y => y.Quantity));
-        lines = memo.Items.OrderBy(x => x.SLNo).Select(x => new ReturnLine(x, Math.Max(0, x.Quantity - returned.GetValueOrDefault(x.ID)))).ToList();
+        memoLookup = memo.ID.ToString();
+        memoMatches = [];
+
+        var returned = await db.DiagnosticCashMemoReturnItems.AsNoTracking()
+            .Where(x => x.CashMemoItem!.MemoID == id && x.Return!.Status == "Posted")
+            .GroupBy(x => x.CashMemoItemID)
+            .ToDictionaryAsync(x => x.Key, x => x.Sum(y => y.Quantity));
+
+        var testIds = memo.Items.Select(x => x.TestID).Distinct().ToList();
+        var reportedTestIds = (await db.LabTestResults.AsNoTracking()
+            .Where(x => x.MemoID == id && testIds.Contains(x.ServiceID) && (x.IsVerified || x.ReportedAt != null))
+            .Select(x => x.ServiceID)
+            .Distinct()
+            .ToListAsync()).ToHashSet();
+
+        var sampleStatuses = await db.LabSampleCollections.AsNoTracking()
+            .Where(x => x.MemoID == id && testIds.Contains(x.ServiceID))
+            .GroupBy(x => x.ServiceID)
+            .ToDictionaryAsync(x => x.Key, x => x.OrderByDescending(s => s.ID).Select(s => s.Status).FirstOrDefault() ?? "");
+
+        lines = memo.Items.OrderBy(x => x.SLNo).Select(x =>
+        {
+            var remaining = Math.Max(0, x.Quantity - returned.GetValueOrDefault(x.ID));
+            var isReported = reportedTestIds.Contains(x.TestID);
+            var sampleStatus = sampleStatuses.GetValueOrDefault(x.TestID, "");
+            return new ReturnLine(x, remaining, isReported, sampleStatus, isAdministrator);
+        }).ToList();
+
         originalGross = memo.Items.Sum(x => x.Rate * x.Quantity);
         originalNet = Math.Max(0, memo.Total - memo.Discount);
-        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
-        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id && x.Status == "Posted").SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == id && x.Status == "Posted").SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
         savedReturn = null;
         reason = "";
-        if (lines.All(x => x.Remaining <= 0)) Fail(I18n.T("All investigations on this memo have already been returned.")); else Success(I18n.T("Diagnostic cash memo loaded."));
+        refundMethod = "Cash";
+        refundReference = "";
+        refundReceivedBy = memo.PatientName ?? "";
+        selectAllChecked = false;
+
+        if (lines.All(x => !x.CanReturn))
+            Fail(I18n.T("None of the investigations on this memo are eligible for return (already returned, reported, or in lab)."));
+        else
+            Success(I18n.T("Diagnostic cash memo loaded successfully."));
     }
 
-    private async Task PostAsync()
+    private void ToggleSelectAll(ChangeEventArgs e)
+    {
+        selectAllChecked = e.Value is bool b && b;
+        foreach (var line in lines.Where(x => x.CanReturn))
+        {
+            line.Selected = selectAllChecked;
+            if (line.Selected && line.Quantity <= 0) line.Quantity = line.Remaining;
+        }
+    }
+
+    private void ToggleLineSelection(ReturnLine line)
+    {
+        if (!line.CanReturn || savedReturn is not null) return;
+        line.Selected = !line.Selected;
+        if (line.Selected && line.Quantity <= 0) line.Quantity = line.Remaining;
+        selectAllChecked = lines.Where(x => x.CanReturn).All(x => x.Selected);
+    }
+
+    private void IncrementQty(ReturnLine line)
+    {
+        if (!line.CanReturn || savedReturn is not null) return;
+        if (line.Quantity < line.Remaining) line.Quantity++;
+    }
+
+    private void DecrementQty(ReturnLine line)
+    {
+        if (!line.CanReturn || savedReturn is not null) return;
+        if (line.Quantity > 1) line.Quantity--;
+    }
+
+    private void SelectCommonReason(string r)
+    {
+        if (savedReturn is not null) return;
+        reason = r;
+    }
+
+    private void ClearSearch()
+    {
+        memoLookup = "";
+        memoMatches = [];
+    }
+
+    private string DoctorName(int? id) =>
+        id is null ? "Walk-in / None" : (doctors.FirstOrDefault(x => x.ID == id) is { } d ? DoctorNameFormatter.FormatFullName(d.Title, d.Name) : "Doctor");
+
+    private string UserDisplayName(int? id) =>
+        id is not null && userDisplayNames.TryGetValue(id.Value, out var name) ? name : (id is not null ? $"User #{id}" : "System");
+
+    private async Task QuickPrintReturnAsync(long id)
+    {
+        await OpenReturnAsync(id);
+        await Task.Yield();
+        await PrintAsync();
+    }
+
+    private void PostAsync()
     {
         var selected = lines.Where(x => x.Selected).ToList();
         if (memo is null || selected.Count == 0 || string.IsNullOrWhiteSpace(reason)) { Fail(I18n.T("Select at least one investigation and enter a return reason.")); return; }
         if (selected.Any(x => x.Quantity <= 0 || x.Quantity > x.Remaining)) { Fail(I18n.T("Return quantity must be within the remaining quantity.")); return; }
+        if (estimatedCashRefund > 0)
+        {
+            if (!canIssueCashRefund) { Fail(I18n.T("Cash refunds require Cashier or Administrator authorization.")); return; }
+            if (refundMethod != "Cash") { Fail(I18n.T("Select a valid refund method.")); return; }
+            if (string.IsNullOrWhiteSpace(refundReceivedBy)) { Fail(I18n.T("Enter the name of the person receiving the refund.")); return; }
+        }
+        showPostConfirmation = true;
+    }
+
+    private void ClosePostConfirmation() => showPostConfirmation = false;
+
+    private async Task ConfirmPostAsync()
+    {
+        if (memo is null || !CanPostReturn) { showPostConfirmation = false; return; }
+        var selected = lines.Where(x => x.Selected).ToList();
+        showPostConfirmation = false;
         saving = true;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         try
         {
-            var source = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == memo.ID && x.ModuleID == 2);
-            foreach (var line in selected)
+            var result = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
-                var sold = source.Items.Single(x => x.ID == line.Item.ID);
-                var already = await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID).SumAsync(x => (int?)x.Quantity) ?? 0;
-                if (line.Quantity > sold.Quantity - already) throw new InvalidOperationException($"Return quantity exceeded for {ServiceName(sold.TestID)}.");
-                if (await db.LabTestResults.AnyAsync(x => x.MemoID == source.ID && x.ServiceID == sold.TestID && (x.IsVerified || x.ReportedAt != null)))
-                    throw new InvalidOperationException($"{ServiceName(sold.TestID)} already has a reported/verified result and cannot be returned.");
-            }
-
-            var priorTotal = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
-            var priorCash = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
-            var gross = source.Items.Sum(x => x.Rate * x.Quantity);
-            var net = Math.Max(0, source.Total - source.Discount);
-            var returnGross = selected.Sum(x => x.Item.Rate * x.Quantity);
-            var adjustment = gross <= 0 ? 0 : Math.Min(net - priorTotal, Math.Round(net * returnGross / gross, 2));
-            if (adjustment <= 0) throw new InvalidOperationException("No adjustable amount remains on this memo.");
-            var originalDue = Math.Max(0, net - source.Paid);
-            var priorReceivable = Math.Max(0, priorTotal - priorCash);
-            var receivableAdjustment = Math.Min(adjustment, Math.Max(0, originalDue - priorReceivable));
-            var refund = adjustment - receivableAdjustment;
-            var userId = await CurrentUserIdAsync();
-            var now = DateTime.Now;
-            var header = new DiagnosticCashMemoReturn { MemoID = source.ID, AdjustmentAmount = adjustment, RefundAmount = refund, ReceivableAdjustment = receivableAdjustment, Reason = reason.Trim(), EnteredBy = userId, TransDate = now };
-            db.DiagnosticCashMemoReturns.Add(header);
-            await db.SaveChangesAsync();
-
-            foreach (var line in selected)
-            {
-                var sold = source.Items.Single(x => x.ID == line.Item.ID);
-                db.DiagnosticCashMemoReturnItems.Add(new DiagnosticCashMemoReturnItem { ReturnID = header.ID, CashMemoItemID = sold.ID, ServiceID = sold.TestID, Quantity = line.Quantity, Rate = sold.Rate });
+                var source = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == memo.ID && x.ModuleID == 2);
                 if (source.PatientType == "2" && !string.IsNullOrWhiteSpace(source.RegNo))
                 {
-                    db.IpdPatientServiceItems.Add(new IpdPatientServiceItem { RegNo = source.RegNo, PatientID = source.PatientID, ServiceID = sold.TestID, ServiceName = ServiceName(sold.TestID), Rate = sold.Rate, Quantity = -line.Quantity, Total = -(sold.Rate * line.Quantity), DoctorID = source.DoctorID, ServiceDate = now, EnteredBy = userId, Remarks = $"[DIAGNOSTIC-RETURN:{header.ID}:{sold.ID}]" });
+                    var admission = await db.PatientAdmissions.AsNoTracking().FirstOrDefaultAsync(x => x.RegNo == source.RegNo);
+                    if (admission is not null && await db.IpdFinalBills.AnyAsync(x => x.AdmissionID == admission.ID))
+                        throw new InvalidOperationException("This IPD admission already has a final bill. Use an authorized post-discharge adjustment instead.");
                 }
-                var totalReturned = (await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID).SumAsync(x => (int?)x.Quantity) ?? 0) + line.Quantity;
-                if (totalReturned >= sold.Quantity)
+                foreach (var line in selected)
                 {
-                    db.LabSampleCollections.RemoveRange(await db.LabSampleCollections.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync());
-                    db.LabTestResults.RemoveRange(await db.LabTestResults.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync());
+                    var sold = source.Items.Single(x => x.ID == line.Item.ID);
+                    var already = await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID && x.Return!.Status == "Posted").SumAsync(x => (int?)x.Quantity) ?? 0;
+                    if (line.Quantity > sold.Quantity - already) throw new InvalidOperationException($"Return quantity exceeded for {ServiceName(sold.TestID)}.");
+                    if (await db.LabTestResults.AnyAsync(x => x.MemoID == source.ID && x.ServiceID == sold.TestID && (x.IsVerified || x.ReportedAt != null)))
+                        throw new InvalidOperationException($"{ServiceName(sold.TestID)} already has a reported/verified result and cannot be returned.");
+                    var sampleStatus = await db.LabSampleCollections.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).Select(x => x.Status).FirstOrDefaultAsync();
+                    if (!isAdministrator && sampleStatus is "Collected" or "Received" or "Scheduled" or "InProcess" or "Completed")
+                        throw new InvalidOperationException($"{ServiceName(sold.TestID)} is already in laboratory processing. Administrator authorization is required.");
                 }
-            }
 
-            var originalReference = $"DIAGNOSTIC:{source.ID}";
-            if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
-            {
-                var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
-                if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
-                if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
-                originalLines.Add((AccountingPosting.HospitalRevenue, 0, net));
-                AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
-            }
-            var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (AccountingPosting.HospitalRevenue, adjustment, 0) };
-            if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
-            if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
-            AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
-            if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
-            await db.SaveChangesAsync();
-            await tx.CommitAsync();
-            savedReturn = header;
-            priorAdjustment += adjustment;
-            priorRefund += refund;
-            Success(I18n.T($"Return voucher #{header.ID} posted successfully."));
-            recent = await db.DiagnosticCashMemoReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+                var priorTotal = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID && x.Status == "Posted").SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+                var priorCash = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == source.ID && x.Status == "Posted").SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+                var gross = source.Items.Sum(x => x.Rate * x.Quantity);
+                var net = Math.Max(0, source.Total - source.Discount);
+                var returnGross = selected.Sum(x => x.Item.Rate * x.Quantity);
+                var adjustment = gross <= 0 ? 0 : Math.Min(net - priorTotal, Math.Round(net * returnGross / gross, 2));
+                if (adjustment <= 0) throw new InvalidOperationException("No adjustable amount remains on this memo.");
+                var originalDue = Math.Max(0, net - source.Paid);
+                var priorReceivable = Math.Max(0, priorTotal - priorCash);
+                var receivableAdjustment = Math.Min(adjustment, Math.Max(0, originalDue - priorReceivable));
+                var refund = adjustment - receivableAdjustment;
+                var userId = await CurrentUserIdAsync();
+                var now = DateTime.Now;
+                var header = new DiagnosticCashMemoReturn
+                {
+                    MemoID = source.ID, AdjustmentAmount = adjustment, RefundAmount = refund,
+                    ReceivableAdjustment = receivableAdjustment, Reason = reason.Trim(), Status = "Posted",
+                    RefundMethod = refund > 0 ? refundMethod : null,
+                    RefundReference = refund > 0 && !string.IsNullOrWhiteSpace(refundReference) ? refundReference.Trim() : null,
+                    RefundReceivedBy = refund > 0 ? refundReceivedBy.Trim() : null,
+                    EnteredBy = userId, TransDate = now
+                };
+                db.DiagnosticCashMemoReturns.Add(header);
+                await db.SaveChangesAsync();
+
+                foreach (var line in selected)
+                {
+                    var sold = source.Items.Single(x => x.ID == line.Item.ID);
+                    db.DiagnosticCashMemoReturnItems.Add(new DiagnosticCashMemoReturnItem { ReturnID = header.ID, CashMemoItemID = sold.ID, ServiceID = sold.TestID, Quantity = line.Quantity, Rate = sold.Rate });
+                    if (source.PatientType == "2" && !string.IsNullOrWhiteSpace(source.RegNo))
+                    {
+                        db.IpdPatientServiceItems.Add(new IpdPatientServiceItem { RegNo = source.RegNo, PatientID = source.PatientID, ServiceID = sold.TestID, ServiceName = ServiceName(sold.TestID), Rate = sold.Rate, Quantity = -line.Quantity, Total = -(sold.Rate * line.Quantity), DoctorID = source.DoctorID, ServiceDate = now, EnteredBy = userId, Remarks = $"[DIAGNOSTIC-RETURN:{header.ID}:{sold.ID}]" });
+                    }
+                    var totalReturned = (await db.DiagnosticCashMemoReturnItems.Where(x => x.CashMemoItemID == sold.ID && x.Return!.Status == "Posted").SumAsync(x => (int?)x.Quantity) ?? 0) + line.Quantity;
+                    if (totalReturned >= sold.Quantity)
+                    {
+                        var samples = await db.LabSampleCollections.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync();
+                        foreach (var sample in samples)
+                        {
+                            sample.Status = "Cancelled";
+                            sample.Remarks = $"Returned on voucher #{header.ID}";
+                        }
+                        var results = await db.LabTestResults.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID).ToListAsync();
+                        foreach (var labResult in results)
+                        {
+                            labResult.Status = "Cancelled";
+                            labResult.CancelledBy = userId;
+                            labResult.CancelledAt = now;
+                            labResult.CancellationReason = $"Diagnostic return voucher #{header.ID}: {reason.Trim()}";
+                        }
+                    }
+                }
+
+                var originalReference = $"DIAGNOSTIC:{source.ID}";
+                if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
+                {
+                    var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
+                    if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
+                    if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
+                    originalLines.Add((AccountingPosting.HospitalRevenue, 0, net));
+                    AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
+                }
+                var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (AccountingPosting.HospitalRevenue, adjustment, 0) };
+                if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
+                if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
+                AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
+                if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
+                await db.SaveChangesAsync();
+                return (Header: header, Adjustment: adjustment, Refund: refund);
+            }, IsolationLevel.Serializable);
+
+            savedReturn = result.Header;
+            priorAdjustment += result.Adjustment;
+            priorRefund += result.Refund;
+            Success(I18n.T($"Return voucher #{result.Header.ID} posted successfully."));
+            await using var refreshDb = await DbFactory.CreateDbContextAsync();
+            await LoadRecentReturnsAsync(refreshDb);
+            recentBills = await refreshDb.EmergencyMemos.AsNoTracking().Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(8).ToListAsync();
         }
-        catch (Exception ex) { await tx.RollbackAsync(); Fail(ex.GetBaseException().Message); }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
         finally { saving = false; }
     }
 
@@ -270,26 +1266,190 @@
         memo = await db.EmergencyMemos.AsNoTracking().Include(x => x.Items).SingleAsync(x => x.ID == savedReturn.MemoID);
         memoLookup = memo.ID.ToString();
         reason = savedReturn.Reason;
-        lines = savedReturn.Items.Select(x => new ReturnLine(memo.Items.Single(i => i.ID == x.CashMemoItemID), x.Quantity) { Selected = true, Quantity = x.Quantity }).ToList();
+        refundMethod = savedReturn.RefundMethod ?? "Cash";
+        refundReference = savedReturn.RefundReference ?? "";
+        refundReceivedBy = savedReturn.RefundReceivedBy ?? "";
+        lines = savedReturn.Items.Select(x => new ReturnLine(memo.Items.Single(i => i.ID == x.CashMemoItemID), x.Quantity, false, "", true) { Selected = true, Quantity = x.Quantity }).ToList();
         originalGross = memo.Items.Sum(x => x.Rate * x.Quantity);
         originalNet = Math.Max(0, memo.Total - memo.Discount);
-        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id).SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
-        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+        priorAdjustment = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id && x.Status == "Posted").SumAsync(x => (decimal?)x.AdjustmentAmount) ?? 0;
+        priorRefund = await db.DiagnosticCashMemoReturns.Where(x => x.MemoID == memo.ID && x.ID < id && x.Status == "Posted").SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+    }
+
+    private void OpenVoidReturnModal()
+    {
+        if (!isAdministrator || savedReturn is null || savedReturn.Status != "Posted") return;
+        voidReason = "";
+        showVoidConfirmation = true;
+    }
+
+    private void CloseVoidReturnModal()
+    {
+        if (saving) return;
+        showVoidConfirmation = false;
+        voidReason = "";
+    }
+
+    private async Task ConfirmVoidReturnAsync()
+    {
+        if (!isAdministrator || savedReturn is null || savedReturn.Status != "Posted" || string.IsNullOrWhiteSpace(voidReason)) return;
+        var cancellationReason = voidReason.Trim();
+        showVoidConfirmation = false;
+        saving = true;
+        try
+        {
+            var returnId = savedReturn.ID;
+            await ResilientTransaction.ExecuteAsync<bool>(DbFactory, async db =>
+            {
+                var entity = await db.DiagnosticCashMemoReturns.Include(x => x.Items).SingleAsync(x => x.ID == returnId);
+                if (entity.Status != "Posted") throw new InvalidOperationException("This return voucher is no longer active.");
+                if (await db.DiagnosticCashMemoReturns.AnyAsync(x => x.MemoID == entity.MemoID && x.Status == "Posted" && x.ID > entity.ID))
+                    throw new InvalidOperationException("Void the latest active return voucher for this memo first.");
+
+                var userId = await CurrentUserIdAsync();
+                var now = DateTime.Now;
+                var source = await db.EmergencyMemos.Include(x => x.Items).SingleAsync(x => x.ID == entity.MemoID);
+                if (source.PatientType == "2" && !string.IsNullOrWhiteSpace(source.RegNo))
+                {
+                    var admission = await db.PatientAdmissions.AsNoTracking().FirstOrDefaultAsync(x => x.RegNo == source.RegNo);
+                    if (admission is not null && await db.IpdFinalBills.AnyAsync(x => x.AdmissionID == admission.ID))
+                        throw new InvalidOperationException("This IPD admission already has a final bill. Use an authorized post-discharge adjustment instead.");
+                }
+                var voucher = await db.AccountVouchers.SingleOrDefaultAsync(x => x.Reference == $"DIAGNOSTIC-RETURN:{entity.ID}" && x.IsPosted && x.Status != "Cancelled")
+                    ?? throw new InvalidOperationException("The posted accounting voucher for this return was not found.");
+                await AccountingPosting.ReversePostedVoucherAsync(db, voucher, cancellationReason.Trim(), userId, now);
+
+                foreach (var returnedItem in entity.Items)
+                {
+                    var sold = source.Items.Single(x => x.ID == returnedItem.CashMemoItemID);
+                    if (source.PatientType == "2" && !string.IsNullOrWhiteSpace(source.RegNo))
+                    {
+                        db.IpdPatientServiceItems.Add(new IpdPatientServiceItem
+                        {
+                            RegNo = source.RegNo, PatientID = source.PatientID, ServiceID = sold.TestID,
+                            ServiceName = ServiceName(sold.TestID), Rate = sold.Rate, Quantity = returnedItem.Quantity,
+                            Total = sold.Rate * returnedItem.Quantity, DoctorID = source.DoctorID, ServiceDate = now,
+                            EnteredBy = userId, Remarks = $"[DIAGNOSTIC-RETURN-REVERSAL:{entity.ID}:{sold.ID}]"
+                        });
+                    }
+
+                    var otherReturned = await db.DiagnosticCashMemoReturnItems
+                        .Where(x => x.CashMemoItemID == sold.ID && x.ReturnID != entity.ID && x.Return!.Status == "Posted")
+                        .SumAsync(x => (int?)x.Quantity) ?? 0;
+                    if (otherReturned < sold.Quantity)
+                    {
+                        var samples = await db.LabSampleCollections.Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID && x.Status == "Cancelled").ToListAsync();
+                        foreach (var sample in samples)
+                        {
+                            sample.Status = "Pending";
+                            sample.Remarks = $"Reactivated after voiding return voucher #{entity.ID}";
+                        }
+                        var results = await db.LabTestResults.IgnoreQueryFilters()
+                            .Where(x => x.MemoID == source.ID && x.ServiceID == sold.TestID && x.Status == "Cancelled")
+                            .ToListAsync();
+                        foreach (var labResult in results)
+                        {
+                            labResult.Status = "Active";
+                            labResult.CancelledBy = null;
+                            labResult.CancelledAt = null;
+                            labResult.CancellationReason = null;
+                        }
+                    }
+                }
+
+                if (entity.RefundAmount > 0)
+                    db.CentralCashCollections.Add(new CentralCashCollection { Amount = entity.RefundAmount, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
+
+                entity.Status = "Cancelled";
+                entity.CancelledBy = userId;
+                entity.CancelledAt = now;
+                entity.CancellationReason = cancellationReason.Trim();
+                await db.SaveChangesAsync();
+                return true;
+            }, IsolationLevel.Serializable);
+
+            Success(I18n.T($"Return voucher #{returnId} was voided with a complete reversal."));
+            await OpenReturnAsync(returnId);
+            await using var refreshDb = await DbFactory.CreateDbContextAsync();
+            await LoadRecentReturnsAsync(refreshDb);
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { saving = false; }
     }
 
     private async Task<int> CurrentUserIdAsync() { var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
     private Task PrintAsync() => JS.InvokeVoidAsync("hpm.printElement", "diagnostic-return-print").AsTask();
     private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
-    private void Reset() { memo = null; savedReturn = null; memoLookup = ""; reason = ""; lines = []; message = ""; originalGross = originalNet = priorAdjustment = priorRefund = 0; }
+    private void Reset()
+    {
+        memoSearchCts?.Cancel();
+        searchingMemos = false;
+        showPostConfirmation = false;
+        showVoidConfirmation = false;
+        memo = null;
+        savedReturn = null;
+        memoMatches = [];
+        memoLookup = "";
+        reason = "";
+        refundMethod = "Cash";
+        refundReference = "";
+        refundReceivedBy = "";
+        voidReason = "";
+        lines = [];
+        message = "";
+        originalGross = originalNet = priorAdjustment = priorRefund = 0;
+        selectAllChecked = false;
+    }
+
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
-    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
-    private sealed class ReturnLine(CashMemoSubDInvestigation item, int remaining)
+    public void Dispose()
     {
-        public CashMemoSubDInvestigation Item { get; } = item;
-        public int Remaining { get; } = remaining;
+        memoSearchCts?.Cancel();
+        memoSearchCts?.Dispose();
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    private sealed class ReturnLine
+    {
+        public CashMemoSubDInvestigation Item { get; }
+        public int Remaining { get; }
         public bool Selected { get; set; }
-        public int Quantity { get; set; } = Math.Max(1, remaining);
+        public int Quantity { get; set; }
+        public bool IsReported { get; }
+        public string SampleStatus { get; }
+        public bool CanReturn { get; }
+        public string BlockReason { get; }
+
+        public ReturnLine(CashMemoSubDInvestigation item, int remaining, bool isReported, string sampleStatus, bool isAdmin)
+        {
+            Item = item;
+            Remaining = remaining;
+            Quantity = remaining > 0 ? remaining : 0;
+            IsReported = isReported;
+            SampleStatus = sampleStatus;
+
+            if (remaining <= 0)
+            {
+                CanReturn = false;
+                BlockReason = "Already Returned";
+            }
+            else if (isReported)
+            {
+                CanReturn = false;
+                BlockReason = "Report Verified";
+            }
+            else if (!isAdmin && (sampleStatus is "Collected" or "Received" or "Scheduled" or "InProcess" or "Completed"))
+            {
+                CanReturn = false;
+                BlockReason = "In Lab Processing";
+            }
+            else
+            {
+                CanReturn = true;
+                BlockReason = "";
+            }
+        }
     }
 }

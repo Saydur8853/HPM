@@ -10,6 +10,8 @@ public sealed class Registration
     public DateTime DateOfBirth { get; set; } = DateTime.Today;
     [Required, StringLength(10)] public string Sex { get; set; } = string.Empty;
     [StringLength(10)] public string? BloodGroup { get; set; }
+    [StringLength(20)] public string? Weight { get; set; }
+    public string? PhotoData { get; set; }
     [StringLength(100)] public string? FatherName { get; set; }
     [StringLength(100)] public string? MotherName { get; set; }
     [StringLength(50)] public string? CareOf { get; set; }
@@ -36,6 +38,8 @@ public sealed class DoctorAppointment
     public DateTime ApptDate { get; set; } = DateTime.Today;
     [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
     [StringLength(50)] public string? Age { get; set; }
+    [StringLength(50)] public string? Sex { get; set; }
+    [StringLength(20)] public string? Weight { get; set; }
     [StringLength(20)] public string? ContactNo { get; set; }
     [StringLength(11)] public string? PatientID { get; set; }
     [Required, StringLength(30)] public string Status { get; set; } = "Booked";
@@ -150,6 +154,8 @@ public sealed class DoctorsProfile
     public DateTime? TransDate { get; set; }
     public string? Address { get; set; }
     public int? ReferralCategoryID { get; set; }
+    public bool IsActive { get; set; } = true;
+    public int? Priority { get; set; }
 }
 
 public sealed class Department
@@ -157,6 +163,7 @@ public sealed class Department
     public int ID { get; set; }
     public string Name { get; set; } = string.Empty;
     public int? DepartmentCategoryID { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public sealed class TicketType
@@ -164,6 +171,7 @@ public sealed class TicketType
     public int ID { get; set; }
     public string Name { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public bool IsActive { get; set; } = true;
 }
 
 public sealed class ServiceCategory
@@ -191,4 +199,5 @@ public sealed class Service
     public int? GenericID { get; set; }
     public int? SupplierID { get; set; }
     public int? InvestigationModuleID { get; set; }
+    public string? DiagnosticType { get; set; }
 }

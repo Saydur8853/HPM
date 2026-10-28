@@ -2,6 +2,7 @@
 @attribute [Authorize(Roles = RoleNames.Administrator)]
 @rendermode InteractiveServer
 @implements IDisposable
+@using HPM.Web.Services
 @inject UserManager<AppUser> UserManager
 @inject UserAdministrationService UserAdministration
 @inject AuthenticationStateProvider AuthStateProvider
@@ -9,113 +10,739 @@
 
 <PageTitle>@I18n.T("Users & Roles", "Users & Roles") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Security Administration", "Security administration")</span>
-        <h1>@I18n.T("Users & roles", "Users & roles")</h1>
-        <p>@I18n.T("Create staff accounts, assign one operational role and manage access.", "Create staff accounts, assign one operational role and manage access.")</p>
-    </div>
-    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("New user", "New user")</button>
-</div>
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
-
-<div class="master-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(editor.ID==0 ? I18n.T("Create staff account", "Create staff account") : $"{I18n.T("Edit", "Edit")} {editor.UserName}")</h2>
-                <p>@I18n.T("Password must contain upper/lowercase, number and symbol.", "Password must contain upper/lowercase, number and symbol.")</p>
-            </div>
-            <span class="badge">@(editor.ID==0 ? I18n.T("NEW", "NEW") : I18n.T("EDIT", "EDIT"))</span>
+<div class="useradmin-container">
+    <!-- Modern Header -->
+    <div class="useradmin-header">
+        <div class="useradmin-header-title">
+            <span class="useradmin-eyebrow">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                @I18n.T("Security Administration", "Security Administration")
+            </span>
+            <h1>@I18n.T("Users & Roles", "Users & Roles")</h1>
+            <p>@I18n.T("Create staff accounts, assign operational roles, and manage system access permissions.", "Create staff accounts, assign operational roles, and manage system access permissions.")</p>
         </div>
-        <EditForm Model="editor" OnSubmit="SaveAsync">
-            <div class="form-grid">
-                <label class="span-2"><span>@I18n.T("Display name *", "Display name *")</span><InputText @bind-Value="editor.DisplayName" /></label>
-                <label><span>@I18n.T("Username *", "Username *")</span><InputText @bind-Value="editor.UserName" disabled="@(editor.ID>0)" /></label>
-                <label><span>@I18n.T("Email", "Email")</span><InputText @bind-Value="editor.Email" /></label>
-                <label class="span-2"><span>@I18n.T("Role *", "Role *")</span><InputSelect @bind-Value="editor.Role"><option value="">@I18n.T("Select role", "Select role")</option>@foreach(var role in RoleNames.All){<option value="@role">@role</option>}</InputSelect></label>
-                @if(editor.Role == RoleNames.Doctor)
-                {
-                    <label class="span-2"><span>@I18n.T("Doctors Profile *")</span><InputSelect @bind-Value="editor.DoctorProfileID"><option value="">@I18n.T("Select doctor profile")</option>@foreach(var doctor in doctors){<option value="@doctor.ID">@doctor.Title @doctor.Name (@doctor.Degree)</option>}</InputSelect></label>
-                }
-                <label class="span-2"><span>@(editor.ID==0 ? I18n.T("Temporary password *", "Temporary password *") : I18n.T("New password (leave blank to keep current)", "New password (leave blank to keep current)"))</span><InputText type="password" @bind-Value="editor.Password" /></label>
-                @if(editor.ID>0){<label class="span-2 inline-check"><InputCheckbox @bind-Value="editor.IsActive" /><span>@I18n.T("Account active", "Account active")</span></label>}
-            </div>
-            <div class="form-actions">
-                <button class="btn btn-primary" type="submit">@(editor.ID==0 ? I18n.T("Create user", "Create user") : I18n.T("Update user", "Update user"))</button>
-                @if(editor.ID>0){<button class="btn btn-secondary" type="button" @onclick="UnlockAsync">@I18n.T("Unlock", "Unlock")</button>}
-                <button class="btn btn-ghost" type="button" @onclick="Reset">@I18n.T("Clear", "Clear")</button>
-            </div>
-        </EditForm>
+        <div class="useradmin-header-actions">
+            <span class="useradmin-stat-pill">
+                <span class="useradmin-stat-dot"></span>
+                @users.Count(u => u.IsActive) / @users.Count @I18n.T("Active Staff", "Active Staff")
+            </span>
+            <button class="btn btn-primary" @onclick="Reset" style="display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-size: 11.5px; font-weight: 700;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                @I18n.T("New User", "New User")
+            </button>
+        </div>
     </div>
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Staff accounts", "Staff accounts")</h2><p>@users.Count @I18n.T("account(s)", "account(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("User", "User")</th>
-                        <th>@I18n.T("Role", "Role")</th>
-                        <th>@I18n.T("Status", "Status")</th>
-                        <th>@I18n.T("Created", "Created")</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var user in users){
-                        <tr>
-                            <td><b>@user.DisplayName</b><br/><small>@($"@{user.UserName} · {user.Email}")</small></td>
-                            <td><span class="pill">@RoleOf(user.Id)</span></td>
-                            <td>@(user.IsActive ? I18n.T("Active", "Active") : I18n.T("Inactive", "Inactive"))</td>
-                            <td>@user.CreatedAt.ToLocalTime().ToString("dd MMM yyyy")</td>
-                            <td><button class="icon-btn" @onclick="()=>SelectAsync(user)">@I18n.T("Edit", "Edit")</button></td>
-                        </tr>
+
+    <!-- Alert Message -->
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @messageClass useradmin-alert">
+            <div class="useradmin-alert-body">
+                <span>@(messageClass == "success" ? "✅" : "⚠️")</span>
+                <span>@message</span>
+            </div>
+            <button type="button" class="useradmin-alert-close" @onclick="() => message = string.Empty" aria-label="Dismiss alert">×</button>
+        </div>
+    }
+
+    <!-- Master Layout: Editor on Left, Directory on Right -->
+    <div class="useradmin-layout">
+        <!-- Editor Panel -->
+        <div class="useradmin-card editor-card">
+            <div class="useradmin-card-header">
+                <div class="useradmin-card-title-group">
+                    <div class="useradmin-card-icon icon-editor">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                    </div>
+                    <div class="useradmin-card-heading">
+                        <h2>@(editor.ID == 0 ? I18n.T("Create Staff Account", "Create Staff Account") : $"{I18n.T("Edit User", "Edit User")}: @{editor.UserName}")</h2>
+                        <small>@(editor.ID == 0 ? I18n.T("Configure account credentials and role", "Configure account credentials and role") : I18n.T("Update profile details and security", "Update profile details and security"))</small>
+                    </div>
+                </div>
+                <span class="@(editor.ID == 0 ? "badge-mode-new" : "badge-mode-edit")">
+                    @(editor.ID == 0 ? I18n.T("NEW", "NEW") : I18n.T("EDITING", "EDITING"))
+                </span>
+            </div>
+
+            <EditForm Model="editor" OnSubmit="SaveAsync">
+                <div class="useradmin-form-body">
+                    <!-- Display Name -->
+                    <div class="useradmin-field">
+                        <div class="useradmin-field-label">
+                            <span>@I18n.T("Display Name", "Display Name") <span class="req">*</span></span>
+                        </div>
+                        <InputText @bind-Value="editor.DisplayName" class="useradmin-input" placeholder="@I18n.T("e.g. Dr. Saydur Rahman", "e.g. Dr. Saydur Rahman")" />
+                    </div>
+
+                    <!-- Username & Email (2 Columns) -->
+                    <div class="useradmin-row-2col">
+                        <div class="useradmin-field">
+                            <div class="useradmin-field-label">
+                                <span>@I18n.T("Username", "Username") <span class="req">*</span></span>
+                            </div>
+                            <InputText @bind-Value="editor.UserName" disabled="@(editor.ID > 0)" class="useradmin-input" placeholder="@I18n.T("e.g. saydur", "e.g. saydur")" />
+                        </div>
+                        <div class="useradmin-field">
+                            <div class="useradmin-field-label">
+                                <span>@I18n.T("Email", "Email")</span>
+                            </div>
+                            <InputText @bind-Value="editor.Email" type="email" class="useradmin-input" placeholder="@I18n.T("user@hospital.com", "user@hospital.com")" />
+                        </div>
+                    </div>
+
+                    <!-- Role Selection -->
+                    <div class="useradmin-field">
+                        <div class="useradmin-field-label">
+                            <span>@I18n.T("System Role", "System Role") <span class="req">*</span></span>
+                        </div>
+                        <InputSelect @bind-Value="editor.Role" class="useradmin-select">
+                            <option value="">@I18n.T("-- Select Operational Role --", "-- Select Operational Role --")</option>
+                            @foreach (var role in RoleNames.All)
+                            {
+                                <option value="@role">@role</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <!-- Doctor Profile Link (Trigger Modal) -->
+                    @if (editor.Role == RoleNames.Doctor)
+                    {
+                        <div class="useradmin-field doctor-link-card">
+                            <div class="useradmin-field-label">
+                                <span style="color: #0f766e; font-weight: 800;">🩺 @I18n.T("Link Doctor Profile", "Link Doctor Profile") <span class="req">*</span></span>
+                            </div>
+
+                            @if (SelectedDoctor != null)
+                            {
+                                <div class="selected-doctor-badge">
+                                    <div class="doc-badge-icon">👨‍⚕️</div>
+                                    <div class="doc-badge-details">
+                                        <strong>@FormatDoctorName(SelectedDoctor)</strong>
+                                        <small>
+                                            @SelectedDoctor.Degree
+                                            @if (!string.IsNullOrWhiteSpace(GetDoctorDept(SelectedDoctor)))
+                                            {
+                                                <span>· @GetDoctorDept(SelectedDoctor)</span>
+                                            }
+                                        </small>
+                                    </div>
+                                    <button type="button" class="btn-doc-change" @onclick="OpenDoctorModal" title="@I18n.T("Change linked doctor")">
+                                        ✏️ @I18n.T("Change", "Change")
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn-select-doctor-trigger" @onclick="OpenDoctorModal">
+                                    <span class="trigger-icon-text">🩺 @I18n.T("Choose Doctor Profile...", "Choose Doctor Profile...")</span>
+                                    <span class="trigger-action-badge"><SearchIcon /> @I18n.T("Search & Select", "Search & Select")</span>
+                                </button>
+                            }
+                        </div>
                     }
-                </tbody>
-            </table>
+
+                    <!-- Password Field with Show/Hide Eye and Auto-Generate Button -->
+                    <div class="useradmin-field">
+                        <div class="useradmin-field-label">
+                            <span>
+                                @(editor.ID == 0 ? I18n.T("Temporary Password", "Temporary Password") : I18n.T("Reset Password", "Reset Password"))
+                                @if (editor.ID == 0) { <span class="req">*</span> }
+                            </span>
+                            @if (editor.ID > 0)
+                            {
+                                <small>@I18n.T("(Leave empty to keep unchanged)", "(Leave empty to keep unchanged)")</small>
+                            }
+                        </div>
+                        <div class="user-password-wrap">
+                            <input type="@(showPassword ? "text" : "password")"
+                                   @bind="editor.Password"
+                                   autocomplete="new-password"
+                                   placeholder="@(editor.ID == 0 ? I18n.T("Enter strong password", "Enter strong password") : I18n.T("Leave empty to keep unchanged", "Leave empty to keep unchanged"))"
+                                   class="user-password-input" />
+                            <div class="user-password-actions">
+                                <button type="button"
+                                        class="btn-toggle-eye"
+                                        @onclick="TogglePasswordVisibility"
+                                        title="@(showPassword ? I18n.T("Hide password", "Hide password") : I18n.T("Show password", "Show password"))"
+                                        aria-label="Toggle password visibility">
+                                    @if (showPassword)
+                                    {
+                                        <!-- Eye-off (crossed eye) -->
+                                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                                        </svg>
+                                    }
+                                    else
+                                    {
+                                        <!-- Eye -->
+                                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                        </svg>
+                                    }
+                                </button>
+                                <button type="button"
+                                        class="btn-quick-generate"
+                                        @onclick="GeneratePassword"
+                                        title="@I18n.T("Generate strong temporary password", "Generate strong temporary password")">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+                                    @I18n.T("Auto", "Auto")
+                                </button>
+                            </div>
+                        </div>
+                        <div class="pass-rules-hint">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                            <span>@I18n.T("Requires uppercase, lowercase, number & symbol (e.g. Pass@1234)", "Requires uppercase, lowercase, number & symbol (e.g. Pass@1234)")</span>
+                        </div>
+                    </div>
+
+                    <!-- Active Toggle (when editing existing account) -->
+                    @if (editor.ID > 0)
+                    {
+                        <div class="user-active-toggle-wrap">
+                            <label class="switch-control">
+                                <input type="checkbox" @bind="editor.IsActive" />
+                                <span class="switch-slider"></span>
+                            </label>
+                            <div class="switch-label-group">
+                                <strong>@(editor.IsActive ? I18n.T("Account is Active", "Account is Active") : I18n.T("Account is Deactivated", "Account is Deactivated"))</strong>
+                                <small>@(editor.IsActive ? I18n.T("User can sign in and perform duties", "User can sign in and perform duties") : I18n.T("Login is currently disabled for this staff account", "Login is currently disabled for this staff account"))</small>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Form Actions -->
+                    <div class="useradmin-form-actions">
+                        <button class="btn-user-submit" type="submit">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            @(editor.ID == 0 ? I18n.T("Create User", "Create User") : I18n.T("Update User", "Update User"))
+                        </button>
+
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn-user-unlock" type="button" @onclick="UnlockAsync" title="@I18n.T("Clear failed login lockouts", "Clear failed login lockouts")">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>
+                                @I18n.T("Unlock", "Unlock")
+                            </button>
+                        }
+
+                        <button class="btn-user-reset" type="button" @onclick="Reset">
+                            @I18n.T("Clear", "Clear")
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Staff Accounts Directory Panel -->
+        <div class="useradmin-card list-card">
+            <div class="useradmin-card-header">
+                <div class="useradmin-card-title-group">
+                    <div class="useradmin-card-icon icon-list">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="9" cy="7" r="4"></circle>
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                        </svg>
+                    </div>
+                    <div class="useradmin-card-heading">
+                        <h2>@I18n.T("Staff Directory", "Staff Directory")</h2>
+                        <small>@FilteredUsers.Count() @I18n.T("account(s) found", "account(s) found")</small>
+                    </div>
+                </div>
+
+                <!-- Search & Filters Toolbar -->
+                <div class="staff-toolbar">
+                    <div class="staff-search-wrap">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text"
+                               @bind="searchTerm"
+                               @bind:event="oninput"
+                               class="staff-search-input"
+                               placeholder="@I18n.T("Search staff name, user, email...", "Search staff name, user, email...")" />
+                        @if (!string.IsNullOrWhiteSpace(searchTerm))
+                        {
+                            <button class="staff-search-clear" @onclick="() => searchTerm = string.Empty">×</button>
+                        }
+                    </div>
+
+                    <select @bind="roleFilter" class="staff-select-filter">
+                        <option value="">@I18n.T("All Roles", "All Roles")</option>
+                        @foreach (var r in RoleNames.All)
+                        {
+                            <option value="@r">@r</option>
+                        }
+                    </select>
+
+                    <select @bind="statusFilter" class="staff-select-filter">
+                        <option value="">@I18n.T("All Status", "All Status")</option>
+                        <option value="active">@I18n.T("Active Only", "Active Only")</option>
+                        <option value="inactive">@I18n.T("Inactive Only", "Inactive Only")</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Table of Staff Accounts -->
+            <div class="useradmin-table-wrap">
+                <table class="useradmin-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Staff Member", "Staff Member")</th>
+                            <th>@I18n.T("Role", "Role")</th>
+                            <th>@I18n.T("Status", "Status")</th>
+                            <th>@I18n.T("Created", "Created")</th>
+                            <th style="text-align: right;">@I18n.T("Action", "Action")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!FilteredUsers.Any())
+                        {
+                            <tr>
+                                <td colspan="5" class="empty-staff-state">
+                                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.5" style="margin-bottom: 8px;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                    <div>@I18n.T("No staff accounts match your search filters.", "No staff accounts match your search filters.")</div>
+                                </td>
+                            </tr>
+                        }
+                        else
+                        {
+                            @foreach (var user in FilteredUsers)
+                            {
+                                var userRole = RoleOf(user.Id);
+                                <tr class="@(editor.ID == user.Id ? "row-selected" : "")">
+                                    <td>
+                                        <div class="user-identity-cell">
+                                            <div class="user-avatar-circle @GetAvatarClass(userRole)">
+                                                @GetInitials(user.DisplayName)
+                                            </div>
+                                            <div class="user-names-group">
+                                                <span class="user-display-name">@user.DisplayName</span>
+                                                <span class="user-sub-meta">
+                                                    <span>@@@user.UserName</span>
+                                                    @if (!string.IsNullOrWhiteSpace(user.Email))
+                                                    {
+                                                        <span>· @user.Email</span>
+                                                    }
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="role-badge @GetRoleBadgeClass(userRole)">
+                                            @userRole
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="user-status-pill @(user.IsActive ? "status-active" : "status-inactive")">
+                                            <span class="status-dot"></span>
+                                            @(user.IsActive ? I18n.T("Active", "Active") : I18n.T("Inactive", "Inactive"))
+                                        </span>
+                                    </td>
+                                    <td class="created-date-cell">
+                                        @user.CreatedAt.ToLocalTime().ToString("dd MMM yyyy")
+                                    </td>
+                                    <td style="text-align: right;">
+                                        <button class="btn-table-edit" @onclick="() => SelectAsync(user)" title="@I18n.T("Edit this staff account", "Edit this staff account")">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                            </svg>
+                                            <span>@I18n.T("Edit", "Edit")</span>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
 
-@code{
-    private UserEditor editor=new(){IsActive=true};private List<AppUser> users=[];private List<DoctorsProfile> doctors=[];private Dictionary<int,string> userRoles=[];private string message=string.Empty;private string messageClass="success";
-    
+@if (isDoctorModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDoctorModal">
+        <div class="doctor-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon">🩺</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Select Doctor Profile", "Select Doctor Profile")</h3>
+                        <small>@I18n.T("Search by name, degree or department to link with user account", "Search by name, degree or department to link with user account")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDoctorModal" title="@I18n.T("Close", "Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="doctorSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search doctor by name, degree, department...", "Search doctor by name, degree, department...")" />
+                    @if (!string.IsNullOrWhiteSpace(doctorSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => doctorSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+            <div class="doctor-modal-list">
+                @if (!FilteredDoctors.Any())
+                {
+                    <div class="doc-modal-empty">@I18n.T("No doctor found matching your search.", "No doctor found matching your search.")</div>
+                }
+                else
+                {
+                    @foreach (var doc in FilteredDoctors.Take(60))
+                    {
+                        var deptName = GetDoctorDept(doc);
+                        <div class="doctor-modal-item @(editor.DoctorProfileID == doc.ID ? "active-selected" : "")"
+                             @onclick="() => SelectDoctor(doc)">
+                            <div class="doctor-modal-item-left">
+                                <div class="doc-modal-avatar">👨‍⚕️</div>
+                                <div class="doc-modal-info">
+                                    <span class="doc-modal-name">@FormatDoctorName(doc)</span>
+                                    <span class="doc-modal-meta">
+                                        <span>@doc.Degree</span>
+                                        @if (!string.IsNullOrWhiteSpace(deptName))
+                                        {
+                                            <span class="doc-modal-dept-badge">@deptName</span>
+                                        }
+                                    </span>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-modal-choose">
+                                @(editor.DoctorProfileID == doc.ID ? "✓ " + I18n.T("Selected", "Selected") : I18n.T("Select", "Select"))
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@FilteredDoctors.Count() @I18n.T("doctors found", "doctors found")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseDoctorModal">@I18n.T("Cancel", "Cancel")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private UserEditor editor = new() { IsActive = true };
+    private List<AppUser> users = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<int, string> userRoles = [];
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool showPassword = false;
+
+    // Filters
+    private string searchTerm = string.Empty;
+    private string roleFilter = string.Empty;
+    private string statusFilter = string.Empty;
+
+    // Doctor Profile Picker modal state
+    private string doctorSearchQuery = string.Empty;
+    private bool isDoctorModalOpen = false;
+    private Dictionary<int, string> departmentMap = new();
+
+    private DoctorsProfile? SelectedDoctor => doctors.FirstOrDefault(d => d.ID == editor.DoctorProfileID);
+
+    private string FormatDoctorName(DoctorsProfile? doc) =>
+        doc != null ? DoctorNameFormatter.FormatFullName(doc.Title, doc.Name) : string.Empty;
+
+    private string GetDoctorDept(DoctorsProfile? d) =>
+        d?.Department != null && departmentMap.TryGetValue(d.Department.Value, out var deptName) ? deptName : string.Empty;
+
+    private IEnumerable<DoctorsProfile> FilteredDoctors => string.IsNullOrWhiteSpace(doctorSearchQuery)
+        ? doctors
+        : doctors.Where(d =>
+        {
+            var term = doctorSearchQuery.Trim();
+            var fullName = FormatDoctorName(d);
+            var dept = GetDoctorDept(d);
+            return fullName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (d.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (d.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (d.Degree?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || dept.Contains(term, StringComparison.OrdinalIgnoreCase);
+        });
+
+    private void OpenDoctorModal()
+    {
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = true;
+    }
+
+    private void CloseDoctorModal()
+    {
+        isDoctorModalOpen = false;
+    }
+
+    private void SelectDoctor(DoctorsProfile doc)
+    {
+        editor.DoctorProfileID = doc.ID;
+        isDoctorModalOpen = false;
+        doctorSearchQuery = string.Empty;
+    }
+
+    private void ClearSelectedDoctor()
+    {
+        editor.DoctorProfileID = null;
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = false;
+    }
+
+    private IEnumerable<AppUser> FilteredUsers => users.Where(u =>
+    {
+        var role = RoleOf(u.Id);
+        if (!string.IsNullOrWhiteSpace(roleFilter) && role != roleFilter) return false;
+        if (statusFilter == "active" && !u.IsActive) return false;
+        if (statusFilter == "inactive" && u.IsActive) return false;
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var term = searchTerm.Trim();
+            return (u.DisplayName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (u.UserName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (u.Email?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                || role.Contains(term, StringComparison.OrdinalIgnoreCase);
+        }
+        return true;
+    });
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        await using(var db=await DbFactory.CreateDbContextAsync()){doctors=await db.Doctors.AsNoTracking().Where(x=>x.Name!=null).OrderBy(x=>x.Name).ToListAsync();}
+        await using (var db = await DbFactory.CreateDbContextAsync())
+        {
+            doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).OrderBy(x => x.Name).ToListAsync();
+            foreach (var doc in doctors)
+            {
+                doc.Title = DoctorNameFormatter.Sanitize(doc.Title);
+                doc.Name = DoctorNameFormatter.Sanitize(doc.Name);
+            }
+            departmentMap = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.ID, d => d.Name);
+        }
         await LoadAsync();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
     public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
-    private async Task LoadAsync(){users=await UserManager.Users.AsNoTracking().OrderBy(x=>x.DisplayName).ToListAsync();userRoles=new();foreach(var user in users){userRoles[user.Id]=(await UserManager.GetRolesAsync(user)).FirstOrDefault()??"No role";}}
+    private async Task LoadAsync()
+    {
+        users = await UserManager.Users.AsNoTracking().OrderBy(x => x.DisplayName).ToListAsync();
+        userRoles = new();
+        foreach (var user in users)
+        {
+            userRoles[user.Id] = (await UserManager.GetRolesAsync(user)).FirstOrDefault() ?? "No role";
+        }
+    }
+
+    private void TogglePasswordVisibility()
+    {
+        showPassword = !showPassword;
+    }
+
+    private void GeneratePassword()
+    {
+        var rng = new Random();
+        int num = rng.Next(1000, 9999);
+        string[] prefixes = ["Hpm", "Delta", "Medic", "Care", "Prime"];
+        string prefix = prefixes[rng.Next(prefixes.Length)];
+        char[] symbols = ['@', '#', '$', '!'];
+        char symbol = symbols[rng.Next(symbols.Length)];
+        editor.Password = $"{prefix}{symbol}{num}*";
+        showPassword = true;
+    }
+
     private async Task SaveAsync()
     {
-        if(string.IsNullOrWhiteSpace(editor.DisplayName)||string.IsNullOrWhiteSpace(editor.UserName)||string.IsNullOrWhiteSpace(editor.Role)){Fail(I18n.IsBangla ? "নাম, ইউজারনেম এবং রোল আবশ্যক।" : "Display name, username and role are required.");return;}
-        if(!RoleNames.All.Contains(editor.Role)){Fail(I18n.IsBangla ? "সঠিক রোল নির্বাচন করুন।" : "Select a valid role.");return;}
-        if(editor.ID==0)
+        if (string.IsNullOrWhiteSpace(editor.DisplayName) || string.IsNullOrWhiteSpace(editor.UserName) || string.IsNullOrWhiteSpace(editor.Role))
         {
-            if(string.IsNullOrWhiteSpace(editor.Password)){Fail(I18n.IsBangla ? "অস্থায়ী পাসওয়ার্ড আবশ্যক।" : "A temporary password is required.");return;}
-            var actor=await CurrentActorAsync();
-            var result=await UserAdministration.CreateAsync(ToCommand(),actor.Id,actor.Name);
-            if(!result.Succeeded){Fail(result.Error);return;}
-            Success(I18n.IsBangla ? "ইউজার তৈরি হয়েছে। প্রথমবার লগইনে পাসওয়ার্ড পরিবর্তন করতে হবে।" : "Staff account created. The user must change the temporary password at first sign-in.");
+            Fail(I18n.IsBangla ? "নাম, ইউজারনেম এবং রোল আবশ্যক।" : "Display name, username and role are required.");
+            return;
+        }
+
+        if (!RoleNames.All.Contains(editor.Role))
+        {
+            Fail(I18n.IsBangla ? "সঠিক রোল নির্বাচন করুন।" : "Select a valid role.");
+            return;
+        }
+
+        if (editor.ID == 0)
+        {
+            if (string.IsNullOrWhiteSpace(editor.Password))
+            {
+                Fail(I18n.IsBangla ? "অস্থায়ী পাসওয়ার্ড আবশ্যক।" : "A temporary password is required.");
+                return;
+            }
+
+            var actor = await CurrentActorAsync();
+            var result = await UserAdministration.CreateAsync(ToCommand(), actor.Id, actor.Name);
+            if (!result.Succeeded)
+            {
+                Fail(result.Error);
+                return;
+            }
+            Success(I18n.IsBangla ? "ইউজার অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।" : "Staff account created successfully. The user must change temporary password at first sign-in.");
         }
         else
         {
-            var actor=await CurrentActorAsync();
-            var result=await UserAdministration.UpdateAsync(ToCommand(),actor.Id,actor.Name);
-            if(!result.Succeeded){Fail(result.Error);return;}
-            Success(string.IsNullOrWhiteSpace(editor.Password)? (I18n.IsBangla ? "ইউজার আপডেট হয়েছে।" : "Staff account updated.") : (I18n.IsBangla ? "ইউজার আপডেট হয়েছে। পরবর্তী লগইনে পাসওয়ার্ড পরিবর্তন করতে হবে।" : "Staff account updated. The reset password must be changed at next sign-in."));
+            var actor = await CurrentActorAsync();
+            var result = await UserAdministration.UpdateAsync(ToCommand(), actor.Id, actor.Name);
+            if (!result.Succeeded)
+            {
+                Fail(result.Error);
+                return;
+            }
+            Success(string.IsNullOrWhiteSpace(editor.Password)
+                ? (I18n.IsBangla ? "ইউজার অ্যাকাউন্ট আপডেট হয়েছে।" : "Staff account updated successfully.")
+                : (I18n.IsBangla ? "ইউজার আপডেট এবং পাসওয়ার্ড রিসেট হয়েছে।" : "Staff account updated and password reset successfully."));
         }
-        ResetEditor();await LoadAsync();
+
+        ResetEditor();
+        await LoadAsync();
     }
-    private async Task SelectAsync(AppUser user){editor=new UserEditor{ID=user.Id,DisplayName=user.DisplayName,UserName=user.UserName??"",Email=user.Email,Role=RoleOf(user.Id),IsActive=user.IsActive,DoctorProfileID=user.DoctorProfileID};message=string.Empty;await Task.CompletedTask;}
-    private async Task UnlockAsync(){var actor=await CurrentActorAsync();var result=await UserAdministration.UnlockAsync(editor.ID,actor.Id,actor.Name);if(!result.Succeeded){Fail(result.Error);return;}Success(I18n.IsBangla ? "অ্যাকাউন্ট আনলক করা হয়েছে।" : "Account unlocked.");await LoadAsync();}
-    private async Task<(int? Id,string Name)> CurrentActorAsync(){var state=await AuthStateProvider.GetAuthenticationStateAsync();int? id=int.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,out var value)?value:null;return(id,state.User.Identity?.Name??"system");}
-    private UserAdminCommand ToCommand()=>new(editor.ID,editor.DisplayName,editor.UserName,editor.Email,editor.Role,editor.Password,editor.IsActive,editor.Role==RoleNames.Doctor?editor.DoctorProfileID:null);
-    private string RoleOf(int id)=>userRoles.TryGetValue(id,out var role)?role:"No role";private void Reset(){ResetEditor();message=string.Empty;}private void ResetEditor()=>editor=new(){IsActive=true};private void Success(string t){messageClass="success";message=t;}private void Fail(string t){messageClass="danger";message=t;}
-    private sealed class UserEditor{public int ID{get;set;}public string DisplayName{get;set;}="";public string UserName{get;set;}="";public string? Email{get;set;}public string Role{get;set;}="";public string Password{get;set;}="";public bool IsActive{get;set;}=true;public int? DoctorProfileID{get;set;}}
+
+    private async Task SelectAsync(AppUser user)
+    {
+        editor = new UserEditor
+        {
+            ID = user.Id,
+            DisplayName = user.DisplayName,
+            UserName = user.UserName ?? "",
+            Email = user.Email,
+            Role = RoleOf(user.Id),
+            IsActive = user.IsActive,
+            DoctorProfileID = user.DoctorProfileID,
+            Password = string.Empty
+        };
+        showPassword = false;
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = false;
+        message = string.Empty;
+        await Task.CompletedTask;
+    }
+
+    private async Task UnlockAsync()
+    {
+        var actor = await CurrentActorAsync();
+        var result = await UserAdministration.UnlockAsync(editor.ID, actor.Id, actor.Name);
+        if (!result.Succeeded)
+        {
+            Fail(result.Error);
+            return;
+        }
+        Success(I18n.IsBangla ? "অ্যাকাউন্ট আনলক করা হয়েছে।" : "Account unlocked successfully.");
+        await LoadAsync();
+    }
+
+    private async Task<(int? Id, string Name)> CurrentActorAsync()
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        int? id = int.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var value) ? value : null;
+        return (id, state.User.Identity?.Name ?? "system");
+    }
+
+    private UserAdminCommand ToCommand() => new(
+        editor.ID,
+        editor.DisplayName,
+        editor.UserName,
+        editor.Email,
+        editor.Role,
+        editor.Password,
+        editor.IsActive,
+        editor.Role == RoleNames.Doctor ? editor.DoctorProfileID : null
+    );
+
+    private string RoleOf(int id) => userRoles.TryGetValue(id, out var role) ? role : "No role";
+
+    private void Reset()
+    {
+        ResetEditor();
+        message = string.Empty;
+        showPassword = false;
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = false;
+    }
+
+    private void ResetEditor() => editor = new() { IsActive = true, Password = string.Empty };
+
+    private void Success(string t)
+    {
+        messageClass = "success";
+        message = t;
+    }
+
+    private void Fail(string t)
+    {
+        messageClass = "danger";
+        message = t;
+    }
+
+    private string GetInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "U";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) return parts[0].Length >= 2 ? parts[0][..2].ToUpperInvariant() : parts[0].ToUpperInvariant();
+        return ($"{parts[0][0]}{parts[^1][0]}").ToUpperInvariant();
+    }
+
+    private string GetRoleBadgeClass(string role) => role switch
+    {
+        RoleNames.Administrator => "role-badge-admin",
+        RoleNames.Doctor => "role-badge-doctor",
+        RoleNames.Reception => "role-badge-reception",
+        RoleNames.Cashier => "role-badge-cashier",
+        RoleNames.Nurse => "role-badge-nurse",
+        RoleNames.LabTechnician => "role-badge-lab",
+        RoleNames.PharmacyOperator => "role-badge-pharmacy",
+        RoleNames.Authorizer => "role-badge-authorizer",
+        _ => "role-badge-default"
+    };
+
+    private string GetAvatarClass(string role) => role switch
+    {
+        RoleNames.Administrator => "avatar-admin",
+        RoleNames.Doctor => "avatar-doctor",
+        RoleNames.Reception => "avatar-reception",
+        RoleNames.Cashier => "avatar-cashier",
+        RoleNames.Nurse => "avatar-nurse",
+        RoleNames.LabTechnician => "avatar-lab",
+        RoleNames.PharmacyOperator => "avatar-pharmacy",
+        RoleNames.Authorizer => "avatar-authorizer",
+        _ => "avatar-default"
+    };
+
+    private sealed class UserEditor
+    {
+        public int ID { get; set; }
+        public string DisplayName { get; set; } = "";
+        public string UserName { get; set; } = "";
+        public string? Email { get; set; }
+        public string Role { get; set; } = "";
+        public string Password { get; set; } = "";
+        public bool IsActive { get; set; } = true;
+        public int? DoctorProfileID { get; set; }
+    }
 }

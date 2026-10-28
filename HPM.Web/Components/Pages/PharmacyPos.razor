@@ -128,30 +128,125 @@
                             </div>
                         </div>
 
-                        <!-- Add Medicine Row -->
-                        <div class="billing-line-editor" style="grid-template-columns: minmax(180px, 1.8fr) 85px 85px auto;">
-                            <label>
-                                <span>@I18n.T("Medicine / Product") <span class="req">*</span></span>
-                                <select class="form-select form-select-sm" @bind="lineMedicineId" @bind:after="MedicineChanged">
-                                    <option value="0">@I18n.T("Select Medicine...")</option>
-                                    @foreach (var x in medicines)
+                        <!-- Cashier Hotkeys Strip -->
+                        <div class="pos-hotkeys-strip">
+                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F1</span> @I18n.T("Search Med")</span>
+                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F4</span> @I18n.T("Switch OPD/IPD")</span>
+                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F9</span> @I18n.T("Tender & Print")</span>
+                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">Esc</span> @I18n.T("Reset Form")</span>
+                        </div>
+
+                        <!-- Add Medicine Row with Autocomplete Typeahead -->
+                        <div class="billing-line-editor" style="grid-template-columns: minmax(210px, 2.2fr) 75px 85px auto; gap: 8px;">
+                            <div class="pos-typeahead-wrapper">
+                                <span style="font-size:11px; font-weight:700; color:#334155; display:block; margin-bottom:2px;">
+                                    @I18n.T("Medicine / Brand / Generic") <span class="req">*</span>
+                                </span>
+                                <div style="position:relative;">
+                                    <input type="text"
+                                           class="form-control form-control-sm"
+                                           placeholder="@I18n.T("Type medicine or generic name...")"
+                                           @bind="medSearchQuery"
+                                           @bind:event="oninput"
+                                           @onkeydown="HandleMedSearchKeyDown"
+                                           @onfocus="() => showMedSuggestions = true"
+                                           autocomplete="off" />
+                                    @if (!string.IsNullOrWhiteSpace(medSearchQuery))
                                     {
-                                        <option value="@x.ID">@x.Name (@I18n.T("Stock"): @Available(x.ID).ToString("N2"))</option>
+                                        <button type="button" class="btn btn-ghost" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); padding:0 5px; font-size:10px;" @onclick="ClearMedSearch">✕</button>
                                     }
-                                </select>
-                            </label>
+                                </div>
+
+                                @if (showMedSuggestions && FilteredMedicines.Any())
+                                {
+                                    <div class="pos-med-dropdown">
+                                        @for (var i = 0; i < FilteredMedicines.Count; i++)
+                                        {
+                                            var m = FilteredMedicines[i];
+                                            var isHl = i == highlightedMedIndex;
+                                            var stockAvail = Available(m.ID);
+                                            var hasStock = stockAvail > 0;
+                                            <div class="pos-med-item @(isHl ? "highlighted" : "")"
+                                                 @onmousedown:preventDefault
+                                                 @onclick="() => SelectMedicine(m)">
+                                                <div>
+                                                    <div class="pos-med-name">@m.Name</div>
+                                                    <div class="pos-med-sub">
+                                                        @if (m.TypeID.HasValue && typeNames.TryGetValue(m.TypeID.Value, out var t))
+                                                        {
+                                                            <span class="rx-type-pill">@t</span>
+                                                        }
+                                                        @if (m.GenericID.HasValue && genericNames.TryGetValue(m.GenericID.Value, out var g))
+                                                        {
+                                                            <span>(@g)</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                                <div style="text-align:right;">
+                                                    <span class="pos-stock-badge @(hasStock ? "in-stock" : "out-stock")">
+                                                        @(hasStock ? $"{I18n.T("Stock")}: {stockAvail:N0}" : I18n.T("Out of Stock"))
+                                                    </span>
+                                                    <div style="font-size:11px; font-weight:700; color:#0369a1; margin-top:2px;">
+                                                        @I18n.FormatCurrency(m.SaleRate ?? 0)
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
                             <label>
-                                <span>@I18n.T("Quantity") <span class="req">*</span></span>
+                                <span>@I18n.T("Qty") <span class="req">*</span></span>
                                 <InputNumber class="form-control form-control-sm" @bind-Value="lineQuantity" />
                             </label>
                             <label>
-                                <span>@I18n.T("Sale Rate")</span>
+                                <span>@I18n.T("Rate")</span>
                                 <InputNumber class="form-control form-control-sm" @bind-Value="lineRate" />
                             </label>
-                            <button type="button" class="btn btn-secondary btn-sm" style="height: 28px; padding: 0 10px;" @onclick="AddLine">
-                                + @I18n.T("Add")
-                            </button>
+                            <div style="display:flex; gap:4px; align-items:flex-end;">
+                                <button type="button" class="btn btn-secondary btn-sm" style="height: 28px; padding: 0 10px;" @onclick="AddLine">
+                                    + @I18n.T("Add")
+                                </button>
+                                @if (selectedMedObj != null && selectedMedObj.GenericID.HasValue && genericAlternatives.Count > 0)
+                                {
+                                    <button type="button" class="btn btn-ghost btn-sm" style="height: 28px; padding: 0 6px; font-size: 11px; color:#b45309;" title="@I18n.T("Generic Alternatives")" @onclick="() => showGenericAlternatives = !showGenericAlternatives">
+                                        🧬 @I18n.T("Alt") (@genericAlternatives.Count)
+                                    </button>
+                                }
+                            </div>
                         </div>
+
+                        @if (showGenericAlternatives && genericAlternatives.Count > 0)
+                        {
+                            <!-- Generic Alternatives Assistant Panel -->
+                            <div class="pos-generic-alt-box">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                    <span style="font-size:11px; font-weight:800; color:#92400e;">
+                                        🧬 @I18n.T("In-Stock Generic Alternatives") (@(selectedMedObj?.GenericID.HasValue == true && genericNames.TryGetValue(selectedMedObj.GenericID.Value, out var gen) ? gen : "Same Generic")):
+                                    </span>
+                                    <button type="button" class="btn-clear" style="font-size:11px; border:none; background:transparent; cursor:pointer;" @onclick="() => showGenericAlternatives = false">✕</button>
+                                </div>
+                                <div style="display:flex; flex-direction:column; gap:4px;">
+                                    @foreach (var alt in genericAlternatives.Take(4))
+                                    {
+                                        <div class="pos-alt-item">
+                                            <div>
+                                                <strong style="font-size:12px; color:#0f172a;">@alt.Name</strong>
+                                                <span style="margin-left:6px; font-size:11px; color:#15803d; font-weight:700;">
+                                                    • @I18n.T("In Stock"): @Available(alt.ID).ToString("N0")
+                                                </span>
+                                                <span style="margin-left:6px; font-size:11px; color:#475569;">
+                                                    • @I18n.FormatCurrency(alt.SaleRate ?? 0)
+                                                </span>
+                                            </div>
+                                            <button type="button" class="btn btn-secondary btn-sm" style="padding:1px 8px; font-size:11px;" @onclick="() => SelectMedicine(alt)">
+                                                @I18n.T("Select Alternative")
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
                     }
 
                     <!-- Cart Data Table -->
@@ -181,6 +276,10 @@
                                     <div style="color: #64748b; font-size: 10.5px;">@(i + 1)</div>
                                     <div style="font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                                         @MedicineName(x.ServiceID)
+                                        @if (!string.IsNullOrWhiteSpace(x.BatchNo))
+                                        {
+                                            <span style="font-size:10px; color:#64748b; margin-left:4px; font-weight:normal;">[B: @x.BatchNo]</span>
+                                        }
                                     </div>
                                     <div style="text-align: right; color: #64748b;">@Available(x.ServiceID).ToString("N2")</div>
                                     <div style="text-align: right; font-weight: 700;">@x.Quantity</div>
@@ -197,7 +296,7 @@
                         </div>
                     </div>
 
-                    <!-- Bottom Summary -->
+                    <!-- Bottom Summary with Tender Cash & Change Due Calculator -->
                     <div class="billing-bottom-summary align-end" style="margin-top: auto; padding-top: 4px;">
                         <div class="billing-totals-compact">
                             <div>
@@ -213,6 +312,24 @@
                                 <strong>@I18n.FormatCurrency(Net)</strong>
                             </div>
                         </div>
+
+                        <!-- Tender Cash & Change Due Calculator -->
+                        <div class="tender-calculator-wrap">
+                            <label style="display:flex; align-items:center; gap:6px; margin:0;">
+                                <span style="font-size:11px; font-weight:700; color:#166534; white-space:nowrap;">💵 @I18n.T("Cash Received"):</span>
+                                <InputNumber class="form-control form-control-sm" style="width:85px; height:26px; font-weight:800; color:#166534;" @bind-Value="tenderedAmount" />
+                            </label>
+                            <div class="quick-cash-chips">
+                                <button type="button" class="quick-cash-chip" @onclick="SetExactCash">@I18n.T("Exact")</button>
+                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(100)">৳100</button>
+                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(500)">৳500</button>
+                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(1000)">৳1000</button>
+                            </div>
+                            <div style="font-size:12px; font-weight:800; color:@(ChangeDue > 0 ? "#059669" : "#64748b"); margin-left:auto;">
+                                <span>@I18n.T("Change to Return"):</span>
+                                <strong style="font-size:13px; color:#059669; margin-left:4px;">@I18n.FormatCurrency(ChangeDue)</strong>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -221,14 +338,19 @@
                     <div>
                         @if (savedMemo != null)
                         {
-                            <span class="text-success fw-bold" style="font-size: 12px;">✓ @I18n.T("Sale memo finalized & accounts posted")</span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span class="text-success fw-bold" style="font-size: 12px;">✓ @I18n.T("Sale memo finalized & accounts posted")</span>
+                                <span class="badge" style="background:#e0f2fe; color:#0369a1; font-size:10px;">
+                                    Format: @(isThermalPrint ? "80mm Roll" : "A4/A5 Slip")
+                                </span>
+                            </div>
                         }
                         else
                         {
                             <span class="text-muted" style="font-size: 11.5px;">@lines.Count @I18n.T("item(s) in cart")</span>
                         }
                     </div>
-                    <div style="display: flex; gap: 8px;">
+                    <div style="display: flex; gap: 8px; align-items:center;">
                         @if (savedMemo == null)
                         {
                             <button class="btn btn-primary btn-sm" @onclick="PostAsync" disabled="@isSaving">
@@ -241,8 +363,16 @@
                         }
                         else
                         {
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button type="button" class="btn @(isThermalPrint ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 8px; font-size:11px;" @onclick="() => isThermalPrint = true">
+                                    🖨️ 80mm Roll
+                                </button>
+                                <button type="button" class="btn @(!isThermalPrint ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 8px; font-size:11px;" @onclick="() => isThermalPrint = false">
+                                    📄 A4/A5 Slip
+                                </button>
+                            </div>
                             <button class="btn btn-secondary btn-sm" @onclick="PrintAsync">
-                                🖨 @I18n.T("Print Invoice")
+                                🖨 @(isThermalPrint ? I18n.T("Print 80mm Receipt") : I18n.T("Print Invoice"))
                             </button>
                             <button class="btn btn-primary btn-sm" @onclick="Reset">
                                 + @I18n.T("New Sale")
@@ -262,7 +392,7 @@
 
             <!-- Queue Search / Scanner -->
             <div class="scanner-search-group" style="margin: 6px 10px; padding: 3px 8px;">
-                <span class="scanner-icon" title="Scan or search memo">🔍</span>
+                <span class="scanner-icon" title="Scan or search memo"><SearchIcon /></span>
                 <input type="text"
                        class="scanner-input"
                        placeholder="@I18n.T("Scan / Search Memo # (PH-XXXX) or Customer...")"
@@ -316,7 +446,91 @@
 
 @if (savedMemo != null)
 {
-    <div id="pharmacy-sale-print" class="print-sheet panel print-document">
+    <!-- 80mm POS Thermal Receipt -->
+    <div id="pharmacy-thermal-print" class="pos-receipt-80mm" style="@(isThermalPrint ? "" : "display:none;")">
+        <div class="pos-thermal-header">
+            <div class="pos-thermal-title">@Branding.HospitalName</div>
+            <div style="font-size:10px; font-weight:700;">@I18n.T("PHARMACY CASH MEMO")</div>
+            <div class="pos-thermal-meta">
+                <div><b>@($"MEMO: #PH-{savedMemo.ID}")</b></div>
+                <div>@savedMemo.TransDate.ToString("dd/MM/yyyy hh:mm tt")</div>
+                <div>@I18n.T("Patient"): @savedMemo.Name</div>
+                @if (!string.IsNullOrWhiteSpace(savedMemo.Contact))
+                {
+                    <div>@I18n.T("Contact"): @savedMemo.Contact</div>
+                }
+                <div>@I18n.T("Type"): @(savedMemo.PatientType == "2" ? $"IPD ({savedMemo.RegNo})" : "OPD Walk-in")</div>
+            </div>
+        </div>
+
+        <table class="pos-thermal-table">
+            <thead>
+                <tr>
+                    <th style="width:48%;">@I18n.T("Item / Batch")</th>
+                    <th style="text-align:right; width:16%;">@I18n.T("Qty")</th>
+                    <th style="text-align:right; width:18%;">@I18n.T("Rate")</th>
+                    <th style="text-align:right; width:18%;">@I18n.T("Total")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in lines)
+                {
+                    <tr>
+                        <td>
+                            <b>@MedicineName(x.ServiceID)</b>
+                            @if (!string.IsNullOrWhiteSpace(x.BatchNo) || x.ExpireDate.HasValue)
+                            {
+                                <div style="font-size:9px; color:#333;">
+                                    @(!string.IsNullOrWhiteSpace(x.BatchNo) ? $"B:{x.BatchNo} " : "")
+                                    @(x.ExpireDate.HasValue ? $"E:{x.ExpireDate.Value:MM/yy}" : "")
+                                </div>
+                            }
+                        </td>
+                        <td style="text-align:right;">@x.Quantity</td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Rate)</td>
+                        <td style="text-align:right; font-weight:700;">@I18n.FormatCurrency(x.Total)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="pos-thermal-summary">
+            <div class="pos-thermal-row">
+                <span>@I18n.T("Gross Total"):</span>
+                <span>@I18n.FormatCurrency(savedMemo.Total ?? Gross)</span>
+            </div>
+            @if ((savedMemo.Discount ?? 0) > 0)
+            {
+                <div class="pos-thermal-row">
+                    <span>@I18n.T("Discount"):</span>
+                    <span>-@I18n.FormatCurrency(savedMemo.Discount ?? 0)</span>
+                </div>
+            }
+            <div class="pos-thermal-row grand">
+                <span>@I18n.T("Net Payable"):</span>
+                <span>@I18n.FormatCurrency((savedMemo.Total ?? 0) - (savedMemo.Discount ?? 0))</span>
+            </div>
+            @if (tenderedAmount.HasValue && tenderedAmount.Value > 0)
+            {
+                <div class="pos-thermal-row" style="margin-top:2px;">
+                    <span>@I18n.T("Cash Paid"):</span>
+                    <span>@I18n.FormatCurrency(tenderedAmount.Value)</span>
+                </div>
+                <div class="pos-thermal-row">
+                    <span>@I18n.T("Change"):</span>
+                    <span>@I18n.FormatCurrency(ChangeDue)</span>
+                </div>
+            }
+        </div>
+
+        <div class="pos-thermal-footer">
+            <div>@I18n.T("Medicines once sold cannot be returned without original cash memo.")</div>
+            <div style="margin-top:4px; font-weight:700;">*** @I18n.T("Thank you & Get Well Soon") ***</div>
+        </div>
+    </div>
+
+    <!-- Standard A4/A5 Print Document -->
+    <div id="pharmacy-sale-print" class="print-sheet panel print-document" style="@(!isThermalPrint ? "" : "display:none;")">
         <PrintDocumentHeader Title="@I18n.T("Pharmacy Cash Receipt")"
                              SubTitle="@I18n.T("Pharmacy & Dispensary")"
                              DocumentNo="@($"PH-{savedMemo.ID}")"
@@ -332,17 +546,24 @@
         <table class="data-table">
             <thead>
                 <tr>
+                    <th>#</th>
                     <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
+                    <th>@I18n.T("Batch #")</th>
+                    <th>@I18n.T("Expiry Date")</th>
                     <th class="num">@I18n.T("Qty")</th>
                     <th class="num">@I18n.T("Rate")</th>
                     <th class="num">@I18n.T("Total")</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var x in lines)
+                @for (var i = 0; i < lines.Count; i++)
                 {
+                    var x = lines[i];
                     <tr>
-                        <td>@MedicineName(x.ServiceID)</td>
+                        <td>@(i + 1)</td>
+                        <td><b>@MedicineName(x.ServiceID)</b></td>
+                        <td>@(string.IsNullOrWhiteSpace(x.BatchNo) ? "—" : x.BatchNo)</td>
+                        <td>@(x.ExpireDate.HasValue ? x.ExpireDate.Value.ToString("dd MMM yyyy") : "—")</td>
                         <td class="num">@x.Quantity</td>
                         <td class="num">@I18n.FormatCurrency(x.Rate)</td>
                         <td class="num">@I18n.FormatCurrency(x.Total)</td>
@@ -359,6 +580,12 @@
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "prescriptionId")]
+    public long? QueryPrescriptionId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "patientType")]
+    public string? QueryPatientType { get; set; }
+
     private List<Service> medicines = [];
     private List<MedicineStore> stores = [];
     private List<MedicineStoreBalance> stocks = [];
@@ -372,6 +599,17 @@
     private string regNo = "";
     private string posScanQuery = "";
     private string recentScanQuery = "";
+    private string medSearchQuery = "";
+    private bool showMedSuggestions;
+    private int highlightedMedIndex;
+    private Service? selectedMedObj;
+    private Dictionary<int, string> genericNames = [];
+    private Dictionary<int, string> typeNames = [];
+    private decimal? tenderedAmount;
+    private decimal ChangeDue => Math.Max(0, (tenderedAmount ?? 0) - Net);
+    private bool isThermalPrint = true;
+    private bool showGenericAlternatives;
+    private List<Service> genericAlternatives = [];
     private int lineMedicineId;
     private decimal lineQuantity = 1;
     private decimal lineRate;
@@ -384,6 +622,19 @@
     private decimal Gross => lines.Sum(x => x.Total);
     private decimal Net => Math.Max(0, Gross - discount);
 
+    private List<Service> FilteredMedicines
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(medSearchQuery)) return [];
+            var q = medSearchQuery.Trim();
+            return medicines.Where(x =>
+                (x.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.GenericID.HasValue && genericNames.TryGetValue(x.GenericID.Value, out var g) && g.Contains(q, StringComparison.OrdinalIgnoreCase))
+            ).Take(25).ToList();
+        }
+    }
+
     private IEnumerable<PharmacyCashMemo> FilteredRecent => string.IsNullOrWhiteSpace(recentScanQuery)
         ? recent
         : recent.Where(x => x.ID.ToString().Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
@@ -392,11 +643,34 @@
                          || $"PH-{x.ID}".Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase));
 
     private void ClearRecentScan() => recentScanQuery = "";
+    private void ClearMedSearch()
+    {
+        medSearchQuery = "";
+        showMedSuggestions = false;
+        selectedMedObj = null;
+        showGenericAlternatives = false;
+    }
 
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
         await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (QueryPrescriptionId.HasValue && QueryPrescriptionId.Value > 0 && loadedPrescriptionId != QueryPrescriptionId.Value)
+        {
+            prescriptionId = QueryPrescriptionId.Value;
+            await LoadPrescriptionAsync();
+        }
+        if (!string.IsNullOrWhiteSpace(QueryPatientType))
+        {
+            if (QueryPatientType.Equals("IPD", StringComparison.OrdinalIgnoreCase) || QueryPatientType == "2")
+                patientType = "2";
+            else
+                patientType = "1";
+        }
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
@@ -405,6 +679,8 @@
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+        genericNames = await db.GenericGroups.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name ?? "");
+        typeNames = await db.MedicineTypes.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Type ?? "");
         stores = await db.MedicineStores.AsNoTracking().ToListAsync();
         stocks = await db.MedicineStoreBalances.AsNoTracking().Where(x => x.Balance > 0).ToListAsync();
         var today = DateTime.Today;
@@ -413,11 +689,61 @@
 
     private decimal Available(int id) => stocks.Where(x => x.ServiceID == id && x.MedicineStoreID == storeId && x.Balance > 0 && x.ExpireDate >= DateTime.Today).Sum(x => x.Balance) - lines.Where(x => x.ServiceID == id).Sum(x => x.Quantity);
 
-    private void MedicineChanged()
+    private void SelectMedicine(Service m)
     {
-        var m = medicines.FirstOrDefault(x => x.ID == lineMedicineId);
-        lineRate = m?.SaleRate ?? 0;
+        selectedMedObj = m;
+        lineMedicineId = m.ID;
+        lineRate = m.SaleRate ?? 0;
+        lineQuantity = 1;
+        medSearchQuery = m.Name ?? "";
+        showMedSuggestions = false;
+        highlightedMedIndex = 0;
+        CheckGenericAlternatives(m);
     }
+
+    private void CheckGenericAlternatives(Service m)
+    {
+        if (m.GenericID.HasValue && m.GenericID.Value > 0)
+        {
+            var avail = Available(m.ID);
+            genericAlternatives = medicines
+                .Where(x => x.ID != m.ID && x.GenericID == m.GenericID.Value && Available(x.ID) > 0)
+                .OrderByDescending(x => Available(x.ID))
+                .ToList();
+            showGenericAlternatives = avail <= 0 && genericAlternatives.Count > 0;
+        }
+        else
+        {
+            genericAlternatives = [];
+            showGenericAlternatives = false;
+        }
+    }
+
+    private void HandleMedSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "ArrowDown")
+        {
+            if (highlightedMedIndex < FilteredMedicines.Count - 1) highlightedMedIndex++;
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            if (highlightedMedIndex > 0) highlightedMedIndex--;
+        }
+        else if (e.Key == "Enter")
+        {
+            if (FilteredMedicines.Count > 0 && highlightedMedIndex >= 0 && highlightedMedIndex < FilteredMedicines.Count)
+            {
+                SelectMedicine(FilteredMedicines[highlightedMedIndex]);
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            showMedSuggestions = false;
+        }
+    }
+
+    private void SetQuickCash(decimal amount) => tenderedAmount = amount;
+    private void SetExactCash() => tenderedAmount = Net;
 
     private void AddLine()
     {
@@ -434,9 +760,13 @@
         var existing = lines.FirstOrDefault(x => x.ServiceID == lineMedicineId && x.Rate == lineRate && x.PrescriptionMedicineID == null);
         if (existing != null) existing.Quantity += lineQuantity;
         else lines.Add(new SaleLine { ServiceID = lineMedicineId, Quantity = lineQuantity, Rate = lineRate });
+        
         lineMedicineId = 0;
         lineQuantity = 1;
         lineRate = 0;
+        medSearchQuery = "";
+        selectedMedObj = null;
+        showGenericAlternatives = false;
         message = "";
     }
 
@@ -483,12 +813,16 @@
         discount = memo.Discount ?? 0;
         storeId = memo.BufferStore ?? storeId;
         await using var db = await DbFactory.CreateDbContextAsync();
-        var items = await db.PharmacyCashMemoItems.AsNoTracking().Where(x => x.BillNo == memo.ID).OrderBy(x => x.SLNO).ToListAsync();
+        var items = await db.PharmacyCashMemoItems.AsNoTracking()
+            .Include(x => x.BatchAllocations)
+            .Where(x => x.BillNo == memo.ID).OrderBy(x => x.SLNO).ToListAsync();
         lines = items.Select(x => new SaleLine
         {
             ServiceID = x.ServiceID ?? 0,
             Quantity = x.Quantity ?? 0,
             Rate = x.Rate ?? 0,
+            BatchNo = string.Join(", ", x.BatchAllocations.Select(b => b.BatchNo).Where(b => !string.IsNullOrEmpty(b))),
+            ExpireDate = x.BatchAllocations.OrderBy(b => b.ExpireDate).FirstOrDefault()?.ExpireDate,
             PrescriptionMedicineID = null
         }).ToList();
         message = "";
@@ -587,6 +921,10 @@
                     }
                     if (remaining > 0) throw new InvalidOperationException($"Insufficient stock for {med?.Name}.");
                     soldItem.BuyRate = line.Quantity <= 0 ? 0 : Math.Round(totalCost / line.Quantity, 2);
+                    
+                    line.BatchNo = string.Join(", ", soldItem.BatchAllocations.Select(b => b.BatchNo).Where(b => !string.IsNullOrEmpty(b)));
+                    line.ExpireDate = soldItem.BatchAllocations.OrderBy(b => b.ExpireDate).FirstOrDefault()?.ExpireDate;
+                    
                     db.PharmacyCashMemoItems.Add(soldItem);
                     if (admission != null)
                     {
@@ -731,8 +1069,7 @@
         var matchedMed = medicines.FirstOrDefault(x => x.ID.ToString() == raw || (x.Name?.Equals(raw, StringComparison.OrdinalIgnoreCase) ?? false) || (x.Name?.StartsWith(raw, StringComparison.OrdinalIgnoreCase) ?? false));
         if (matchedMed != null)
         {
-            lineMedicineId = matchedMed.ID;
-            MedicineChanged();
+            SelectMedicine(matchedMed);
             lineQuantity = 1;
             AddLine();
             posScanQuery = "";
@@ -744,7 +1081,17 @@
 
     private void ClearPosScan() => posScanQuery = "";
 
-    private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-sale-print");
+    private async Task PrintAsync()
+    {
+        if (isThermalPrint)
+        {
+            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-thermal-print");
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-sale-print");
+        }
+    }
 
     private void Reset()
     {
@@ -756,9 +1103,15 @@
         regNo = "";
         lines = [];
         discount = 0;
+        tenderedAmount = null;
         prescriptionId = null;
         loadedPrescriptionId = null;
         prescriptionLabel = "—";
+        medSearchQuery = "";
+        showMedSuggestions = false;
+        selectedMedObj = null;
+        showGenericAlternatives = false;
+        genericAlternatives = [];
         message = "";
     }
 
@@ -777,6 +1130,9 @@
         public decimal Quantity { get; set; }
         public decimal Rate { get; set; }
         public int? PrescriptionMedicineID { get; set; }
+        public string? BatchNo { get; set; }
+        public DateTime? ExpireDate { get; set; }
         public decimal Total => Quantity * Rate;
     }
 }
+

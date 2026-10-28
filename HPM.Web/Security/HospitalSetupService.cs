@@ -157,55 +157,52 @@ public sealed class HospitalSetupService(
         if (name.Length is < 2 or > 150)
             return HospitalSetupResult.Fail("Hospital name must be between 2 and 150 characters.");
 
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<HpmDbContext>();
-        await EnsureSchemaAsync(db, cancellationToken);
-        HospitalSetupResult? result = null;
         try
         {
-            var strategy = db.Database.CreateExecutionStrategy();
-            await strategy.ExecuteAsync(async () =>
-            {
-                await using var transaction = await db.Database.BeginTransactionAsync(
-                    System.Data.IsolationLevel.ReadCommitted, cancellationToken);
-                var profile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
-                if (profile is null)
+            var profile = await ResilientTransaction.ExecuteScopedAsync(
+                scopeFactory,
+                async (_, db) =>
                 {
-                    profile = new HospitalProfile
+                    await EnsureSchemaAsync(db, cancellationToken);
+                    var savedProfile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
+                    if (savedProfile is null)
                     {
-                        ID = 1,
-                        IsSetupComplete = true,
-                        SetupCompletedAt = DateTime.UtcNow,
-                        SetupBy = updatedBy
-                    };
-                    db.HospitalProfiles.Add(profile);
-                }
+                        savedProfile = new HospitalProfile
+                        {
+                            ID = 1,
+                            IsSetupComplete = true,
+                            SetupCompletedAt = DateTime.UtcNow,
+                            SetupBy = updatedBy
+                        };
+                        db.HospitalProfiles.Add(savedProfile);
+                    }
 
-                profile.HospitalName = name;
-                profile.Tagline = input.Tagline?.Trim() ?? "";
-                profile.Address = input.Address?.Trim() ?? "";
-                profile.CityDistrict = input.CityDistrict?.Trim() ?? "";
-                profile.Phone = input.Phone?.Trim() ?? "";
-                profile.Hotline = input.Hotline?.Trim() ?? "";
-                profile.EmergencyContact = input.EmergencyContact?.Trim() ?? "";
-                profile.Email = input.Email?.Trim() ?? "";
-                profile.Website = input.Website?.Trim() ?? "";
-                profile.LicenseNo = input.LicenseNo?.Trim() ?? "";
-                profile.LogoData = input.LogoData?.Trim() ?? "";
-                profile.LabHeaderDept = input.LabHeaderDept?.Trim() ?? "Department of Pathology, Diagnostic & Laboratory Medicine";
-                profile.ReceiptHeaderNote = input.ReceiptHeaderNote?.Trim() ?? "";
-                profile.ReceiptFooterNote = input.ReceiptFooterNote?.Trim() ?? "Computer generated clinical document. Valid without physical signature.";
-                profile.UpdatedAt = DateTime.UtcNow;
-                profile.UpdatedBy = updatedBy;
+                    savedProfile.HospitalName = name;
+                    savedProfile.Tagline = input.Tagline?.Trim() ?? "";
+                    savedProfile.Address = input.Address?.Trim() ?? "";
+                    savedProfile.CityDistrict = input.CityDistrict?.Trim() ?? "";
+                    savedProfile.Phone = input.Phone?.Trim() ?? "";
+                    savedProfile.Hotline = input.Hotline?.Trim() ?? "";
+                    savedProfile.EmergencyContact = input.EmergencyContact?.Trim() ?? "";
+                    savedProfile.Email = input.Email?.Trim() ?? "";
+                    savedProfile.Website = input.Website?.Trim() ?? "";
+                    savedProfile.LicenseNo = input.LicenseNo?.Trim() ?? "";
+                    savedProfile.LogoData = input.LogoData?.Trim() ?? "";
+                    savedProfile.LabHeaderDept = input.LabHeaderDept?.Trim() ?? "Department of Pathology, Diagnostic & Laboratory Medicine";
+                    savedProfile.ReceiptHeaderNote = input.ReceiptHeaderNote?.Trim() ?? "";
+                    savedProfile.ReceiptFooterNote = input.ReceiptFooterNote?.Trim() ?? "Computer generated clinical document. Valid without physical signature.";
+                    savedProfile.UpdatedAt = DateTime.UtcNow;
+                    savedProfile.UpdatedBy = updatedBy;
 
-                await db.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
+                    await db.SaveChangesAsync(cancellationToken);
+                    return savedProfile;
+                },
+                cancellationToken: cancellationToken);
 
-                ApplyProfile(profile);
-                OnSettingsChanged?.Invoke();
-                result = HospitalSetupResult.Ok();
-            });
-            return result ?? HospitalSetupResult.Ok();
+            ApplyProfile(profile);
+            OnSettingsChanged?.Invoke();
+
+            return HospitalSetupResult.Ok();
         }
         catch (Exception ex)
         {
@@ -229,66 +226,60 @@ public sealed class HospitalSetupService(
         if (!string.Equals(password, confirmPassword, StringComparison.Ordinal))
             return HospitalSetupResult.Fail("Password and confirmation do not match.");
 
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<HpmDbContext>();
-        var users = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
-        var roles = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
-        HospitalSetupResult? result = null;
         try
         {
-            var strategy = db.Database.CreateExecutionStrategy();
-            await strategy.ExecuteAsync(async () =>
-            {
-                await using var transaction = await db.Database.BeginTransactionAsync(
-                    System.Data.IsolationLevel.Serializable, cancellationToken);
-                await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:FirstRunSetup", cancellationToken);
-                var profile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
-                if (profile != null && (profile.IsSetupComplete || await db.Users.AnyAsync(cancellationToken)))
+            var profile = await ResilientTransaction.ExecuteScopedAsync(
+                scopeFactory,
+                async (services, db) =>
                 {
-                    result = HospitalSetupResult.Fail("Hospital setup has already been completed.");
-                    return;
-                }
+                    var users = services.GetRequiredService<UserManager<AppUser>>();
+                    var roles = services.GetRequiredService<RoleManager<IdentityRole<int>>>();
+                    await SqlServerConcurrency.AcquireTransactionLockAsync(db, "HPM:FirstRunSetup", cancellationToken);
+                    var savedProfile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
+                    if (savedProfile != null && (savedProfile.IsSetupComplete || await db.Users.AnyAsync(cancellationToken)))
+                        throw new InvalidOperationException("Hospital setup has already been completed.");
 
-                foreach (var roleName in RoleNames.All)
-                {
-                    if (!await roles.RoleExistsAsync(roleName))
+                    foreach (var roleName in RoleNames.All)
                     {
-                        var roleResult = await roles.CreateAsync(new IdentityRole<int>(roleName));
-                        if (!roleResult.Succeeded) { result = HospitalSetupResult.Fail(Errors(roleResult)); return; }
+                        if (!await roles.RoleExistsAsync(roleName))
+                        {
+                            var roleResult = await roles.CreateAsync(new IdentityRole<int>(roleName));
+                            if (!roleResult.Succeeded) throw new InvalidOperationException(Errors(roleResult));
+                        }
                     }
-                }
 
-                var admin = new AppUser
-                {
-                    UserName = userName,
-                    DisplayName = "Super Administrator",
-                    IsActive = true,
-                    MustChangePassword = false,
-                    CreatedAt = DateTime.UtcNow
-                };
-                var createResult = await users.CreateAsync(admin, password);
-                if (!createResult.Succeeded) { result = HospitalSetupResult.Fail(Errors(createResult)); return; }
-                var roleAssignment = await users.AddToRoleAsync(admin, RoleNames.Administrator);
-                if (!roleAssignment.Succeeded) { result = HospitalSetupResult.Fail(Errors(roleAssignment)); return; }
+                    var admin = new AppUser
+                    {
+                        UserName = userName,
+                        DisplayName = "Super Administrator",
+                        IsActive = true,
+                        MustChangePassword = false,
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    var createResult = await users.CreateAsync(admin, password);
+                    if (!createResult.Succeeded) throw new InvalidOperationException(Errors(createResult));
+                    var roleAssignment = await users.AddToRoleAsync(admin, RoleNames.Administrator);
+                    if (!roleAssignment.Succeeded) throw new InvalidOperationException(Errors(roleAssignment));
 
-                if (profile is null)
-                {
-                    profile = new HospitalProfile { ID = 1 };
-                    db.HospitalProfiles.Add(profile);
-                }
+                    if (savedProfile is null)
+                    {
+                        savedProfile = new HospitalProfile { ID = 1 };
+                        db.HospitalProfiles.Add(savedProfile);
+                    }
 
-                profile.HospitalName = hospitalName;
-                profile.IsSetupComplete = true;
-                profile.SetupCompletedAt = DateTime.UtcNow;
-                profile.SetupBy = userName;
-                await db.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
+                    savedProfile.HospitalName = hospitalName;
+                    savedProfile.IsSetupComplete = true;
+                    savedProfile.SetupCompletedAt = DateTime.UtcNow;
+                    savedProfile.SetupBy = userName;
+                    await db.SaveChangesAsync(cancellationToken);
+                    return savedProfile;
+                },
+                System.Data.IsolationLevel.Serializable,
+                cancellationToken);
 
-                ApplyProfile(profile);
-                OnSettingsChanged?.Invoke();
-                result = HospitalSetupResult.Ok();
-            });
-            return result ?? HospitalSetupResult.Ok();
+            ApplyProfile(profile);
+            OnSettingsChanged?.Invoke();
+            return HospitalSetupResult.Ok();
         }
         catch (Exception ex)
         {
@@ -298,6 +289,98 @@ public sealed class HospitalSetupService(
 
     private static string Errors(IdentityResult result) =>
         string.Join(" ", result.Errors.Select(x => x.Description));
+
+    public string GetAvatarInitials()
+    {
+        var name = HospitalName?.Trim();
+        if (string.IsNullOrWhiteSpace(name) || name.Equals("Hospital", StringComparison.OrdinalIgnoreCase))
+            return "H+";
+
+        var words = name.Split([' ', '-', ',', '.', '&'], StringSplitOptions.RemoveEmptyEntries)
+                        .Where(w => !w.Equals("and", StringComparison.OrdinalIgnoreCase) &&
+                                    !w.Equals("of", StringComparison.OrdinalIgnoreCase) &&
+                                    !w.Equals("the", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+
+        if (words.Length == 0)
+            return "H+";
+
+        if (words.Length == 1)
+        {
+            var word = words[0];
+            return word.Length <= 2 ? word.ToUpperInvariant() : word[..2].ToUpperInvariant();
+        }
+
+        return $"{char.ToUpperInvariant(words[0][0])}{char.ToUpperInvariant(words[1][0])}";
+    }
+
+    public string GetFaviconHref()
+    {
+        if (!string.IsNullOrWhiteSpace(LogoData))
+        {
+            return LogoData;
+        }
+
+        return BuildAvatarSvgDataUri(GetAvatarInitials());
+    }
+
+    public static string BuildAvatarSvgDataUri(string initials)
+    {
+        var svg = BuildAvatarSvg(initials);
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+        return $"data:image/svg+xml;base64,{base64}";
+    }
+
+    public static string BuildAvatarSvg(string initials)
+    {
+        var cleanInitials = System.Security.SecurityElement.Escape(string.IsNullOrWhiteSpace(initials) ? "H+" : initials);
+        var fontSize = cleanInitials.Length > 2 ? "20" : "24";
+        return $"""
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+              <defs>
+                <linearGradient id="hpmFavGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#0284c7" />
+                  <stop offset="100%" stop-color="#0f172a" />
+                </linearGradient>
+              </defs>
+              <rect width="64" height="64" rx="16" fill="url(#hpmFavGrad)" />
+              <rect x="2" y="2" width="60" height="60" rx="14" fill="none" stroke="#38bdf8" stroke-width="2" stroke-opacity="0.5" />
+              <circle cx="50" cy="14" r="5" fill="#10b981" />
+              <text x="32" y="38" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="{fontSize}" font-weight="800" fill="#ffffff" text-anchor="middle" dominant-baseline="central">{cleanInitials}</text>
+            </svg>
+            """;
+    }
+
+    public (byte[] Bytes, string ContentType) GetFaviconBytes()
+    {
+        if (!string.IsNullOrWhiteSpace(LogoData) && LogoData.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var commaIdx = LogoData.IndexOf(',');
+                if (commaIdx > 5)
+                {
+                    var header = LogoData[..commaIdx];
+                    var base64 = LogoData[(commaIdx + 1)..];
+                    var mime = "image/png";
+                    var semiIdx = header.IndexOf(';');
+                    if (semiIdx > 5)
+                    {
+                        mime = header[5..semiIdx];
+                    }
+                    var bytes = Convert.FromBase64String(base64);
+                    return (bytes, mime);
+                }
+            }
+            catch
+            {
+                // Fallback to SVG on parse failure
+            }
+        }
+
+        var svg = BuildAvatarSvg(GetAvatarInitials());
+        return (System.Text.Encoding.UTF8.GetBytes(svg), "image/svg+xml");
+    }
 }
 
 public sealed record HospitalSetupResult(bool Succeeded, string Error)

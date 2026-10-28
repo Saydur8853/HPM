@@ -25,6 +25,20 @@
     <div class="panel-heading">
         <div><h2>@I18n.T("Stock summary", "Stock summary")</h2><p>@I18n.T("Real-time pharmacy warehouse and branch stock balance.", "Real-time pharmacy warehouse and branch stock balance.")</p></div>
     </div>
+    <div style="display:flex; gap:6px; margin: 0 1.25rem 0.75rem 1.25rem; flex-wrap:wrap;">
+        <button type="button" class="btn @(stockFilter == "all" ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 10px; font-size:11px;" @onclick='() => stockFilter = "all"'>
+            @I18n.T("All Stock") (@rows.Count)
+        </button>
+        <button type="button" class="btn @(stockFilter == "low" ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 10px; font-size:11px;" @onclick='() => stockFilter = "low"'>
+            ⚠️ @I18n.T("Low / Re-order Stock") (@rows.Count(x => x.IsLow))
+        </button>
+        <button type="button" class="btn @(stockFilter == "expiring" ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 10px; font-size:11px;" @onclick='() => stockFilter = "expiring"'>
+            ⏰ @I18n.T("Expiring in 90 Days") (@rows.Count(x => x.NearestExpiry.HasValue && x.NearestExpiry.Value <= DateTime.Today.AddDays(90) && x.NearestExpiry.Value >= DateTime.Today))
+        </button>
+        <button type="button" class="btn @(stockFilter == "expired" ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 10px; font-size:11px;" @onclick='() => stockFilter = "expired"'>
+            🛑 @I18n.T("Expired") (@rows.Count(x => x.NearestExpiry.HasValue && x.NearestExpiry.Value < DateTime.Today))
+        </button>
+    </div>
     <div class="scanner-search-group" style="margin: 0 1.25rem 0.75rem 1.25rem;">
         <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
         <input type="text"
@@ -101,8 +115,32 @@
 </div>
 
 @code{
-    private List<Service> medicines=[];private List<MedicineStore> stores=[];private List<MedicineStoreBalance> batches=[];private List<StockRow> rows=[];private string search="";
-    private List<StockRow> FilteredRows=>rows.Where(x=>string.IsNullOrWhiteSpace(search)||x.MedicineName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.StoreName.Contains(search,StringComparison.OrdinalIgnoreCase)||x.BatchSummary.Contains(search,StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<Service> medicines=[];
+    private List<MedicineStore> stores=[];
+    private List<MedicineStoreBalance> batches=[];
+    private List<StockRow> rows=[];
+    private string search="";
+    private string stockFilter="all";
+
+    private List<StockRow> FilteredRows
+    {
+        get
+        {
+            var list = rows.AsEnumerable();
+            if (stockFilter == "low") list = list.Where(x => x.IsLow);
+            else if (stockFilter == "expiring") list = list.Where(x => x.NearestExpiry.HasValue && x.NearestExpiry.Value <= DateTime.Today.AddDays(90) && x.NearestExpiry.Value >= DateTime.Today);
+            else if (stockFilter == "expired") list = list.Where(x => x.NearestExpiry.HasValue && x.NearestExpiry.Value < DateTime.Today);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var q = search.Trim();
+                list = list.Where(x => x.MedicineName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                    || x.StoreName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                    || x.BatchSummary.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+            return list.ToList();
+        }
+    }
     private List<MedicineStoreBalance> FilteredBatches=>batches.Where(x=>string.IsNullOrWhiteSpace(search)||MedicineName(x.ServiceID).Contains(search,StringComparison.OrdinalIgnoreCase)||StoreName(x.MedicineStoreID).Contains(search,StringComparison.OrdinalIgnoreCase)||(x.BatchNo?.Contains(search,StringComparison.OrdinalIgnoreCase)??false)).OrderBy(x=>x.ExpireDate).ToList();
     
     protected override async Task OnInitializedAsync()

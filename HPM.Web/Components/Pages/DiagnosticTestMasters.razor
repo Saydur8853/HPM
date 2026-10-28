@@ -1,0 +1,220 @@
+@page "/diagnostic/test-masters"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>@I18n.T("Diagnostic Test Master") | @Branding.HospitalName</PageTitle>
+
+<div class="diagnostic-test-master-page">
+    <div class="diagnostic-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title"><span>🧪</span><span>@I18n.T("Diagnostic Test Master")</span></h1>
+            <span class="tickets-count-pill">@FilteredServices.Count() @I18n.T("Tests")</span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">@message</span>
+            }
+        </div>
+    </div>
+
+    <div class="dtm-tabs" role="tablist" aria-label="@I18n.T("Diagnostic test types")">
+        <button type="button" class="dtm-tab @(activeGroup == "pathology" ? "active pathology" : "")" @onclick='() => SwitchGroup("pathology")'>
+            <span>🔬</span>
+            <span><strong>@I18n.T("Pathology Tests")</strong><small>@PathologyServices.Count @I18n.T("items")</small></span>
+        </button>
+        <button type="button" class="dtm-tab @(activeGroup == "imaging" ? "active imaging" : "")" @onclick='() => SwitchGroup("imaging")'>
+            <span>🩻</span>
+            <span><strong>@I18n.T("Imaging Tests")</strong><small>@ImagingServices.Count @I18n.T("items")</small></span>
+        </button>
+    </div>
+
+    <div class="dtm-workspace">
+        <section class="dtm-form-card">
+            <div class="dtm-card-header">
+                <div>
+                    <h2>@(editor.ID == 0 ? I18n.T("Add New Test") : I18n.T("Edit Test"))</h2>
+                    <p>@(activeGroup == "pathology" ? I18n.T("Pathology and laboratory catalogue") : I18n.T("Imaging and diagnostic procedure catalogue"))</p>
+                </div>
+                @if (editor.ID > 0) { <span class="diagnostic-badge">ID #@editor.ID</span> }
+            </div>
+
+            <div class="dtm-form-body">
+                <label><span>@I18n.T("Test Name") *</span><InputText class="classic-input" @bind-Value="editor.Name" placeholder="@I18n.T("Enter test name")" /></label>
+                <label>
+                    <span>@I18n.T("Diagnostic Type") *</span>
+                    <InputSelect class="classic-input tickets-select" @bind-Value="editor.DiagnosticType">
+                        <option value="Pathology">@I18n.T("Pathology / Laboratory")</option>
+                        <option value="Imaging">@I18n.T("Imaging / Radiology")</option>
+                    </InputSelect>
+                    <small>@I18n.T("Controls whether the test goes to sample collection or the imaging worklist.")</small>
+                </label>
+                <label>
+                    <span>@I18n.T("Category") *</span>
+                    <InputSelect class="classic-input tickets-select" @bind-Value="editor.CategoryID">
+                        <option value="">@I18n.T("Select category")</option>
+                        @foreach (var category in ActiveCategories) { <option value="@category.ID">@category.Name</option> }
+                    </InputSelect>
+                </label>
+                <label><span>@I18n.T("Sale Rate") (@I18n.CurrencySymbol) *</span><InputNumber class="classic-input" @bind-Value="editor.SaleRate" min="0" /></label>
+
+                <div class="dtm-form-actions">
+                    <button type="button" class="btn btn-primary" @onclick="SaveAsync">✓ @(editor.ID == 0 ? I18n.T("Save Test") : I18n.T("Update Test"))</button>
+                    @if (editor.ID > 0) { <button type="button" class="btn btn-danger" @onclick="DeleteAsync">🗑 @I18n.T("Delete")</button> }
+                    <button type="button" class="btn btn-ghost" @onclick="() => ResetEditor()">@I18n.T("Clear")</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="dtm-list-card">
+            <div class="dtm-card-header dtm-list-header">
+                <div>
+                    <h2>@(activeGroup == "pathology" ? I18n.T("Pathology Test List") : I18n.T("Imaging Test List"))</h2>
+                    <p>@I18n.T("Select Edit to update a test or its rate")</p>
+                </div>
+                <div class="dtm-search-wrap"><span>⌕</span><input class="classic-input" type="search" @bind="searchQuery" @bind:event="oninput" placeholder="@I18n.T("Search name, ID or category...")" /></div>
+            </div>
+
+            <div class="dtm-table-wrap">
+                <table class="classic-table dtm-table">
+                    <thead><tr><th style="width:70px;">@I18n.T("Code")</th><th>@I18n.T("Test Name")</th><th>@I18n.T("Category")</th><th class="num">@I18n.T("Rate")</th><th style="width:72px;"></th></tr></thead>
+                    <tbody>
+                        @if (!FilteredServices.Any()) { <tr><td colspan="5" class="dtm-empty">@I18n.T("No tests found in this list.")</td></tr> }
+                        @foreach (var service in FilteredServices)
+                        {
+                            <tr class="@(editor.ID == service.ID ? "selected" : "")">
+                                <td><span class="pill">#@service.ID</span></td>
+                                <td><strong>@service.Name</strong></td>
+                                <td><span class="dtm-category-pill">@CategoryName(service.CategoryID)</span></td>
+                                <td class="num"><strong>@I18n.FormatCurrency(service.SaleRate ?? 0)</strong></td>
+                                <td><button type="button" class="btn btn-ghost dtm-edit-btn" @onclick="() => SelectService(service)">✎ @I18n.T("Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private string activeGroup = "pathology";
+    private string searchQuery = string.Empty;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private Service editor = new();
+    private List<ServiceCategory> categories = [];
+    private List<Service> services = [];
+
+    private IEnumerable<ServiceCategory> DiagnosticCategories => categories.Where(DiagnosticTestRouting.IsDiagnosticCategory);
+    private IEnumerable<ServiceCategory> ActiveCategories => DiagnosticCategories.OrderBy(c => c.Name);
+    private List<Service> PathologyServices => services.Where(s => DiagnosticTestRouting.IsPathology(s, CategoryById(s.CategoryID))).ToList();
+    private List<Service> ImagingServices => services.Where(s => DiagnosticTestRouting.IsImaging(s, CategoryById(s.CategoryID))).ToList();
+    private IEnumerable<Service> ActiveServices => activeGroup == "pathology" ? PathologyServices : ImagingServices;
+    private IEnumerable<Service> FilteredServices
+    {
+        get
+        {
+            var result = ActiveServices;
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                var term = searchQuery.Trim();
+                result = result.Where(s => (s.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || s.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || CategoryName(s.CategoryID).Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+            return result.OrderBy(s => s.Name);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+        ResetEditor();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.ServiceCategories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        var diagnosticIds = categories.Where(DiagnosticTestRouting.IsDiagnosticCategory).Select(c => c.ID).ToHashSet();
+        services = await db.Services.AsNoTracking().Where(s => s.CategoryID != null && diagnosticIds.Contains(s.CategoryID.Value)).OrderBy(s => s.Name).ToListAsync();
+    }
+
+    private void SwitchGroup(string group) { activeGroup = group; searchQuery = string.Empty; message = string.Empty; ResetEditor(); }
+
+    private void SelectService(Service service)
+    {
+        editor = new Service { ID = service.ID, Name = service.Name, CategoryID = service.CategoryID, SaleRate = service.SaleRate, BuyRate = service.BuyRate, ReOrderLevel = service.ReOrderLevel, IsVATApp = service.IsVATApp, GenericID = service.GenericID, TypeID = service.TypeID, SupplierID = service.SupplierID, InvestigationModuleID = service.InvestigationModuleID, DiagnosticType = DiagnosticTestRouting.Resolve(service, CategoryById(service.CategoryID)) };
+        message = string.Empty;
+    }
+
+    private async Task SaveAsync()
+    {
+        editor.Name = editor.Name?.Trim();
+        if (string.IsNullOrWhiteSpace(editor.Name) || editor.CategoryID is null || editor.SaleRate is null || editor.SaleRate < 0 || editor.DiagnosticType is not (DiagnosticTestRouting.Pathology or DiagnosticTestRouting.Imaging))
+        {
+            Fail(I18n.T("Test name, category and a valid rate are required.")); return;
+        }
+        var selectedCategory = CategoryById(editor.CategoryID);
+        if (selectedCategory is null || !ActiveCategories.Any(c => c.ID == selectedCategory.ID))
+        {
+            Fail(I18n.T("Select a category from the current test list.")); return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.Services.AnyAsync(s => s.ID != editor.ID && s.CategoryID == editor.CategoryID && s.Name == editor.Name))
+        {
+            Fail(I18n.T("A test with this name already exists in the selected category.")); return;
+        }
+
+        var isNew = editor.ID == 0;
+        if (isNew)
+        {
+            editor.GenericID = null; editor.TypeID = null; editor.SupplierID = null;
+            db.Services.Add(editor);
+        }
+        else
+        {
+            var entity = await db.Services.FindAsync(editor.ID);
+            if (entity is null) { Fail(I18n.T("Test was not found.")); return; }
+            entity.Name = editor.Name; entity.CategoryID = editor.CategoryID; entity.SaleRate = editor.SaleRate; entity.DiagnosticType = editor.DiagnosticType;
+        }
+        await db.SaveChangesAsync();
+        Success(I18n.T(isNew ? "Test added successfully." : "Test updated successfully."));
+        await LoadAsync();
+        ResetEditor(clearMessage: false);
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (editor.ID <= 0 || !await JS.InvokeAsync<bool>("hpm.confirm", I18n.T($"Delete test '{editor.Name}'?"))) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var id = editor.ID;
+        var used = await db.EmergencyMemoItems.AnyAsync(x => x.TestID == id)
+            || await db.DiagnosticOrderItems.AnyAsync(x => x.ServiceID == id)
+            || await db.DiagnosticCashMemoReturnItems.AnyAsync(x => x.ServiceID == id)
+            || await db.LabTestParameters.AnyAsync(x => x.ServiceID == id)
+            || await db.LabSampleCollections.AnyAsync(x => x.ServiceID == id)
+            || await db.LabTestResults.AnyAsync(x => x.ServiceID == id);
+        if (used)
+        {
+            Fail(I18n.T("This test has billing or report records and cannot be deleted. You can rename or change its rate instead.")); return;
+        }
+        var entity = await db.Services.FindAsync(id);
+        if (entity is not null) { db.Services.Remove(entity); await db.SaveChangesAsync(); }
+        Success(I18n.T("Test deleted successfully."));
+        await LoadAsync();
+        ResetEditor(clearMessage: false);
+    }
+
+    private void ResetEditor(bool clearMessage = true) { editor = new Service { CategoryID = ActiveCategories.FirstOrDefault()?.ID, SaleRate = 0, DiagnosticType = activeGroup == "pathology" ? DiagnosticTestRouting.Pathology : DiagnosticTestRouting.Imaging }; if (clearMessage) message = string.Empty; }
+    private ServiceCategory? CategoryById(int? id) => id is null ? null : categories.FirstOrDefault(c => c.ID == id.Value);
+    private string CategoryName(int? id) => CategoryById(id)?.Name ?? "—";
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+}

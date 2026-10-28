@@ -1,0 +1,489 @@
+@page "/canteen/products"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Components.Common
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
+
+<PageTitle>@I18n.T("Canteen Products & Menu") | @Branding.HospitalName</PageTitle>
+
+<div class="canteen-classic-fit">
+    <!-- Top Action & Status Bar -->
+    <div class="canteen-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>🍱</span>
+                <span>@I18n.T("Canteen Products & Menu")</span>
+            </h1>
+            <span class="tickets-count-pill">
+                @products.Count @I18n.T("Products")
+            </span>
+            @if (lowStockCount > 0)
+            {
+                <span class="pill" style="font-size:11px; font-weight:750; background:#fef2f2; color:#dc2626; border:1px solid #fecaca;" title="@I18n.T("Products at or below reorder level")">
+                    ⚠️ @lowStockCount @I18n.T("Low Stock")
+                </span>
+            }
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass == "success" ? "✓" : "⚠") @message
+                </span>
+            }
+        </div>
+
+        <div class="tickets-top-actions">
+            <a href="/canteen/sales" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Go to Canteen Sales POS")">
+                🍽️ @I18n.T("Sales & POS")
+            </a>
+            <a href="/canteen/challan" class="btn btn-ghost tickets-btn" style="text-decoration:none;" title="@I18n.T("Stock Receiving Challan")">
+                📥 @I18n.T("Stock Challan")
+            </a>
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="OpenCategoryModal" title="@I18n.T("Manage Canteen Categories")">
+                📂 @I18n.T("Categories")
+            </button>
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="ResetForm" title="@I18n.T("New Product")">
+                + @I18n.T("New Product")
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Workspace Grid: Left Product Form, Right Product List -->
+    <div class="canteen-classic-workspace" style="grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.45fr);">
+        <!-- Left Panel: Product Form Card -->
+        <div class="canteen-form-card">
+            <div class="canteen-card-header">
+                <h2>@(editor.ID == 0 ? I18n.T("Add Food / Product") : $"{I18n.T("Edit Product")} #{editor.ID}")</h2>
+                <span class="canteen-badge">
+                    @(editor.ID == 0 ? "NEW PRODUCT" : $"ID #{editor.ID}")
+                </span>
+            </div>
+
+            <EditForm Model="editor" OnValidSubmit="SaveProductAsync" class="canteen-form-wrapper">
+                <DataAnnotationsValidator />
+
+                <div class="canteen-form-body" style="padding: 10px 14px; gap: 8px;">
+                    <label>
+                        <span>@I18n.T("Product / Food Name")<span class="req">*</span></span>
+                        <InputText class="classic-input" @bind-Value="editor.Name" placeholder="@I18n.T("e.g. Paratha, Chicken Biryani, Coffee...")" />
+                    </label>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <label>
+                            <span>@I18n.T("Category")<span class="req">*</span></span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.CategoryID">
+                                <option value="0">-- @I18n.T("Select Category") --</option>
+                                @foreach (var cat in categories)
+                                {
+                                    <option value="@cat.ID">@cat.Name</option>
+                                }
+                            </InputSelect>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Unit")</span>
+                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.Unit">
+                                <option value="Pcs">Pcs</option>
+                                <option value="Plate">Plate</option>
+                                <option value="Cup">Cup</option>
+                                <option value="Bottle">Bottle</option>
+                                <option value="Glass">Glass</option>
+                                <option value="Packet">Packet</option>
+                                <option value="Kg">Kg</option>
+                                <option value="Box">Box</option>
+                            </InputSelect>
+                        </label>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <label>
+                            <span>@I18n.T("Sale Rate (৳)")<span class="req">*</span></span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.SaleRate" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Buy Rate (৳)")</span>
+                            <InputNumber class="classic-input" @bind-Value="editor.BuyRate" />
+                        </label>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+                        <label>
+                            <span>@I18n.T("Current Stock Balance")</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.Balance" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Reorder Level")</span>
+                            <InputNumber class="classic-input" @bind-Value="editor.ReorderLevel" />
+                        </label>
+                    </div>
+
+                    <div style="margin-top:4px;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <InputCheckbox @bind-Value="isKitchenChecked" />
+                            <span style="font-size:11.5px; font-weight:700; color:#334155;">
+                                🍳 @I18n.T("Kitchen Prepared Item (Hot Food / Cooked in Kitchen)")
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="canteen-form-footer">
+                    <button class="btn btn-primary tickets-btn" type="submit" disabled="@saving">
+                        @(saving ? I18n.T("Saving…") : editor.ID == 0 ? I18n.T("Save Product") : I18n.T("Update Product"))
+                    </button>
+                    <div style="display:flex; gap:6px;">
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-ghost tickets-btn" type="button" @onclick="DeleteProductAsync" style="color:#dc2626;">
+                                @I18n.T("Delete")
+                            </button>
+                        }
+                        <button class="btn btn-ghost tickets-btn" type="button" @onclick="ResetForm">
+                            @I18n.T("Clear")
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Right Panel: Products Catalog Table Card -->
+        <div class="canteen-queue-card">
+            <div class="canteen-queue-top">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Menu & Product Inventory")</h2>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button type="button" class="btn btn-ghost tickets-btn" style="padding:1px 6px; font-size:10.5px; @(showOnlyLowStock ? "background:#fee2e2; color:#dc2626;" : "")" @onclick="ToggleLowStockFilter">
+                        ⚠️ @I18n.T("Low Stock Only")
+                    </button>
+                    <span class="pill" style="font-size:11px; font-weight:700;">
+                        @FilteredProducts.Count() @I18n.T("Listed")
+                    </span>
+                </div>
+            </div>
+
+            <!-- Search and Category Bar -->
+            <div style="display:flex; gap:6px; padding:4px 8px; background:#f8fafc; border-bottom:1px solid #e2e8f0; flex-shrink:0;">
+                <div class="tickets-scanner-input-wrap" style="flex:1;">
+                    <span class="tickets-scanner-icon"><SearchIcon /></span>
+                    <input type="text"
+                           class="classic-input tickets-scanner-input"
+                           placeholder="@I18n.T("Search product name or unit...")"
+                           @bind="searchQuery"
+                           @bind:event="oninput" />
+                    @if (!string.IsNullOrWhiteSpace(searchQuery))
+                    {
+                        <button type="button" class="tickets-scanner-clear" @onclick="() => searchQuery = string.Empty">✕</button>
+                    }
+                </div>
+                <select class="classic-input tickets-select" style="width:130px;" @bind="filterCategoryId">
+                    <option value="0">@I18n.T("All Categories")</option>
+                    @foreach (var c in categories)
+                    {
+                        <option value="@c.ID">@c.Name</option>
+                    }
+                </select>
+            </div>
+
+            <!-- Product Table -->
+            <div class="billing-line-table-wrap" style="border:none; border-radius:0;">
+                <div class="canteen-table-head" style="background:#f1f5f9;">
+                    <span style="flex:1.4;">@I18n.T("Product Name")</span>
+                    <span style="width:100px;">@I18n.T("Category")</span>
+                    <span style="width:50px; text-align:center;">@I18n.T("Unit")</span>
+                    <span style="width:75px; text-align:right;">@I18n.T("Buy Rate")</span>
+                    <span style="width:75px; text-align:right;">@I18n.T("Sale Rate")</span>
+                    <span style="width:75px; text-align:center;">@I18n.T("Stock")</span>
+                    <span style="width:55px; text-align:center;">@I18n.T("Action")</span>
+                </div>
+                <div class="billing-line-rows">
+                    @if (!FilteredProducts.Any())
+                    {
+                        <div class="tickets-queue-empty">
+                            <span>@I18n.T("No products found matching criteria.")</span>
+                        </div>
+                    }
+                    @foreach (var p in FilteredProducts)
+                    {
+                        var catName = categories.FirstOrDefault(c => c.ID == p.CategoryID)?.Name ?? "Item";
+                        var isLowStock = p.Balance.HasValue && p.ReorderLevel.HasValue && p.Balance <= p.ReorderLevel;
+                        <div class="canteen-table-row @(editor.ID == p.ID ? "active" : "")" style="cursor:pointer;" @onclick="() => SelectProduct(p)">
+                            <span style="flex:1.4; font-weight:750; color:#0f172a;">
+                                @p.Name
+                                @if (p.IsKitchenItem == true)
+                                {
+                                    <small style="font-size:9.5px; color:#d97706; font-weight:700; margin-left:4px;">🍳</small>
+                                }
+                            </span>
+                            <span style="width:100px; font-size:10.5px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                @catName
+                            </span>
+                            <span style="width:50px; text-align:center; font-size:10.5px; color:#64748b;">
+                                @(p.Unit ?? "pcs")
+                            </span>
+                            <span style="width:75px; text-align:right; font-size:11px; color:#64748b;">
+                                @(I18n.FormatCurrency(p.BuyRate ?? 0))
+                            </span>
+                            <strong style="width:75px; text-align:right; font-size:11.5px; color:#0284c7;">
+                                @(I18n.FormatCurrency(p.SaleRate ?? 0))
+                            </strong>
+                            <span style="width:75px; text-align:center;">
+                                <span class="canteen-stock-pill @(isLowStock ? "low" : "ok")">
+                                    @(p.Balance.HasValue ? $"{p.Balance:0.##}" : "0")
+                                </span>
+                            </span>
+                            <span style="width:55px; text-align:center;" @onclick:stopPropagation="true">
+                                <button type="button" class="tickets-icon-action" title="@I18n.T("Edit")" @onclick="() => SelectProduct(p)">✏️</button>
+                            </span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Category Management Modal -->
+@if (isCategoryModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseCategoryModal">
+        <div class="doctor-modal-dialog" style="width:480px;" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);">📂</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Canteen Categories")</h3>
+                        <small>@I18n.T("Manage product and menu classifications")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseCategoryModal">✕</button>
+            </div>
+            <div class="discount-modal-body" style="gap:8px;">
+                <div style="display:flex; gap:6px;">
+                    <input type="text" class="classic-input" placeholder="@I18n.T("New category name...")" @bind="newCategoryName" />
+                    <button type="button" class="btn btn-primary tickets-btn" @onclick="AddCategoryAsync">
+                        + @I18n.T("Add")
+                    </button>
+                </div>
+                <div class="doctor-modal-list" style="max-height:220px; padding:0;">
+                    @foreach (var c in categories)
+                    {
+                        <div class="doctor-modal-item" style="padding:6px 10px;">
+                            <span style="font-weight:700; font-size:12px; color:#1e293b;">@c.Name</span>
+                            <span style="font-size:10.5px; color:#64748b;">
+                                @products.Count(p => p.CategoryID == c.ID) @I18n.T("items")
+                            </span>
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@categories.Count @I18n.T("categories")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseCategoryModal">@I18n.T("Done")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private CanteenProduct editor = new() { CategoryID = 1, Unit = "Pcs", SaleRate = 0, BuyRate = 0, Balance = 0, ReorderLevel = 5 };
+    private List<CanteenProduct> products = [];
+    private List<CanteenCategory> categories = [];
+    private string searchQuery = string.Empty;
+    private int filterCategoryId;
+    private bool showOnlyLowStock;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+
+    private bool isCategoryModalOpen;
+    private string newCategoryName = string.Empty;
+
+    private bool isKitchenChecked
+    {
+        get => editor.IsKitchenItem == true;
+        set => editor.IsKitchenItem = value;
+    }
+
+    private int lowStockCount => products.Count(p => p.Balance.HasValue && p.ReorderLevel.HasValue && p.Balance <= p.ReorderLevel);
+
+    private IEnumerable<CanteenProduct> FilteredProducts
+    {
+        get
+        {
+            var res = products.AsEnumerable();
+            if (filterCategoryId > 0)
+            {
+                res = res.Where(p => p.CategoryID == filterCategoryId);
+            }
+            if (showOnlyLowStock)
+            {
+                res = res.Where(p => p.Balance.HasValue && p.ReorderLevel.HasValue && p.Balance <= p.ReorderLevel);
+            }
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                var q = searchQuery.Trim();
+                res = res.Where(p => p.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                  || (p.Unit != null && p.Unit.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            }
+            return res.OrderBy(p => p.Name);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadDataAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadDataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.CanteenCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        products = await db.CanteenProducts.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+    }
+
+    private void SelectProduct(CanteenProduct p)
+    {
+        editor = new CanteenProduct
+        {
+            ID = p.ID,
+            Name = p.Name,
+            CategoryID = p.CategoryID,
+            SaleRate = p.SaleRate,
+            BuyRate = p.BuyRate,
+            Balance = p.Balance,
+            ReorderLevel = p.ReorderLevel,
+            Unit = p.Unit ?? "Pcs",
+            IsKitchenItem = p.IsKitchenItem
+        };
+        message = string.Empty;
+    }
+
+    private async Task SaveProductAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.Name) || editor.CategoryID <= 0)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "পণ্যের নাম ও ক্যাটাগরি পূরণ আবশ্যক।" : "Product name and category are required.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (editor.ID == 0)
+            {
+                db.CanteenProducts.Add(editor);
+            }
+            else
+            {
+                var existing = await db.CanteenProducts.FindAsync(editor.ID);
+                if (existing != null)
+                {
+                    db.Entry(existing).CurrentValues.SetValues(editor);
+                }
+            }
+
+            await db.SaveChangesAsync();
+            messageClass = "success";
+            message = I18n.IsBangla ? $"পণ্য '{editor.Name}' সফলভাবে সংরক্ষিত হয়েছে।" : $"Product '{editor.Name}' saved successfully.";
+            ResetForm();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task DeleteProductAsync()
+    {
+        if (editor.ID == 0) return;
+        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে পণ্য '{editor.Name}' মুছে ফেলতে চান?" : $"Delete product '{editor.Name}'?";
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var p = await db.CanteenProducts.FindAsync(editor.ID);
+            if (p != null)
+            {
+                db.CanteenProducts.Remove(p);
+                await db.SaveChangesAsync();
+            }
+
+            ResetForm();
+            messageClass = "success";
+            message = I18n.IsBangla ? "পণ্য সফলভাবে মুছে ফেলা হয়েছে।" : "Product deleted successfully.";
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+    }
+
+    private void ResetForm()
+    {
+        editor = new CanteenProduct
+        {
+            CategoryID = categories.FirstOrDefault()?.ID ?? 1,
+            Unit = "Pcs",
+            SaleRate = 0,
+            BuyRate = 0,
+            Balance = 0,
+            ReorderLevel = 5
+        };
+        message = string.Empty;
+    }
+
+    private void ToggleLowStockFilter() => showOnlyLowStock = !showOnlyLowStock;
+
+    private void OpenCategoryModal()
+    {
+        newCategoryName = string.Empty;
+        isCategoryModalOpen = true;
+    }
+
+    private void CloseCategoryModal() => isCategoryModalOpen = false;
+
+    private async Task AddCategoryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(newCategoryName)) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var cat = new CanteenCategory { Name = newCategoryName.Trim() };
+            db.CanteenCategories.Add(cat);
+            await db.SaveChangesAsync();
+
+            newCategoryName = string.Empty;
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = ex.GetBaseException().Message;
+        }
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

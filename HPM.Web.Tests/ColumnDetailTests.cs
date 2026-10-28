@@ -60,3 +60,4 @@ public sealed class ColumnDetailTests
         return list;
     }
 }
+

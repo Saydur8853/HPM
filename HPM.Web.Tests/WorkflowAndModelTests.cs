@@ -12,12 +12,29 @@ public sealed class WorkflowAndModelTests
     [Theory]
     [InlineData(null, "InProcess", true)]
     [InlineData("Pending", "InProcess", true)]
+    [InlineData("Pending", "Collected", true)]
+    [InlineData("Collected", "Received", true)]
+    [InlineData("Received", "InProcess", true)]
+    [InlineData("Pending", "Scheduled", true)]
+    [InlineData("Scheduled", "InProcess", true)]
     [InlineData("InProcess", "Completed", true)]
     [InlineData("Pending", "Completed", false)]
+    [InlineData("Collected", "Completed", false)]
+    [InlineData("Received", "Completed", false)]
     [InlineData("Completed", "InProcess", false)]
     [InlineData("Completed", "Completed", false)]
     public void Diagnostic_status_transitions_are_forward_only(string? current, string next, bool expected) =>
         Assert.Equal(expected, DiagnosticWorkflow.CanAdvance(current, next));
+
+    [Fact]
+    public void Diagnostic_tests_route_explicitly_and_support_legacy_category_fallback()
+    {
+        var category = new ServiceCategory { ID = 200, Name = "Radiology & Imaging" };
+        Assert.Equal(DiagnosticTestRouting.Imaging, DiagnosticTestRouting.Resolve(new Service { DiagnosticType = "Imaging" }));
+        Assert.Equal(DiagnosticTestRouting.Pathology, DiagnosticTestRouting.Resolve(new Service { DiagnosticType = "Pathology" }, category));
+        Assert.Equal(DiagnosticTestRouting.Imaging, DiagnosticTestRouting.Resolve(new Service(), category));
+        Assert.Equal(DiagnosticTestRouting.Pathology, DiagnosticTestRouting.Resolve(new Service(), new ServiceCategory { ID = 8, Name = "Pathology" }));
+    }
 
     [Theory]
     [InlineData(EncounterStatuses.Waiting, EncounterStatuses.InConsultation, true)]
@@ -35,6 +52,60 @@ public sealed class WorkflowAndModelTests
     }
 
     [Fact]
+    public void Module_navigation_permissions_match_operational_roles()
+    {
+        var doctor = Principal(RoleNames.Doctor);
+        Assert.False(ModuleAccess.CanView(doctor, ModuleAccess.PatientRegistration));
+        Assert.False(ModuleAccess.CanView(doctor, ModuleAccess.Appointments));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.DoctorQueue));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.DiagnosticResults));
+        Assert.True(ModuleAccess.CanView(doctor, ModuleAccess.PharmacyPrescriptions));
+
+        var reception = Principal(RoleNames.Reception);
+        Assert.True(ModuleAccess.CanView(reception, ModuleAccess.PatientRegistration));
+        Assert.True(ModuleAccess.CanView(reception, ModuleAccess.Appointments));
+        Assert.False(ModuleAccess.CanView(reception, ModuleAccess.Accounts));
+        Assert.False(ModuleAccess.CanView(reception, ModuleAccess.PharmacyPos));
+
+        var lab = Principal(RoleNames.LabTechnician);
+        Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticWorklist));
+        Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticResults));
+        Assert.False(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticBilling));
+
+        var pharmacy = Principal(RoleNames.PharmacyOperator);
+        Assert.True(ModuleAccess.CanView(pharmacy, ModuleAccess.PharmacyPos));
+        Assert.True(ModuleAccess.CanView(pharmacy, ModuleAccess.PharmacyStock));
+        Assert.False(ModuleAccess.CanView(pharmacy, ModuleAccess.PatientRegistration));
+
+        var cashier = Principal(RoleNames.Cashier);
+        Assert.True(ModuleAccess.CanView(cashier, ModuleAccess.Accounts));
+        Assert.True(ModuleAccess.CanView(cashier, ModuleAccess.DiagnosticBilling));
+        Assert.False(ModuleAccess.CanView(cashier, ModuleAccess.PatientRegistration));
+
+        var emergency = Principal(RoleNames.EmergencyOperator);
+        Assert.True(ModuleAccess.CanView(emergency, ModuleAccess.EmergencyServices));
+        Assert.False(ModuleAccess.CanView(emergency, ModuleAccess.OpdTickets));
+
+        var ot = Principal(RoleNames.OTOperator);
+        Assert.True(ModuleAccess.CanView(ot, ModuleAccess.OtCashMemos));
+        Assert.False(ModuleAccess.CanView(ot, ModuleAccess.EmergencyServices));
+
+        var ipd = Principal(RoleNames.IPDOperator);
+        Assert.True(ModuleAccess.CanView(ipd, ModuleAccess.IpdAdmissions));
+        Assert.True(ModuleAccess.CanView(ipd, ModuleAccess.IpdBilling));
+        Assert.False(ModuleAccess.CanView(ipd, ModuleAccess.PatientRegistration));
+
+        var nurse = Principal(RoleNames.Nurse);
+        Assert.True(ModuleAccess.CanView(nurse, ModuleAccess.DoctorQueue));
+        Assert.False(ModuleAccess.CanView(nurse, ModuleAccess.IpdBilling));
+
+        var administrator = Principal(RoleNames.Administrator);
+        Assert.All(
+            new[] { ModuleAccess.PatientRegistration, ModuleAccess.IpdBilling, ModuleAccess.DiagnosticWorklist, ModuleAccess.PharmacyStock, ModuleAccess.Accounts },
+            roles => Assert.True(ModuleAccess.CanView(administrator, roles)));
+    }
+
+    [Fact]
     public void Model_enforces_per_test_samples_and_batch_trace_uniqueness()
     {
         var options = new DbContextOptionsBuilder<HpmDbContext>()
@@ -45,6 +116,10 @@ public sealed class WorkflowAndModelTests
         var sample = db.Model.FindEntityType(typeof(LabSampleCollection))!;
         Assert.Contains(sample.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(LabSampleCollection.MemoID), nameof(LabSampleCollection.ServiceID)]));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.ReceivedAt)));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.ProcessingStartedAt)));
+        Assert.NotNull(sample.FindProperty(nameof(LabSampleCollection.CompletedAt)));
+        Assert.NotNull(db.Model.FindEntityType(typeof(Service))!.FindProperty(nameof(Service.DiagnosticType)));
 
         var allocation = db.Model.FindEntityType(typeof(PharmacySaleBatchAllocation))!;
         Assert.Contains(allocation.GetIndexes(), index => index.IsUnique
@@ -85,6 +160,16 @@ public sealed class WorkflowAndModelTests
         var turnover = db.Model.FindEntityType(typeof(BedTurnover))!;
         Assert.Contains(turnover.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(BedTurnover.BedCabinID)]));
+
+        var department = db.Model.FindEntityType(typeof(Department))!;
+        Assert.NotNull(department.FindProperty(nameof(Department.IsActive)));
+        Assert.Contains(department.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(Department.Name)]));
+
+        var ticketType = db.Model.FindEntityType(typeof(TicketType))!;
+        Assert.NotNull(ticketType.FindProperty(nameof(TicketType.IsActive)));
+        Assert.Contains(ticketType.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(TicketType.Name)]));
     }
 
     [Fact]
@@ -128,4 +213,7 @@ public sealed class WorkflowAndModelTests
         public override Task<AuthenticationState> GetAuthenticationStateAsync() =>
             Task.FromResult(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
     }
+
+    private static ClaimsPrincipal Principal(string role) =>
+        new(new ClaimsIdentity([new Claim(ClaimTypes.Name, "test"), new Claim(ClaimTypes.Role, role)], "Test"));
 }

@@ -1,0 +1,145 @@
+@page "/diagnostic/sample-collection"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Sample Collection") | @Branding.HospitalName</PageTitle>
+
+<div class="worklist-classic-fit">
+    <div class="worklist-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title"><span>🩸</span><span>@I18n.T("Pathology Sample Collection")</span></h1>
+            <span class="tickets-count-pill">@filteredItems.Count @I18n.T("Samples")</span>
+            @if (!string.IsNullOrWhiteSpace(message)) { <span class="tickets-inline-alert @messageClass">@message</span> }
+        </div>
+        <DiagnosticNavTabs />
+        <div class="tickets-top-actions">
+            <select class="classic-input tickets-select" @bind="statusFilter" @bind:after="FilterItems">
+                <option value="all">@I18n.T("All Statuses")</option>
+                <option value="Pending">@I18n.T("Pending Collection")</option>
+                <option value="Collected">@I18n.T("Collected")</option>
+            </select>
+            <input class="classic-input" style="width:210px" @bind="search" @bind:event="oninput" @bind:after="FilterItems" placeholder="@I18n.T("Memo, patient or barcode...")" />
+            <button class="btn btn-secondary tickets-btn" @onclick="LoadAsync">🔄 @I18n.T("Refresh")</button>
+        </div>
+    </div>
+
+    <div class="worklist-classic-workspace">
+        <div class="worklist-card">
+            <div class="worklist-header">
+                <h2>@I18n.T("Collection Queue")</h2>
+                <span class="pill">@items.Count(x => x.Status == "Pending") @I18n.T("Waiting")</span>
+            </div>
+            <div class="worklist-table-scroll data-table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>@I18n.T("Bill No")</th><th>@I18n.T("Patient Details")</th><th>@I18n.T("Ordered Test")</th><th>@I18n.T("Tube / Barcode")</th><th>@I18n.T("Sample Type")</th><th>@I18n.T("Status")</th><th></th></tr></thead>
+                    <tbody>
+                        @if (filteredItems.Count == 0) { <tr><td colspan="7" class="dtm-empty">@I18n.T("No pathology samples found.")</td></tr> }
+                        @foreach (var item in filteredItems)
+                        {
+                            <tr>
+                                <td><strong style="color:#0284c7">#@item.MemoID</strong><br/><small>@item.PatientID</small></td>
+                                <td><strong>@item.PatientName</strong><br/><small>@item.Age / @item.Sex · @item.Contact</small></td>
+                                <td><strong>@item.TestName</strong></td>
+                                <td><code>SMP-@item.MemoID-@item.ServiceID</code></td>
+                                <td>
+                                    <select class="classic-input tickets-select" value="@item.SpecimenType" disabled="@(item.Status != "Pending")" @onchange="e => UpdateSpecimenAsync(item, e.Value?.ToString())">
+                                        <option>Blood</option><option>Serum</option><option>Plasma</option><option>Urine</option><option>Stool</option><option>Swab</option><option>Sputum</option><option>Other</option>
+                                    </select>
+                                </td>
+                                <td><span class="pill @(item.Status == "Collected" ? "pill-success" : "")">@(item.Status == "Collected" ? "✓ " : "⏳ ")@I18n.T(item.Status)</span></td>
+                                <td style="text-align:right">
+                                    @if (item.Status == "Pending")
+                                    {
+                                        <button class="btn btn-primary tickets-btn" @onclick="() => CollectAsync(item)">🧪 @I18n.T("Collect Sample")</button>
+                                    }
+                                    else
+                                    {
+                                        <small>@item.CollectedAt?.ToString("dd MMM, hh:mm tt")</small>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<CollectionItem> items = [];
+    private List<CollectionItem> filteredItems = [];
+    private string statusFilter = "all";
+    private string search = "";
+    private string message = "";
+    private string messageClass = "success";
+
+    protected override async Task OnInitializedAsync() { I18n.OnLanguageChanged += LanguageChanged; await LoadAsync(); }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID);
+        var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID);
+        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking().Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(300).ToListAsync();
+        var memoIds = memos.Select(x => x.ID).ToArray();
+        var tracking = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
+        items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key)))
+            .Where(x => services.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsPathology(s, s.CategoryID.HasValue ? categories.GetValueOrDefault(s.CategoryID.Value) : null))
+            .Select(x =>
+            {
+                tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t);
+                return new CollectionItem { MemoID = x.Memo.ID, ServiceID = x.ServiceID, PatientID = x.Memo.PatientID, PatientName = x.Memo.PatientName, Age = x.Memo.Age ?? "—", Sex = x.Memo.Sex ?? "—", Contact = x.Memo.Contact, TestName = services[x.ServiceID].Name ?? $"Test #{x.ServiceID}", SpecimenType = t?.SpecimenType is null or "Blood / Specimen" ? "Blood" : t.SpecimenType, Status = t?.Status ?? "Pending", CollectedAt = t?.CollectedAt };
+            }).Where(x => x.Status is "Pending" or "Collected").ToList();
+        FilterItems();
+    }
+
+    private void FilterItems()
+    {
+        var q = items.AsEnumerable();
+        if (statusFilter != "all") q = q.Where(x => x.Status == statusFilter);
+        if (!string.IsNullOrWhiteSpace(search)) { var s = search.Trim(); q = q.Where(x => x.MemoID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) || x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) || (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) || x.TestName.Contains(s, StringComparison.OrdinalIgnoreCase) || $"SMP-{x.MemoID}-{x.ServiceID}".Contains(s, StringComparison.OrdinalIgnoreCase)); }
+        filteredItems = q.ToList();
+    }
+
+    private async Task UpdateSpecimenAsync(CollectionItem item, string? specimen)
+    {
+        if (string.IsNullOrWhiteSpace(specimen) || item.Status != "Pending") return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await GetOrCreateAsync(db, item);
+        row.SpecimenType = specimen;
+        await db.SaveChangesAsync(); item.SpecimenType = specimen;
+    }
+
+    private async Task CollectAsync(CollectionItem item)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await GetOrCreateAsync(db, item);
+            if (!DiagnosticWorkflow.CanAdvance(row.Status, "Collected")) throw new InvalidOperationException($"Invalid status transition from {row.Status} to Collected.");
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            row.SpecimenType = item.SpecimenType; row.Status = "Collected"; row.CollectedAt = DateTime.Now; row.CollectedBy = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : null; row.Remarks = null;
+            await db.SaveChangesAsync();
+            item.Status = "Collected"; item.CollectedAt = row.CollectedAt; Success($"{item.TestName} sample collected."); FilterItems();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); await LoadAsync(); }
+    }
+
+    private static async Task<LabSampleCollection> GetOrCreateAsync(HpmDbContext db, CollectionItem item)
+    {
+        var row = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+        if (row is not null) return row;
+        row = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = item.SpecimenType, Status = "Pending" }; db.LabSampleCollections.Add(row); return row;
+    }
+
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private void LanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
+    private sealed class CollectionItem { public long MemoID { get; set; } public int ServiceID { get; set; } public string? PatientID { get; set; } public string PatientName { get; set; } = ""; public string Age { get; set; } = ""; public string Sex { get; set; } = ""; public string? Contact { get; set; } public string TestName { get; set; } = ""; public string SpecimenType { get; set; } = "Blood"; public string Status { get; set; } = "Pending"; public DateTime? CollectedAt { get; set; } }
+}

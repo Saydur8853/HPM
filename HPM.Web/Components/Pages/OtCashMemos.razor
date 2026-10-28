@@ -9,6 +9,7 @@
 @implements IDisposable
 @using System.Security.Claims
 @using HPM.Web.Components.Common
+@using HPM.Web.Services
 
 <PageTitle>@I18n.T("OT Cash Memo") | @Branding.HospitalName</PageTitle>
 
@@ -55,7 +56,7 @@
                 <div class="ot-form-body">
                     <!-- Demographic Section -->
                     <div class="billing-demographics-grid ot">
-                        <label style="grid-column: span 2;">
+                        <label>
                             <span>@I18n.T("Patient ID (Optional)")</span>
                             <div class="tickets-patient-search-combo">
                                 <input class="classic-input"
@@ -68,7 +69,7 @@
                                        placeholder="@I18n.T("Patient ID or mobile")"
                                        title="@I18n.T("Type Patient ID or mobile & press Enter to find")" />
                                 <button type="button" class="btn-find" @onclick="FindPatientAsync" title="@I18n.T("Find Patient (Enter)")">
-                                    @I18n.T("Find")
+                                    <SearchIcon /> @I18n.T("Find")
                                 </button>
                             </div>
                             @if (showPatientIdSuggestions && patientIdSuggestions.Count > 0)
@@ -85,28 +86,27 @@
                                 </div>
                             }
                         </label>
-                        <label style="grid-column: span 2;">
+                        <label>
                             <span>@I18n.T("Patient name")<span class="req">*</span></span>
                             <InputText class="classic-input" @bind-Value="editor.PatientName" placeholder="@I18n.T("Full name")" />
                         </label>
-                        <label style="grid-column: span 2;">
+                        <label>
                             <span>@I18n.T("Contact Mobile")</span>
                             <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
                         </label>
-                        <label style="grid-column: span 1;">
-                            <span>@I18n.T("Age")</span>
-                            <InputText class="classic-input" @bind-Value="editor.Age" placeholder="e.g. 40Y" />
+                        <label>
+                            <span>@I18n.T("Age / Sex")</span>
+                            <div style="display: flex; gap: 4px;">
+                                <InputText class="classic-input" style="width: 50px; flex-shrink: 0;" @bind-Value="editor.Age" placeholder="40Y" />
+                                <InputSelect class="classic-input tickets-select" @bind-Value="editor.Sex">
+                                    <option value="">@I18n.T("Sex")</option>
+                                    <option value="Male">@I18n.T("Male")</option>
+                                    <option value="Female">@I18n.T("Female")</option>
+                                    <option value="Other">@I18n.T("Other")</option>
+                                </InputSelect>
+                            </div>
                         </label>
-                        <label style="grid-column: span 1;">
-                            <span>@I18n.T("Sex")</span>
-                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.Sex">
-                                <option value="">@I18n.T("Select")</option>
-                                <option value="Male">@I18n.T("Male")</option>
-                                <option value="Female">@I18n.T("Female")</option>
-                                <option value="Other">@I18n.T("Other")</option>
-                            </InputSelect>
-                        </label>
-                        <label style="grid-column: span 2;">
+                        <label>
                             <span>@I18n.T("OT room")</span>
                             <InputSelect class="classic-input tickets-select" @bind-Value="editor.OT">
                                 <option value="1">@I18n.T("Main OT")</option>
@@ -114,22 +114,36 @@
                                 <option value="3">@I18n.T("Day-care OT")</option>
                             </InputSelect>
                         </label>
-                        <label style="grid-column: span 2;">
-                            <span>@I18n.T("Referred by")</span>
-                            <InputSelect class="classic-input tickets-select" @bind-Value="editor.DoctorID">
-                                <option value="">@I18n.T("Walk-in / None", "None")</option>
-                                @foreach (var doctor in doctors)
-                                {
-                                    <option value="@doctor.ID">@DoctorLabel(doctor)</option>
-                                }
-                            </InputSelect>
-                        </label>
+                        <div class="billing-doc-col" style="grid-column: span 3;">
+                            <span class="classic-field-title">@I18n.T("Referred by")</span>
+                            @if (SelectedReferredDoctor != null)
+                            {
+                                <div class="emergency-selected-doctor-badge">
+                                    <span class="doc-icon">👨‍⚕️</span>
+                                    <div class="doc-meta" title="@DoctorLabel(SelectedReferredDoctor)">
+                                        <strong>@DoctorNameFormatter.FormatFullName(SelectedReferredDoctor.Title, SelectedReferredDoctor.Name)</strong>
+                                        <small>@SelectedReferredDoctor.Degree</small>
+                                    </div>
+                                    <div class="doc-actions">
+                                        <button type="button" class="btn-doc-edit" @onclick="() => OpenDoctorModal(false)" title="@I18n.T("Change Doctor")">✏️</button>
+                                        <button type="button" class="btn-doc-clear" @onclick="() => ClearDoctor(false)" title="@I18n.T("Remove Doctor")">✕</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn-emergency-doc-trigger" @onclick="() => OpenDoctorModal(false)">
+                                    <span class="doc-trigger-text">🩺 @I18n.T("Select Doctor / Walk-in")</span>
+                                    <span class="btn-pill-action"><SearchIcon /> @I18n.T("Browse")</span>
+                                </button>
+                            }
+                        </div>
                     </div>
 
                     <!-- OT Services Line Editor -->
-                    <h3 class="billing-section-heading">🏥 @I18n.T("OT services & Procedures")</h3>
+                    <h3 class="billing-section-heading">🏥 @I18n.T("OT Services & Procedures")</h3>
                     <div class="billing-line-editor ot">
-                        <label>
+                        <label style="flex: 1.4; min-width: 140px;">
                             <span>@I18n.T("Service Item", "Service")</span>
                             <select class="classic-input tickets-select" value="@selectedServiceId" @onchange="ServiceChanged">
                                 @foreach (var service in services)
@@ -138,25 +152,44 @@
                                 }
                             </select>
                         </label>
-                        <label>
+                        <div class="billing-line-doc-col" style="flex: 1.2; min-width: 130px;">
                             <span>@I18n.T("Assigned doctor")</span>
-                            <select class="classic-input tickets-select" value="@lineDoctorId" @onchange="e => int.TryParse(e.Value?.ToString(), out lineDoctorId)">
-                                <option value="0">@I18n.T("Not assigned")</option>
-                                @foreach (var doctor in doctors)
-                                {
-                                    <option value="@doctor.ID">@doctor.Name</option>
-                                }
-                            </select>
-                        </label>
-                        <label>
+                            @if (SelectedLineDoctor != null)
+                            {
+                                <div class="emergency-selected-doctor-badge" title="@DoctorLabel(SelectedLineDoctor)">
+                                    <span class="doc-icon">👨‍⚕️</span>
+                                    <div class="doc-meta">
+                                        <strong>@DoctorNameFormatter.FormatFullName(SelectedLineDoctor.Title, SelectedLineDoctor.Name)</strong>
+                                        <small>@SelectedLineDoctor.Degree</small>
+                                    </div>
+                                    <div class="doc-actions">
+                                        <button type="button" class="btn-doc-edit" @onclick="() => OpenDoctorModal(true)" title="@I18n.T("Change")">✏️</button>
+                                        <button type="button" class="btn-doc-clear" @onclick="() => ClearDoctor(true)" title="@I18n.T("Remove")">✕</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn-emergency-doc-trigger" @onclick="() => OpenDoctorModal(true)">
+                                    <span class="doc-trigger-text">👨‍⚕️ @I18n.T("Assign Doctor")</span>
+                                    <span class="btn-pill-action"><SearchIcon /></span>
+                                </button>
+                            }
+                        </div>
+                        <label style="width: 80px;">
                             <span>@I18n.T("Rate")</span>
                             <InputNumber class="classic-input bold-number" @bind-Value="lineRate" />
                         </label>
-                        <label>
+                        <label style="width: 52px;">
                             <span>@I18n.T("Qty")</span>
                             <InputNumber class="classic-input" @bind-Value="lineQuantity" />
                         </label>
-                        <button class="btn btn-dark tickets-btn" type="button" @onclick="AddLine">+ @I18n.T("Add")</button>
+                        <div class="billing-line-btn-group">
+                            <button class="btn btn-dark tickets-btn btn-add-line" type="button" @onclick="AddLine">+ @I18n.T("Add")</button>
+                            <button class="btn btn-secondary tickets-btn btn-browse-catalog" type="button" @onclick="OpenCatalogModal" title="@I18n.T("Browse full OT catalog in popup modal")">
+                                <SearchIcon /> @I18n.T("Catalog")
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Line Table -->
@@ -172,7 +205,7 @@
                         <div class="billing-line-rows">
                             @if (editor.Items.Count == 0)
                             {
-                                <div class="tickets-queue-empty" style="padding: 1.25rem 1rem;">
+                                <div class="tickets-queue-empty" style="padding: 1rem;">
                                     <span>@I18n.T("Add at least one OT service.")</span>
                                 </div>
                             }
@@ -189,29 +222,41 @@
                             }
                         </div>
                     </div>
+                </div>
 
-                    <!-- Totals Summary -->
-                    <div class="billing-bottom-summary align-end">
-                        <div class="billing-totals-compact">
-                            <div>
-                                <span>@I18n.T("Sub Total", "Subtotal")</span>
-                                <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                <!-- Remarks & Totals Summary Panel (Permanently Anchored Above Footer) -->
+                <div class="ot-bottom-panel">
+                    <!-- Left: OT Room Badge / Info -->
+                    <div class="ot-bottom-info">
+                        <span class="ot-room-pill">
+                            🏛️ @(editor.OT == 2 ? I18n.T("Emergency OT") : editor.OT == 3 ? I18n.T("Day-care OT") : I18n.T("Main OT"))
+                        </span>
+                        @if (!string.IsNullOrWhiteSpace(editor.DiscountBy))
+                        {
+                            <span class="ot-auth-pill" title="Discount Authorized By">
+                                ✓ Auth: @editor.DiscountBy
+                            </span>
+                        }
+                    </div>
+
+                    <!-- Right: Streamlined Totals Strip -->
+                    <div class="emg-totals-strip">
+                        <div class="emg-stat">
+                            <span class="stat-lbl">@I18n.T("Gross")</span>
+                            <span class="stat-val gross-val">@(I18n.FormatCurrency(editor.Total))</span>
+                        </div>
+                        <div class="emg-stat discount-stat" @onclick="OpenDiscountModal" title="@I18n.T("Click to set or modify discount in modal")">
+                            <div class="stat-lbl-row">
+                                <span class="stat-lbl">@I18n.T("Discount")</span>
+                                <span class="stat-edit-icon">✏️</span>
                             </div>
-                            <label>
-                                <span>@I18n.T("Discount")</span>
-                                <InputNumber class="classic-input" @bind-Value="editor.Discount" />
-                            </label>
-                            @if (editor.Discount > 0)
-                            {
-                                <label>
-                                    <span>@I18n.T("Authorized By")</span>
-                                    <InputText class="classic-input" @bind-Value="editor.DiscountBy" placeholder="@I18n.T("Required for discount")" />
-                                </label>
-                            }
-                            <div class="grand-due">
-                                <span>@I18n.T("Net Payable", "Net payable")</span>
-                                <strong>@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount)))</strong>
-                            </div>
+                            <span class="stat-val @(editor.Discount > 0 ? "has-discount" : "")">
+                                @(editor.Discount > 0 ? $"-{I18n.FormatCurrency(editor.Discount)}" : "৳ 0")
+                            </span>
+                        </div>
+                        <div class="emg-stat due-stat">
+                            <span class="stat-lbl">@I18n.T("Net Payable")</span>
+                            <span class="stat-val due-amount">@(I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount)))</span>
                         </div>
                     </div>
                 </div>
@@ -310,6 +355,275 @@
     </div>
 </div>
 
+<!-- 1. Doctor Selection Modal (Referred By or Assigned Surgeon) -->
+@if (isDoctorModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDoctorModal">
+        <div class="doctor-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon">🩺</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@(isDoctorModalForLine ? I18n.T("Select Assigned Surgeon / Doctor") : I18n.T("Select Referred by Doctor"))</h3>
+                        <small>@I18n.T("Search doctor by name, degree, department, or room")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDoctorModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="doctorSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search doctor by name, degree, room...")" />
+                    @if (!string.IsNullOrWhiteSpace(doctorSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => doctorSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+            <div class="doctor-modal-list">
+                <!-- Option for None / Not Assigned -->
+                <div class="doctor-modal-item @((isDoctorModalForLine ? lineDoctorId == 0 : editor.DoctorID == null) ? "active-selected" : "")"
+                     @onclick="() => SelectDoctor(null)">
+                    <div class="doctor-modal-item-left">
+                        <div class="doc-modal-avatar" style="background:#e2e8f0; color:#475569;">@(isDoctorModalForLine ? "👨‍⚕️" : "🚶")</div>
+                        <div class="doc-modal-info">
+                            <span class="doc-modal-name">@(isDoctorModalForLine ? I18n.T("Not assigned / None") : I18n.T("Walk-in / None"))</span>
+                            <span class="doc-modal-meta">
+                                <span>@(isDoctorModalForLine ? I18n.T("No specific surgeon assigned to this line") : I18n.T("No specific referral doctor assigned"))</span>
+                            </span>
+                        </div>
+                    </div>
+                    <button type="button" class="btn-modal-choose">
+                        @((isDoctorModalForLine ? lineDoctorId == 0 : editor.DoctorID == null) ? "✓ " + I18n.T("Selected") : I18n.T("Select"))
+                    </button>
+                </div>
+
+                @if (!FilteredDoctors.Any())
+                {
+                    <div class="doc-modal-empty">@I18n.T("No doctor found matching your search.")</div>
+                }
+                else
+                {
+                    @foreach (var doc in FilteredDoctors.Take(60))
+                    {
+                        var fullName = DoctorNameFormatter.FormatFullName(doc.Title, doc.Name);
+                        var isCurrent = isDoctorModalForLine ? lineDoctorId == doc.ID : editor.DoctorID == doc.ID;
+                        <div class="doctor-modal-item @(isCurrent ? "active-selected" : "")"
+                             @onclick="() => SelectDoctor(doc)">
+                            <div class="doctor-modal-item-left">
+                                <div class="doc-modal-avatar">👨‍⚕️</div>
+                                <div class="doc-modal-info">
+                                    <span class="doc-modal-name">@fullName</span>
+                                    <span class="doc-modal-meta">
+                                        <span>@doc.Degree</span>
+                                        @if (!string.IsNullOrWhiteSpace(doc.Room))
+                                        {
+                                            <span class="doc-modal-dept-badge" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">Room @doc.Room</span>
+                                        }
+                                    </span>
+                                </div>
+                            </div>
+                            <button type="button" class="btn-modal-choose">
+                                @(isCurrent ? "✓ " + I18n.T("Selected") : I18n.T("Select"))
+                            </button>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@FilteredDoctors.Count() @I18n.T("doctors found")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseDoctorModal">@I18n.T("Cancel")</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 2. Discount & Authorization Modal -->
+@if (isDiscountModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseDiscountModal">
+        <div class="doctor-modal-dialog discount-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">🏷️</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("Discount & Authorization")</h3>
+                        <small>@I18n.T("Apply concession or discount to gross subtotal")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseDiscountModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="discount-modal-body">
+                <div class="discount-summary-banner">
+                    <div class="summary-stat">
+                        <span>@I18n.T("Gross Subtotal")</span>
+                        <strong>@(I18n.FormatCurrency(editor.Total))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Discount")</span>
+                        <strong style="color:#059669;">-@(I18n.FormatCurrency(tempDiscount))</strong>
+                    </div>
+                    <div class="summary-stat">
+                        <span>@I18n.T("Net Payable")</span>
+                        <strong style="color:#0284c7;">@(I18n.FormatCurrency(Math.Max(0, editor.Total - tempDiscount)))</strong>
+                    </div>
+                </div>
+
+                <div class="discount-quick-chips">
+                    <span class="quick-chip-title">@I18n.T("Quick Percentages"):</span>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(0)">0%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(5)">5%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(10)">10%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(15)">15%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(20)">20%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(50)">50%</button>
+                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(100)">100% (Free)</button>
+                </div>
+
+                <div class="discount-form-fields">
+                    <label>
+                        <span>@I18n.T("Discount Amount (৳)")</span>
+                        <input type="number"
+                               step="0.01"
+                               min="0"
+                               max="@editor.Total"
+                               class="classic-input bold-number"
+                               value="@tempDiscount"
+                               @oninput="HandleTempDiscountInput" />
+                    </label>
+
+                    <label>
+                        <span>
+                            @I18n.T("Authorized By")
+                            @if (tempDiscount > 0)
+                            {
+                                <span class="req">*</span>
+                            }
+                        </span>
+                        <input type="text"
+                               class="classic-input"
+                               maxlength="50"
+                               placeholder="@I18n.T("Name / Title of authorizing authority")"
+                               @bind="tempDiscountBy"
+                               @bind:event="oninput" />
+                    </label>
+                </div>
+
+                @if (tempDiscount > 0)
+                {
+                    <div class="authorizer-quick-chips">
+                        <span class="quick-chip-title">@I18n.T("Quick Authorizer"):</span>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Duty Doctor"'>Duty Doctor</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "RMO"'>RMO</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Hospital Director"'>Director</button>
+                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Admin Office"'>Admin Office</button>
+                    </div>
+                }
+
+                @if (tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))
+                {
+                    <div class="discount-warning-note">
+                        ⚠️ @I18n.T("Authorization name is required when discount is greater than 0.")
+                    </div>
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <button type="button" class="btn btn-ghost tickets-btn" @onclick="RemoveDiscount" style="color: #dc2626;">@I18n.T("Remove Discount")</button>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn-modal-cancel" @onclick="CloseDiscountModal">@I18n.T("Cancel")</button>
+                    <button type="button" class="btn-primary tickets-btn" @onclick="ApplyDiscount" disabled="@(tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))">
+                        @I18n.T("Apply Discount")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- 3. OT Services & Procedures Catalog Modal -->
+@if (isCatalogModalOpen)
+{
+    <div class="doctor-modal-backdrop" @onclick="CloseCatalogModal">
+        <div class="doctor-modal-dialog service-modal-dialog" @onclick:stopPropagation>
+            <div class="doctor-modal-header">
+                <div class="doctor-modal-header-title">
+                    <div class="doctor-modal-icon" style="background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);">🏥</div>
+                    <div class="doctor-modal-heading">
+                        <h3>@I18n.T("OT Services & Procedures Catalog")</h3>
+                        <small>@I18n.T("Quick search and add operation theatre procedures")</small>
+                    </div>
+                </div>
+                <button type="button" class="doctor-modal-close" @onclick="CloseCatalogModal" title="@I18n.T("Close")">✕</button>
+            </div>
+            <div class="doctor-modal-search-wrap">
+                <div class="doctor-modal-search-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text"
+                           @bind="catalogSearchQuery"
+                           @bind:event="oninput"
+                           autofocus
+                           class="doctor-modal-search-input"
+                           placeholder="@I18n.T("Search OT procedure, surgery, or test...")" />
+                    @if (!string.IsNullOrWhiteSpace(catalogSearchQuery))
+                    {
+                        <button type="button" class="doctor-modal-search-clear" @onclick="() => catalogSearchQuery = string.Empty">×</button>
+                    }
+                </div>
+            </div>
+            @if (categories.Count > 1)
+            {
+                <div class="service-category-chips">
+                    <button type="button" class="service-cat-chip @(catalogCategoryId == 0 ? "active" : "")" @onclick="() => catalogCategoryId = 0">
+                        @I18n.T("All OT Categories")
+                    </button>
+                    @foreach (var cat in categories)
+                    {
+                        <button type="button" class="service-cat-chip @(catalogCategoryId == cat.ID ? "active" : "")" @onclick="() => catalogCategoryId = cat.ID">
+                            @cat.Name
+                        </button>
+                    }
+                </div>
+            }
+            <div class="doctor-modal-list service-modal-list">
+                @if (!CatalogFilteredServices.Any())
+                {
+                    <div class="doc-modal-empty">@I18n.T("No OT service matches your search.")</div>
+                }
+                else
+                {
+                    @foreach (var s in CatalogFilteredServices.Take(100))
+                    {
+                        var catName = categories.FirstOrDefault(c => c.ID == s.CategoryID)?.Name ?? "OT Service";
+                        <div class="service-catalog-item">
+                            <div class="service-catalog-info">
+                                <span class="service-catalog-name">@s.Name</span>
+                                <div class="service-catalog-meta">
+                                    <span class="service-cat-badge">@catName</span>
+                                    <span class="service-rate-badge">@(I18n.FormatCurrency(s.SaleRate ?? 0))</span>
+                                </div>
+                            </div>
+                            <div class="service-catalog-action">
+                                <button type="button" class="btn btn-secondary tickets-btn" @onclick="() => SelectServiceFromCatalog(s)">
+                                    + @I18n.T("Add to Memo")
+                                </button>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="doctor-modal-footer">
+                <span class="doctor-modal-footer-count">@CatalogFilteredServices.Count() @I18n.T("services available")</span>
+                <button type="button" class="btn-modal-cancel" @onclick="CloseCatalogModal">@I18n.T("Close")</button>
+            </div>
+        </div>
+    </div>
+}
+
 <div id="ot-print" class="print-document">
     <div class="print-sheet">
         <PrintDocumentHeader Title="Operation Theatre Cash Memo"
@@ -371,6 +685,7 @@
     private CashMemoOT editor = NewMemo();
     private List<DoctorsProfile> doctors = [];
     private List<Service> services = [];
+    private List<ServiceCategory> categories = [];
     private List<CashMemoOT> memos = [];
     private string memoScanQuery = string.Empty;
     private int selectedServiceId;
@@ -382,6 +697,49 @@
     private bool saving;
     private bool showPatientIdSuggestions;
     private List<Registration> patientIdSuggestions = [];
+
+    // Modals state
+    private bool isDoctorModalOpen;
+    private bool isDoctorModalForLine;
+    private string doctorSearchQuery = string.Empty;
+
+    private bool isDiscountModalOpen;
+    private decimal tempDiscount;
+    private string? tempDiscountBy;
+
+    private bool isCatalogModalOpen;
+    private string catalogSearchQuery = string.Empty;
+    private int catalogCategoryId = 0;
+
+    private DoctorsProfile? SelectedReferredDoctor =>
+        editor.DoctorID.HasValue ? doctors.FirstOrDefault(d => d.ID == editor.DoctorID.Value) : null;
+
+    private DoctorsProfile? SelectedLineDoctor =>
+        lineDoctorId > 0 ? doctors.FirstOrDefault(d => d.ID == lineDoctorId) : null;
+
+    private IEnumerable<DoctorsProfile> FilteredDoctors => string.IsNullOrWhiteSpace(doctorSearchQuery)
+        ? doctors
+        : doctors.Where(d => (d.Name?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (d.Degree?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
+                          || (d.Room?.Contains(doctorSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<Service> CatalogFilteredServices
+    {
+        get
+        {
+            var result = services.AsEnumerable();
+            if (catalogCategoryId > 0)
+            {
+                result = result.Where(s => s.CategoryID == catalogCategoryId);
+            }
+            if (!string.IsNullOrWhiteSpace(catalogSearchQuery))
+            {
+                var q = catalogSearchQuery.Trim();
+                result = result.Where(s => s.Name != null && s.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            }
+            return result;
+        }
+    }
 
     private IEnumerable<CashMemoOT> FilteredMemos => string.IsNullOrWhiteSpace(memoScanQuery)
         ? memos
@@ -395,7 +753,13 @@
         I18n.OnLanguageChanged += HandleLanguageChanged;
         await using var db = await DbFactory.CreateDbContextAsync();
         doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        foreach (var d in doctors)
+        {
+            d.Name = DoctorNameFormatter.Sanitize(d.Name);
+            d.Title = DoctorNameFormatter.Sanitize(d.Title);
+        }
         var categoryIds = await db.ServiceCategories.AsNoTracking().Where(x => x.ID == 1 || x.SubID == 1).Select(x => x.ID).ToListAsync();
+        categories = await db.ServiceCategories.AsNoTracking().Where(x => categoryIds.Contains(x.ID)).OrderBy(x => x.Name).ToListAsync();
         services = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && categoryIds.Contains(x.CategoryID.Value)).OrderBy(x => x.Name).ToListAsync();
         SelectFirstService();
         await LoadMemosAsync();
@@ -669,6 +1033,9 @@
     private void ResetEditor()
     {
         editor = NewMemo();
+        tempDiscount = 0;
+        tempDiscountBy = null;
+        lineDoctorId = 0;
         SelectFirstService();
     }
 
@@ -703,7 +1070,119 @@
                 DoctorID = x.DoctorID
             }).ToList()
         };
+        tempDiscount = m.Discount;
+        tempDiscountBy = m.DiscountBy;
         message = string.Empty;
+    }
+
+    // Modal Handlers
+    private void OpenDoctorModal(bool forLine)
+    {
+        isDoctorModalForLine = forLine;
+        doctorSearchQuery = string.Empty;
+        isDoctorModalOpen = true;
+    }
+
+    private void CloseDoctorModal()
+    {
+        isDoctorModalOpen = false;
+        doctorSearchQuery = string.Empty;
+    }
+
+    private void SelectDoctor(DoctorsProfile? doctor)
+    {
+        if (isDoctorModalForLine)
+        {
+            lineDoctorId = doctor?.ID ?? 0;
+        }
+        else
+        {
+            editor.DoctorID = doctor?.ID;
+        }
+        CloseDoctorModal();
+    }
+
+    private void ClearDoctor(bool forLine)
+    {
+        if (forLine)
+        {
+            lineDoctorId = 0;
+        }
+        else
+        {
+            editor.DoctorID = null;
+        }
+    }
+
+    private void OpenDiscountModal()
+    {
+        tempDiscount = editor.Discount;
+        tempDiscountBy = editor.DiscountBy;
+        isDiscountModalOpen = true;
+    }
+
+    private void CloseDiscountModal()
+    {
+        isDiscountModalOpen = false;
+    }
+
+    private void HandleTempDiscountInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var val))
+        {
+            tempDiscount = Math.Clamp(val, 0, editor.Total);
+        }
+        else
+        {
+            tempDiscount = 0;
+        }
+    }
+
+    private void SetDiscountPercent(decimal percent)
+    {
+        tempDiscount = Math.Round((editor.Total * percent) / 100m, 2);
+        if (tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))
+        {
+            tempDiscountBy = "Duty Doctor";
+        }
+    }
+
+    private void ApplyDiscount()
+    {
+        editor.Discount = Math.Clamp(tempDiscount, 0, editor.Total);
+        editor.DiscountBy = editor.Discount > 0 ? tempDiscountBy : null;
+        CloseDiscountModal();
+    }
+
+    private void RemoveDiscount()
+    {
+        tempDiscount = 0;
+        tempDiscountBy = null;
+        editor.Discount = 0;
+        editor.DiscountBy = null;
+        CloseDiscountModal();
+    }
+
+    private void OpenCatalogModal()
+    {
+        catalogSearchQuery = string.Empty;
+        catalogCategoryId = 0;
+        isCatalogModalOpen = true;
+    }
+
+    private void CloseCatalogModal()
+    {
+        isCatalogModalOpen = false;
+        catalogSearchQuery = string.Empty;
+    }
+
+    private void SelectServiceFromCatalog(Service s)
+    {
+        selectedServiceId = s.ID;
+        lineRate = s.SaleRate ?? 0;
+        lineQuantity = 1;
+        AddLine();
+        CloseCatalogModal();
     }
 
     private async Task DeleteAsync(CashMemoOT m)
@@ -879,7 +1358,12 @@
     }
 
     private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Service {id}";
-    private string DoctorName(int? id) => id is null ? "—" : doctors.FirstOrDefault(x => x.ID == id)?.Name ?? "Doctor";
+    private string DoctorName(int? id)
+    {
+        if (id is null) return "—";
+        var doc = doctors.FirstOrDefault(x => x.ID == id);
+        return doc == null ? "Doctor" : DoctorNameFormatter.FormatFullName(doc.Title, doc.Name);
+    }
     private string OtName(int? id) => id switch
     {
         1 => I18n.T("Main OT"),
@@ -887,7 +1371,7 @@
         3 => I18n.T("Day-care OT"),
         _ => "—"
     };
-    private static string DoctorLabel(DoctorsProfile doctor) => $"{doctor.Title} {doctor.Name} {doctor.Degree}".Trim();
+    private static string DoctorLabel(DoctorsProfile doctor) => $"{DoctorNameFormatter.FormatFullName(doctor.Title, doctor.Name)} {doctor.Degree}".Trim();
     private static string Age(DateTime birth)
     {
         var years = DateTime.Today.Year - birth.Year;

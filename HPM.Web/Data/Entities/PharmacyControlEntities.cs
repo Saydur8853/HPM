@@ -49,6 +49,8 @@ public sealed class PrescriptionMedicine
     public int? Days { get; set; }
     public int Quantity { get; set; }
     public int SLNO { get; set; }
+    [StringLength(50)] public string? DosagePattern { get; set; }
+    [StringLength(100)] public string? Instruction { get; set; }
     public Prescription? Prescription { get; set; }
 }
 

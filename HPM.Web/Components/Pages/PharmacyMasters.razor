@@ -5,104 +5,608 @@
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
 @using System.Security.Claims
+@using HPM.Web.Data.Entities
 
-<PageTitle>@I18n.T("Pharmacy Masters Setup", "Pharmacy Masters") | @Branding.HospitalName</PageTitle>
+<PageTitle>@GetPageTitle() | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div><span class="eyebrow">@I18n.T("Pharmacy & Dispensary", "Pharmacy & dispensary")</span><h1>@I18n.T("Medicine & Supplier Masters", "Medicine & Supplier Masters")</h1><p>@I18n.T("Medicine catalogue, generic names, dosage types and registered suppliers.", "Medicine catalogue, generic names, dosage types and registered suppliers.")</p></div>
-</div>
-
-@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
-
-<div class="panel form-panel" style="margin-bottom:24px;">
-    <div class="panel-heading">
-        <div><h2>@(medicine.ID == 0 ? I18n.T("Add medicine", "Add medicine") : $"{I18n.T("Edit medicine", "Edit medicine")} #{medicine.ID}")</h2><p>@I18n.T("Add and manage pharmacy medicine products and pricing.", "Add and manage pharmacy medicine products and pricing.")</p></div>
-        <button class="icon-btn" @onclick="ResetMedicine">@I18n.T("New", "New")</button>
-    </div>
-    <EditForm Model="medicine" OnSubmit="SaveMedicineAsync">
-        <div class="form-grid three">
-            <label class="span-2"><span>@I18n.T("Brand / medicine name *", "Brand / medicine name *")</span><InputText @bind-Value="medicine.Name" placeholder="@I18n.T("Brand, strength and pack size", "Brand, strength and pack size")" /></label>
-            <label><span>@I18n.T("Dosage form / type *", "Dosage form / type *")</span><InputSelect @bind-Value="medicine.TypeID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in medicineTypes) { <option value="@item.ID">@item.Type</option> }</InputSelect></label>
-            <label><span>@I18n.T("Generic name *", "Generic name *")</span><InputSelect @bind-Value="medicine.GenericID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in genericGroups) { <option value="@item.ID">@item.Name</option> }</InputSelect></label>
-            <label><span>@I18n.T("Supplier / manufacturer *", "Supplier / manufacturer *")</span><InputSelect @bind-Value="medicine.SupplierID"><option value="">@I18n.T("Select", "Select")</option>@foreach (var item in suppliers) { <option value="@item.ID">@item.Name</option> }</InputSelect></label>
-            <label><span>@I18n.T("Re-order level", "Re-order level")</span><InputNumber @bind-Value="medicine.ReOrderLevel" /></label>
-            <label><span>@I18n.T("Purchase rate", "Purchase rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="medicine.BuyRate" /></label>
-            <label><span>@I18n.T("Sale rate", "Sale rate") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="medicine.SaleRate" /></label>
-            <label><span>@I18n.T("VAT applicable?", "VAT applicable?")</span><InputSelect @bind-Value="medicine.IsVATApp"><option value="">@I18n.T("Not set", "Not set")</option><option value="true">@I18n.T("Yes", "Yes")</option><option value="false">@I18n.T("No", "No")</option></InputSelect></label>
-        </div>
-        <div class="form-actions">
-            <button class="btn btn-primary" type="submit">@(medicine.ID == 0 ? I18n.T("Save medicine", "Save medicine") : I18n.T("Update medicine", "Update medicine"))</button>
-            @if (medicine.ID > 0) { <button class="btn btn-ghost" type="button" @onclick="DeleteMedicineAsync">@I18n.T("Delete", "Delete")</button> }
-        </div>
-    </EditForm>
-    <div style="padding:0 20px 14px;"><input @bind="medicineSearch" @bind:event="oninput" placeholder="@I18n.T("Search medicines by brand, generic, type or supplier...", "Search medicines by brand, generic, type or supplier...")" /></div>
-    <div class="data-table-wrap">
-        <table class="data-table">
-            <thead><tr><th>@I18n.T("Medicine", "Medicine")</th><th>@I18n.T("Generic / Type", "Generic / Type")</th><th>@I18n.T("Supplier", "Supplier")</th><th class="num">@I18n.T("Buy", "Buy")</th><th class="num">@I18n.T("Sale", "Sale")</th><th class="num">@I18n.T("Re-order", "Re-order")</th><th></th></tr></thead>
-            <tbody>
-                @if (FilteredMedicines.Count == 0) { <tr><td colspan="7"><div class="empty-state small">@I18n.T("No medicines found.", "No medicines found.")</div></td></tr> }
-                @foreach (var item in FilteredMedicines)
-                {
-                    <tr><td><b>@item.Name</b><br /><small>@I18n.T("Service", "Service") #@item.ID</small></td><td>@GenericName(item.GenericID)<br /><small>@TypeName(item.TypeID)</small></td><td>@SupplierName(item.SupplierID)</td><td class="num">@I18n.FormatCurrency(item.BuyRate ?? 0)</td><td class="num"><b>@I18n.FormatCurrency(item.SaleRate ?? 0)</b></td><td class="num">@(item.ReOrderLevel ?? 0)</td><td><button class="icon-btn" @onclick="() => SelectMedicine(item)">@I18n.T("Edit", "Edit")</button></td></tr>
-                }
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<div class="master-layout">
-    <div>
-        <div class="panel form-panel">
-            <div class="panel-heading"><div><h2>@(generic.ID == 0 ? I18n.T("Add generic", "Add generic") : $"{I18n.T("Edit generic", "Edit generic")} #{generic.ID}")</h2><p>@I18n.T("Generic drug names and therapeutic categories.", "Generic drug names and therapeutic categories.")</p></div><button class="icon-btn" @onclick="ResetGeneric">@I18n.T("New", "New")</button></div>
-            <EditForm Model="generic" OnSubmit="SaveGenericAsync">
-                <div class="form-grid"><label class="span-2"><span>@I18n.T("Generic name *", "Generic name *")</span><InputText @bind-Value="generic.Name" /></label></div>
-                <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save generic", "Save generic")</button>@if (generic.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteGenericAsync">@I18n.T("Delete", "Delete")</button> }</div>
-            </EditForm>
-            <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Generic name", "Generic name")</th><th></th></tr></thead><tbody>@foreach (var item in genericGroups) { <tr><td>@item.Name</td><td><button class="icon-btn" @onclick="() => SelectGeneric(item)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
-        </div>
-
-        <div class="panel form-panel">
-            <div class="panel-heading"><div><h2>@(medicineType.ID == 0 ? I18n.T("Add dosage form", "Add dosage form") : $"{I18n.T("Edit type", "Edit type")} #{medicineType.ID}")</h2><p>@I18n.T("Dosage forms (Tablet, Syrup, Injection, etc.).", "Dosage forms (Tablet, Syrup, Injection, etc.).")</p></div><button class="icon-btn" @onclick="ResetType">@I18n.T("New", "New")</button></div>
-            <EditForm Model="medicineType" OnSubmit="SaveTypeAsync">
-                <div class="form-grid"><label class="span-2"><span>@I18n.T("Type / dosage form *", "Type / dosage form *")</span><InputText @bind-Value="medicineType.Type" placeholder="@I18n.T("Tablet, capsule, syrup...", "Tablet, capsule, syrup...")" /></label></div>
-                <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save type", "Save type")</button>@if (medicineType.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteTypeAsync">@I18n.T("Delete", "Delete")</button> }</div>
-            </EditForm>
-            <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Dosage form", "Dosage form")</th><th></th></tr></thead><tbody>@foreach (var item in medicineTypes) { <tr><td>@item.Type</td><td><button class="icon-btn" @onclick="() => SelectType(item)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
-        </div>
-    </div>
-
-    <div class="panel form-panel">
-        <div class="panel-heading"><div><h2>@(supplier.ID == 0 ? I18n.T("Add supplier", "Add supplier") : $"{I18n.T("Edit supplier", "Edit supplier")} #{supplier.ID}")</h2><p>@I18n.T("Add and manage registered medicine pharmaceutical suppliers.", "Add and manage registered medicine pharmaceutical suppliers.")</p></div><button class="icon-btn" @onclick="ResetSupplier">@I18n.T("New", "New")</button></div>
-        <EditForm Model="supplier" OnSubmit="SaveSupplierAsync">
-            <div class="form-grid">
-                <label class="span-2"><span>@I18n.T("Supplier / manufacturer name *", "Supplier / manufacturer name *")</span><InputText @bind-Value="supplier.Name" /></label>
-                <label class="span-2"><span>@I18n.T("Address", "Address")</span><InputTextArea @bind-Value="supplier.Address" /></label>
-                <label><span>@I18n.T("Contact", "Contact")</span><InputText @bind-Value="supplier.Contact" /></label>
-                <label><span>@I18n.T("Opening amount", "Opening amount") (@I18n.CurrencySymbol)</span><InputNumber @bind-Value="supplier.Amount" /></label>
+<div class="pharmacy-masters-page" style="padding-bottom: 40px;">
+    <!-- Page Header -->
+    <div class="page-heading" style="margin-bottom: 16px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; width:100%;">
+            <div>
+                <span class="eyebrow">💊 @I18n.T("Pharmacy & Dispensary", "Pharmacy & Dispensary")</span>
+                <h1 style="margin:2px 0 4px; font-size:24px; font-weight:700;">@GetSectionTitle()</h1>
+                <p style="margin:0; color:#64748b; font-size:13px;">@I18n.T("Maintain medicines, stores, dosage types, generics and pharma suppliers.", "Maintain medicines, stores, dosage types, generics and pharma suppliers.")</p>
             </div>
-            <div class="form-actions"><button class="btn btn-primary">@I18n.T("Save supplier", "Save supplier")</button>@if (supplier.ID > 0) { <button type="button" class="btn btn-ghost" @onclick="DeleteSupplierAsync">@I18n.T("Delete", "Delete")</button> }</div>
-        </EditForm>
-        <div class="data-table-wrap">
-            <table class="data-table"><thead><tr><th>@I18n.T("Supplier", "Supplier")</th><th>@I18n.T("Contact", "Contact")</th><th class="num">@I18n.T("Amount", "Amount")</th><th></th></tr></thead><tbody>
-                @if (suppliers.Count == 0) { <tr><td colspan="4"><div class="empty-state small">@I18n.T("No suppliers configured.", "No suppliers configured.")</div></td></tr> }
-                @foreach (var item in suppliers) { <tr><td><b>@item.Name</b><br /><small>@item.Address</small></td><td>@item.Contact</td><td class="num">@I18n.FormatCurrency(item.Amount ?? 0)</td><td><button class="icon-btn" @onclick="() => SelectSupplier(item)">@I18n.T("Edit", "Edit")</button></td></tr> }
-            </tbody></table>
+            <div style="display:flex; gap:8px;">
+                @if (currentSection != "customer")
+                {
+                    <button type="button" class="btn btn-secondary" @onclick="ResetCurrent">
+                        + @I18n.T("New Entry", "New")
+                    </button>
+                }
+                <NavLink href="masters" class="btn btn-ghost">
+                    ⚙️ @I18n.T("All Masters", "All Masters")
+                </NavLink>
+            </div>
         </div>
     </div>
+
+    <!-- Mode Toggle / Section Tabs -->
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:18px; padding-bottom:12px; border-bottom:1px solid #e2e8f0; align-items:center;">
+        <button type="button" class="btn @(currentSection is "services" or "medicine" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("services")'>
+            💊 @I18n.T("Medicines", "Medicines") <b>(@medicines.Count)</b>
+        </button>
+        <button type="button" class="btn @(currentSection == "store" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("store")'>
+            🏪 @I18n.T("Stores", "Stores") <b>(@stores.Count)</b>
+        </button>
+        <button type="button" class="btn @(currentSection == "type" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("type")'>
+            💊 @I18n.T("Dosage Types", "Dosage Types") <b>(@medicineTypes.Count)</b>
+        </button>
+        <button type="button" class="btn @(currentSection == "generic" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("generic")'>
+            🧬 @I18n.T("Generics", "Generics") <b>(@genericGroups.Count)</b>
+        </button>
+        <button type="button" class="btn @(currentSection == "supplier" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("supplier")'>
+            🚚 @I18n.T("Suppliers", "Suppliers") <b>(@suppliers.Count)</b>
+        </button>
+        <button type="button" class="btn @(currentSection == "customer" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("customer")'>
+            🛒 @I18n.T("Customer Returns", "Customer Returns")
+        </button>
+        <button type="button" class="btn @(currentSection == "all" ? "btn-primary" : "btn-ghost")" style="font-size:13px; padding:6px 14px; border-radius:20px;" @onclick='() => SwitchSection("all")'>
+            📑 @I18n.T("All Sections", "All Sections")
+        </button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @messageClass" style="margin-bottom:16px;">@message</div>
+    }
+
+    @* SECTION 1: MEDICINES & PRICING *@
+    @if (currentSection is "services" or "medicine" or "all")
+    {
+        <div class="panel form-panel" style="margin-bottom:24px;">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(medicine.ID == 0 ? I18n.T("Add Medicine Product", "Add medicine product") : $"{I18n.T("Edit Medicine", "Edit medicine")} #{medicine.ID}")</h2>
+                    <p>@I18n.T("Brand names, dosage strengths, pack sizes, purchase cost and counter selling price.", "Brand names, dosage strengths, pack sizes, purchase cost and counter selling price.")</p>
+                </div>
+                <button class="icon-btn" @onclick="ResetMedicine">@I18n.T("New", "New")</button>
+            </div>
+            <EditForm Model="medicine" OnSubmit="SaveMedicineAsync">
+                <div class="form-grid three">
+                    <label class="span-2">
+                        <span>@I18n.T("Brand / Medicine Name *", "Brand / medicine name *")</span>
+                        <InputText @bind-Value="medicine.Name" placeholder="@I18n.T("e.g. Napa Extra 500mg/65mg, Seclo 20mg", "e.g. Napa Extra 500mg/65mg, Seclo 20mg")" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Dosage Form / Type *", "Dosage form / type *")</span>
+                        <InputSelect @bind-Value="medicine.TypeID">
+                            <option value="">@I18n.T("Select Type", "Select")</option>
+                            @foreach (var item in medicineTypes)
+                            {
+                                <option value="@item.ID">@item.Type</option>
+                            }
+                        </InputSelect>
+                    </label>
+                    <label>
+                        <span>@I18n.T("Generic Name *", "Generic name *")</span>
+                        <InputSelect @bind-Value="medicine.GenericID">
+                            <option value="">@I18n.T("Select Generic", "Select")</option>
+                            @foreach (var item in genericGroups)
+                            {
+                                <option value="@item.ID">@item.Name</option>
+                            }
+                        </InputSelect>
+                    </label>
+                    <label>
+                        <span>@I18n.T("Supplier / Manufacturer *", "Supplier / manufacturer *")</span>
+                        <InputSelect @bind-Value="medicine.SupplierID">
+                            <option value="">@I18n.T("Select Supplier", "Select")</option>
+                            @foreach (var item in suppliers)
+                            {
+                                <option value="@item.ID">@item.Name</option>
+                            }
+                        </InputSelect>
+                    </label>
+                    <label>
+                        <span>@I18n.T("Re-Order Threshold Level", "Re-order level")</span>
+                        <InputNumber @bind-Value="medicine.ReOrderLevel" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Purchase Rate", "Purchase rate") (@I18n.CurrencySymbol)</span>
+                        <InputNumber @bind-Value="medicine.BuyRate" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Selling Price Rate", "Sale rate") (@I18n.CurrencySymbol)</span>
+                        <InputNumber @bind-Value="medicine.SaleRate" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("VAT Applicable?", "VAT applicable?")</span>
+                        <InputSelect @bind-Value="medicine.IsVATApp">
+                            <option value="">@I18n.T("Not set", "Not set")</option>
+                            <option value="true">@I18n.T("Yes", "Yes")</option>
+                            <option value="false">@I18n.T("No", "No")</option>
+                        </InputSelect>
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" type="submit">@(medicine.ID == 0 ? I18n.T("Save Medicine", "Save medicine") : I18n.T("Update Medicine", "Update medicine"))</button>
+                    @if (medicine.ID > 0)
+                    {
+                        <button class="btn btn-ghost" type="button" @onclick="DeleteMedicineAsync">@I18n.T("Delete", "Delete")</button>
+                    }
+                </div>
+            </EditForm>
+
+            <div style="padding:0 20px 14px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                <input style="flex:1; min-width:260px;" @bind="medicineSearch" @bind:event="oninput" @bind:after="OnSearchMedicineChanged" placeholder="@I18n.T("Search medicines by brand name, generic formula, type or supplier...", "Search medicines by brand, generic, type or supplier...")" />
+                <span style="font-size:13px; color:#64748b; font-weight:600;">
+                    @I18n.T("Showing", "Showing") @(FilteredMedicines.Count == 0 ? 0 : (medicinePage - 1) * PageSize + 1) - @Math.Min(medicinePage * PageSize, FilteredMedicines.Count) @I18n.T("of", "of") @FilteredMedicines.Count
+                </span>
+            </div>
+
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Medicine", "Medicine")</th>
+                            <th>@I18n.T("Generic / Type", "Generic / Type")</th>
+                            <th>@I18n.T("Supplier", "Supplier")</th>
+                            <th class="num">@I18n.T("Buy Rate", "Buy")</th>
+                            <th class="num">@I18n.T("Sale Price", "Sale")</th>
+                            <th class="num">@I18n.T("Re-Order", "Re-order")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (PagedMedicines.Count == 0)
+                        {
+                            <tr><td colspan="7"><div class="empty-state small">@I18n.T("No medicines match your search.", "No medicines found.")</div></td></tr>
+                        }
+                        @foreach (var item in PagedMedicines)
+                        {
+                            <tr>
+                                <td><b>@item.Name</b><br /><small class="text-muted">@I18n.T("Item Code", "Service") #@item.ID</small></td>
+                                <td>@GenericName(item.GenericID)<br /><small class="text-muted">@TypeName(item.TypeID)</small></td>
+                                <td>@SupplierName(item.SupplierID)</td>
+                                <td class="num">@I18n.FormatCurrency(item.BuyRate ?? 0)</td>
+                                <td class="num"><b>@I18n.FormatCurrency(item.SaleRate ?? 0)</b></td>
+                                <td class="num">@(item.ReOrderLevel ?? 0)</td>
+                                <td><button class="icon-btn" @onclick="() => SelectMedicine(item)">@I18n.T("Edit", "Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @* Pagination Bar *@
+            @if (TotalMedicinePages > 1)
+            {
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:12px 20px; border-top:1px solid #e2e8f0; background:#f8fafc;">
+                    <button class="btn btn-ghost" type="button" disabled="@(medicinePage <= 1)" @onclick="() => medicinePage--">
+                        ← @I18n.T("Previous", "Previous")
+                    </button>
+                    <span style="font-size:13px; color:#475569; font-weight:600;">
+                        @I18n.T("Page", "Page") @medicinePage @I18n.T("of", "of") @TotalMedicinePages
+                    </span>
+                    <button class="btn btn-ghost" type="button" disabled="@(medicinePage >= TotalMedicinePages)" @onclick="() => medicinePage++">
+                        @I18n.T("Next", "Next") →
+                    </button>
+                </div>
+            }
+        </div>
+    }
+
+    @* SECTION 2: MEDICINE STORES & SUB-STORES *@
+    @if (currentSection is "store" or "all")
+    {
+        <div class="panel form-panel" style="margin-bottom:24px;">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(store.ID == 0 ? I18n.T("Add Medicine Store", "Add Medicine Store") : $"{I18n.T("Edit Store", "Edit Store")} #{store.ID}")</h2>
+                    <p>@I18n.T("Configure pharmacy dispensaries, inpatient ward sub-stores, emergency racks and central buffer storage.", "Configure pharmacy dispensaries, inpatient ward sub-stores, emergency racks and central buffer storage.")</p>
+                </div>
+                <button class="icon-btn" @onclick="ResetStore">@I18n.T("New", "New")</button>
+            </div>
+            <EditForm Model="store" OnSubmit="SaveStoreAsync">
+                <div class="form-grid three">
+                    <label class="span-2">
+                        <span>@I18n.T("Store Name *", "Store Name *")</span>
+                        <InputText @bind-Value="store.Name" placeholder="@I18n.T("e.g. Main Dispensary, IPD Ward Store, Emergency Rack, Buffer Warehouse", "e.g. Main Dispensary, IPD Ward Store, Emergency Rack, Buffer Warehouse")" maxlength="50" />
+                    </label>
+                    <div style="display:flex; flex-direction:column; gap:8px; justify-content:center;">
+                        <label style="display:inline-flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+                            <InputCheckbox @bind-Value="store.IsActive" />
+                            <span><b>@I18n.T("Active Store", "Active Store")</b> (@I18n.T("Available for dispensing and transfers", "Available for dispensing and transfers"))</span>
+                        </label>
+                        <label style="display:inline-flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+                            <InputCheckbox @bind-Value="store.IsBufferStore" />
+                            <span><b>@I18n.T("Central / Buffer Store", "Central / Buffer Store")</b> (@I18n.T("Primary receiving warehouse", "Primary receiving warehouse"))</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary" type="submit">@(store.ID == 0 ? I18n.T("Save Store", "Save Store") : I18n.T("Update Store", "Update Store"))</button>
+                    @if (store.ID > 0)
+                    {
+                        <button class="btn btn-ghost" type="button" @onclick="DeleteStoreAsync">@I18n.T("Delete", "Delete")</button>
+                    }
+                </div>
+            </EditForm>
+            <div style="padding:0 20px 14px;">
+                <input @bind="storeSearch" @bind:event="oninput" placeholder="@I18n.T("Search stores by name...", "Search stores by name...")" />
+            </div>
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Store Name", "Store Name")</th>
+                            <th>@I18n.T("Store Type", "Store Type")</th>
+                            <th>@I18n.T("Active Status", "Active Status")</th>
+                            <th class="num">@I18n.T("Stock Item Lines", "Stock Item Lines")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (FilteredStores.Count == 0)
+                        {
+                            <tr><td colspan="5"><div class="empty-state small">@I18n.T("No stores configured.", "No stores configured.")</div></td></tr>
+                        }
+                        @foreach (var item in FilteredStores)
+                        {
+                            <tr>
+                                <td>
+                                    <b>@item.Name</b><br />
+                                    <small class="text-muted">@I18n.T("Store ID", "Store ID") #@item.ID</small>
+                                </td>
+                                <td>
+                                    @if (item.IsBufferStore)
+                                    {
+                                        <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:600; padding:4px 8px; border-radius:4px;">🏢 @I18n.T("Central Warehouse / Buffer", "Central Warehouse / Buffer")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge" style="background:#f1f5f9; color:#475569; font-weight:600; padding:4px 8px; border-radius:4px;">🏪 @I18n.T("Dispensary / Sub-Store", "Dispensary / Sub-Store")</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (item.IsActive)
+                                    {
+                                        <span class="badge" style="background:#dcfce7; color:#15803d; font-weight:600; padding:4px 8px; border-radius:4px;">🟢 @I18n.T("Active", "Active")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge" style="background:#fee2e2; color:#b91c1c; font-weight:600; padding:4px 8px; border-radius:4px;">🔴 @I18n.T("Inactive", "Inactive")</span>
+                                    }
+                                </td>
+                                <td class="num">
+                                    <b>@(storeBalanceCounts.GetValueOrDefault(item.ID, 0))</b> @I18n.T("Batches", "Batches")
+                                </td>
+                                <td>
+                                    <button class="icon-btn" @onclick="() => SelectStore(item)">@I18n.T("Edit", "Edit")</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @* SECTION 3 & 4: GENERICS & DOSAGE TYPES *@
+    @if (currentSection is "generic" or "type" or "all")
+    {
+        <div class="master-layout" style="margin-bottom:24px;">
+            @if (currentSection is "generic" or "all")
+            {
+                <div>
+                    <div class="panel form-panel">
+                        <div class="panel-heading">
+                            <div>
+                                <h2>@(generic.ID == 0 ? I18n.T("Add Generic Group", "Add generic") : $"{I18n.T("Edit Generic", "Edit generic")} #{generic.ID}")</h2>
+                                <p>@I18n.T("Chemical molecules and therapeutic drug categories.", "Generic drug names and therapeutic categories.")</p>
+                            </div>
+                            <button class="icon-btn" @onclick="ResetGeneric">@I18n.T("New", "New")</button>
+                        </div>
+                        <EditForm Model="generic" OnSubmit="SaveGenericAsync">
+                            <div class="form-grid">
+                                <label class="span-2">
+                                    <span>@I18n.T("Generic Chemical Name *", "Generic name *")</span>
+                                    <InputText @bind-Value="generic.Name" placeholder="@I18n.T("e.g. Paracetamol, Omeprazole, Ciprofloxacin", "e.g. Paracetamol, Omeprazole, Ciprofloxacin")" />
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary">@I18n.T("Save Generic", "Save generic")</button>
+                                @if (generic.ID > 0)
+                                {
+                                    <button type="button" class="btn btn-ghost" @onclick="DeleteGenericAsync">@I18n.T("Delete", "Delete")</button>
+                                }
+                            </div>
+                        </EditForm>
+                        <div style="padding:0 20px 10px;">
+                            <input @bind="genericSearch" @bind:event="oninput" placeholder="@I18n.T("Search generic names...", "Search generic names...")" />
+                        </div>
+                        <div class="data-table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>@I18n.T("Generic Name", "Generic name")</th>
+                                        <th class="num">@I18n.T("Medicines", "Medicines")</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (FilteredGenerics.Count == 0)
+                                    {
+                                        <tr><td colspan="3"><div class="empty-state small">@I18n.T("No generics found.", "No generics found.")</div></td></tr>
+                                    }
+                                    @foreach (var item in FilteredGenerics)
+                                    {
+                                        <tr>
+                                            <td><b>@item.Name</b></td>
+                                            <td class="num">@(medicines.Count(m => m.GenericID == item.ID))</td>
+                                            <td><button class="icon-btn" @onclick="() => SelectGeneric(item)">@I18n.T("Edit", "Edit")</button></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            @if (currentSection is "type" or "all")
+            {
+                <div>
+                    <div class="panel form-panel">
+                        <div class="panel-heading">
+                            <div>
+                                <h2>@(medicineType.ID == 0 ? I18n.T("Add Dosage Form / Type", "Add dosage form") : $"{I18n.T("Edit Type", "Edit type")} #{medicineType.ID}")</h2>
+                                <p>@I18n.T("Pharmaceutical forms: Tablet, Syrup, Capsule, Injection, Eye Drop, IV Infusion.", "Dosage forms (Tablet, Syrup, Injection, etc.).")</p>
+                            </div>
+                            <button class="icon-btn" @onclick="ResetType">@I18n.T("New", "New")</button>
+                        </div>
+                        <EditForm Model="medicineType" OnSubmit="SaveTypeAsync">
+                            <div class="form-grid">
+                                <label class="span-2">
+                                    <span>@I18n.T("Type / Dosage Form *", "Type / dosage form *")</span>
+                                    <InputText @bind-Value="medicineType.Type" placeholder="@I18n.T("Tablet, capsule, syrup, injection...", "Tablet, capsule, syrup...")" />
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn btn-primary">@I18n.T("Save Type", "Save type")</button>
+                                @if (medicineType.ID > 0)
+                                {
+                                    <button type="button" class="btn btn-ghost" @onclick="DeleteTypeAsync">@I18n.T("Delete", "Delete")</button>
+                                }
+                            </div>
+                        </EditForm>
+                        <div style="padding:0 20px 10px;">
+                            <input @bind="typeSearch" @bind:event="oninput" placeholder="@I18n.T("Search dosage types...", "Search dosage types...")" />
+                        </div>
+                        <div class="data-table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>@I18n.T("Dosage Form", "Dosage form")</th>
+                                        <th class="num">@I18n.T("Medicines", "Medicines")</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (FilteredTypes.Count == 0)
+                                    {
+                                        <tr><td colspan="3"><div class="empty-state small">@I18n.T("No dosage types found.", "No dosage types found.")</div></td></tr>
+                                    }
+                                    @foreach (var item in FilteredTypes)
+                                    {
+                                        <tr>
+                                            <td><b>@item.Type</b></td>
+                                            <td class="num">@(medicines.Count(m => m.TypeID == item.ID))</td>
+                                            <td><button class="icon-btn" @onclick="() => SelectType(item)">@I18n.T("Edit", "Edit")</button></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    @* SECTION 5: PHARMACEUTICAL SUPPLIERS *@
+    @if (currentSection is "supplier" or "all")
+    {
+        <div class="panel form-panel" style="margin-bottom:24px;">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(supplier.ID == 0 ? I18n.T("Add Medicine Supplier", "Add supplier") : $"{I18n.T("Edit Supplier", "Edit supplier")} #{supplier.ID}")</h2>
+                    <p>@I18n.T("Pharmaceutical manufacturers, registered distributors, contacts and initial opening balances.", "Add and manage registered medicine pharmaceutical suppliers.")</p>
+                </div>
+                <button class="icon-btn" @onclick="ResetSupplier">@I18n.T("New", "New")</button>
+            </div>
+            <EditForm Model="supplier" OnSubmit="SaveSupplierAsync">
+                <div class="form-grid">
+                    <label class="span-2">
+                        <span>@I18n.T("Supplier / Manufacturer Name *", "Supplier / manufacturer name *")</span>
+                        <InputText @bind-Value="supplier.Name" placeholder="@I18n.T("e.g. Square Pharmaceuticals PLC, Beximco, Incepta", "e.g. Square Pharmaceuticals PLC, Beximco, Incepta")" />
+                    </label>
+                    <label class="span-2">
+                        <span>@I18n.T("Corporate / Depot Address", "Address")</span>
+                        <InputTextArea @bind-Value="supplier.Address" rows="2" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Representative Contact / Phone", "Contact")</span>
+                        <InputText @bind-Value="supplier.Contact" placeholder="@I18n.T("e.g. 01700-000000", "e.g. 01700-000000")" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Opening Balance Amount", "Opening amount") (@I18n.CurrencySymbol)</span>
+                        <InputNumber @bind-Value="supplier.Amount" />
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn btn-primary">@I18n.T("Save Supplier", "Save supplier")</button>
+                    @if (supplier.ID > 0)
+                    {
+                        <button type="button" class="btn btn-ghost" @onclick="DeleteSupplierAsync">@I18n.T("Delete", "Delete")</button>
+                    }
+                </div>
+            </EditForm>
+            <div style="padding:0 20px 14px;">
+                <input @bind="supplierSearch" @bind:event="oninput" placeholder="@I18n.T("Search suppliers by name, address or contact...", "Search suppliers by name, address or contact...")" />
+            </div>
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Supplier / Manufacturer", "Supplier")</th>
+                            <th>@I18n.T("Contact & Address", "Contact")</th>
+                            <th class="num">@I18n.T("Opening Amount", "Amount")</th>
+                            <th class="num">@I18n.T("Products Listed", "Products Listed")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (FilteredSuppliers.Count == 0)
+                        {
+                            <tr><td colspan="5"><div class="empty-state small">@I18n.T("No suppliers configured.", "No suppliers configured.")</div></td></tr>
+                        }
+                        @foreach (var item in FilteredSuppliers)
+                        {
+                            <tr>
+                                <td>
+                                    <b>@item.Name</b><br />
+                                    <small class="text-muted">ID #@item.ID</small>
+                                </td>
+                                <td>
+                                    <span>📞 @(string.IsNullOrWhiteSpace(item.Contact) ? "—" : item.Contact)</span><br />
+                                    <small class="text-muted">📍 @(string.IsNullOrWhiteSpace(item.Address) ? "No address" : item.Address)</small>
+                                </td>
+                                <td class="num">@I18n.FormatCurrency(item.Amount ?? 0)</td>
+                                <td class="num">@(medicines.Count(m => m.SupplierID == item.ID))</td>
+                                <td><button class="icon-btn" @onclick="() => SelectSupplier(item)">@I18n.T("Edit", "Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @* SECTION 6: CUSTOMER RETURNS & DISPENSING ACCOUNTS *@
+    @if (currentSection is "customer" or "all")
+    {
+        <div class="panel form-panel" style="margin-bottom:24px;">
+            <div class="panel-heading">
+                <div>
+                    <h2>🛒 @I18n.T("Customer Medicine & Sales Overview", "Customer Medicine & Sales Overview")</h2>
+                    <p>@I18n.T("Pharmacy sales to walk-in OPD clients, admitted IPD patients and customer return memos.", "Pharmacy sales to walk-in OPD clients, admitted IPD patients and customer return memos.")</p>
+                </div>
+            </div>
+
+            <div style="padding:16px 20px; display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px; background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:8px;">
+                    <span style="font-size:24px;">🛒</span>
+                    <h3 style="margin:0; font-size:16px; font-weight:700;">@I18n.T("OPD Counter POS", "OPD Counter POS")</h3>
+                    <p style="margin:0; font-size:13px; color:#64748b;">@I18n.T("Direct over-the-counter medicine billing for walk-in patients with cash/card payment.", "Direct over-the-counter medicine billing for walk-in patients with cash/card payment.")</p>
+                    <NavLink href="/pharmacy/pos?patientType=OPD" class="btn btn-primary" style="margin-top:auto; text-align:center; text-decoration:none;">
+                        @I18n.T("Open Counter POS", "Open Counter POS") →
+                    </NavLink>
+                </div>
+
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:8px;">
+                    <span style="font-size:24px;">🏥</span>
+                    <h3 style="margin:0; font-size:16px; font-weight:700;">@I18n.T("IPD Inpatient Medication", "IPD Inpatient Medication")</h3>
+                    <p style="margin:0; font-size:13px; color:#64748b;">@I18n.T("Indoor patient medicine requisitions, ward indent dispensing and bed billing ledger.", "Indoor patient medicine requisitions, ward indent dispensing and bed billing ledger.")</p>
+                    <NavLink href="/pharmacy/pos?patientType=IPD" class="btn btn-secondary" style="margin-top:auto; text-align:center; text-decoration:none;">
+                        @I18n.T("Open IPD Dispensing", "Open IPD Dispensing") →
+                    </NavLink>
+                </div>
+
+                <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:8px;">
+                    <span style="font-size:24px;">🔄</span>
+                    <h3 style="margin:0; font-size:16px; font-weight:700;">@I18n.T("Customer Sales Returns", "Customer Sales Returns")</h3>
+                    <p style="margin:0; font-size:13px; color:#64748b;">@I18n.T("Process medicine returns from customers, re-stock inventory and issue cash refunds.", "Process medicine returns from customers, re-stock inventory and issue cash refunds.")</p>
+                    <NavLink href="/pharmacy/sales-returns" class="btn btn-secondary" style="margin-top:auto; text-align:center; text-decoration:none;">
+                        @I18n.T("Open Sales Returns", "Open Sales Returns") →
+                    </NavLink>
+                </div>
+            </div>
+
+            <div style="padding:16px 20px 8px;">
+                <h3 style="margin:0 0 6px; font-size:15px; font-weight:700;">@I18n.T("Recent Customer Sales Return Records", "Recent Customer Sales Return Records")</h3>
+                <p style="margin:0 0 12px; font-size:13px; color:#64748b;">@I18n.T("Logged return transactions restocked into dispensary inventory.", "Logged return transactions restocked into dispensary inventory.")</p>
+            </div>
+
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Return Memo #", "Return Memo #")</th>
+                            <th>@I18n.T("Original Memo #", "Original Memo #")</th>
+                            <th>@I18n.T("Store", "Store")</th>
+                            <th>@I18n.T("Reason", "Reason")</th>
+                            <th class="num">@I18n.T("Refund Amount", "Refund Amount")</th>
+                            <th>@I18n.T("Date", "Date")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (recentReturns.Count == 0)
+                        {
+                            <tr><td colspan="6"><div class="empty-state small">@I18n.T("No recent customer return records found.", "No recent customer return records found.")</div></td></tr>
+                        }
+                        @foreach (var ret in recentReturns)
+                        {
+                            <tr>
+                                <td><b>RET-#@ret.ID</b></td>
+                                <td>#@ret.CashMemoID</td>
+                                <td>@StoreName(ret.StoreID)</td>
+                                <td>@ret.Reason</td>
+                                <td class="num"><b style="color:#b91c1c;">@I18n.FormatCurrency(ret.RefundAmount)</b></td>
+                                <td>@ret.TransDate.ToString("dd MMM yyyy, hh:mm tt")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
     private const int MedicineCategoryId = 3;
+    private const int PageSize = 50;
+
+    [SupplyParameterFromQuery(Name = "section")]
+    public string? QuerySection { get; set; }
+
+    private string currentSection = "services";
+    private int medicinePage = 1;
+
     private Service medicine = NewMedicine();
+    private MedicineStore store = NewStore();
     private GenericGroup generic = new();
     private MedicineType medicineType = new();
     private SupplierPharmacy supplier = new();
+
     private List<Service> medicines = [];
+    private List<MedicineStore> stores = [];
     private List<GenericGroup> genericGroups = [];
     private List<MedicineType> medicineTypes = [];
     private List<SupplierPharmacy> suppliers = [];
+    private List<PharmacySalesReturn> recentReturns = [];
+    private Dictionary<int, int> storeBalanceCounts = [];
+
     private string medicineSearch = "";
+    private string storeSearch = "";
+    private string genericSearch = "";
+    private string typeSearch = "";
+    private string supplierSearch = "";
+
     private string message = "";
     private string messageClass = "success";
 
@@ -119,10 +623,124 @@
         }
     }
 
+    private int TotalMedicinePages => Math.Max(1, (int)Math.Ceiling(FilteredMedicines.Count / (double)PageSize));
+
+    private List<Service> PagedMedicines => FilteredMedicines
+        .Skip((medicinePage - 1) * PageSize)
+        .Take(PageSize)
+        .ToList();
+
+    private void OnSearchMedicineChanged()
+    {
+        medicinePage = 1;
+    }
+
+    private List<MedicineStore> FilteredStores
+    {
+        get
+        {
+            var query = storeSearch.Trim();
+            return stores.Where(x => string.IsNullOrWhiteSpace(query)
+                || (x.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+    }
+
+    private List<GenericGroup> FilteredGenerics
+    {
+        get
+        {
+            var query = genericSearch.Trim();
+            return genericGroups.Where(x => string.IsNullOrWhiteSpace(query)
+                || (x.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+    }
+
+    private List<MedicineType> FilteredTypes
+    {
+        get
+        {
+            var query = typeSearch.Trim();
+            return medicineTypes.Where(x => string.IsNullOrWhiteSpace(query)
+                || (x.Type?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+    }
+
+    private List<SupplierPharmacy> FilteredSuppliers
+    {
+        get
+        {
+            var query = supplierSearch.Trim();
+            return suppliers.Where(x => string.IsNullOrWhiteSpace(query)
+                || (x.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.Address?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.Contact?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        ApplySectionFromQuery();
         await LoadAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        ApplySectionFromQuery();
+    }
+
+    private void ApplySectionFromQuery()
+    {
+        var target = (QuerySection ?? "").Trim().ToLowerInvariant();
+        if (target is "store" or "type" or "generic" or "supplier" or "customer" or "services" or "medicine" or "all")
+        {
+            currentSection = target;
+        }
+        else if (string.IsNullOrWhiteSpace(target))
+        {
+            currentSection = "services";
+        }
+    }
+
+    private void SwitchSection(string sec)
+    {
+        currentSection = sec;
+        Navigation.NavigateTo($"/pharmacy/masters?section={sec}", replace: true);
+        message = "";
+    }
+
+    private string GetPageTitle() => currentSection switch
+    {
+        "store" => I18n.T("Medicine Stores Setup", "Medicine Stores Setup"),
+        "type" => I18n.T("Dosage Types Setup", "Dosage Types Setup"),
+        "generic" => I18n.T("Generic Molecules Setup", "Generic Molecules Setup"),
+        "supplier" => I18n.T("Pharmacy Suppliers Setup", "Pharmacy Suppliers Setup"),
+        "customer" => I18n.T("Customer Medicine & Sales", "Customer Medicine & Sales"),
+        "all" => I18n.T("All Pharmacy Masters", "All Pharmacy Masters"),
+        _ => I18n.T("Medicine Catalogue Setup", "Medicine Catalogue Setup")
+    };
+
+    private string GetSectionTitle() => currentSection switch
+    {
+        "store" => I18n.T("Dispensary & Store Masters", "Dispensary & Store Masters"),
+        "type" => I18n.T("Dosage Types & Formulations", "Dosage Types & Formulations"),
+        "generic" => I18n.T("Generic Drug Molecule Masters", "Generic Drug Molecule Masters"),
+        "supplier" => I18n.T("Pharma Suppliers & Distributors", "Pharma Suppliers & Distributors"),
+        "customer" => I18n.T("Customer Medicine & Sales Returns", "Customer Medicine & Sales Returns"),
+        "all" => I18n.T("All Pharmacy Masters", "All Pharmacy Masters"),
+        _ => I18n.T("Medicine Catalogue & Pricing", "Medicine Catalogue & Pricing")
+    };
+
+    private void ResetCurrent()
+    {
+        switch (currentSection)
+        {
+            case "store": ResetStore(); break;
+            case "type": ResetType(); break;
+            case "generic": ResetGeneric(); break;
+            case "supplier": ResetSupplier(); break;
+            default: ResetMedicine(); break;
+        }
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
@@ -134,20 +752,40 @@
         genericGroups = await db.GenericGroups.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         medicineTypes = await db.MedicineTypes.AsNoTracking().OrderBy(x => x.Type).ToListAsync();
         suppliers = await db.PharmacySuppliers.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        stores = await db.MedicineStores.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == MedicineCategoryId).OrderBy(x => x.Name).ToListAsync();
+
+        storeBalanceCounts = await db.MedicineStoreBalances.AsNoTracking()
+            .GroupBy(x => x.MedicineStoreID)
+            .Select(g => new { StoreID = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.StoreID, x => x.Count);
+
+        recentReturns = await db.PharmacySalesReturns.AsNoTracking()
+            .OrderByDescending(x => x.TransDate)
+            .Take(15)
+            .ToListAsync();
     }
 
     private async Task SaveMedicineAsync()
     {
         medicine.Name = medicine.Name?.Trim();
         if (string.IsNullOrWhiteSpace(medicine.Name) || medicine.TypeID is null or <= 0 || medicine.GenericID is null or <= 0 || medicine.SupplierID is null or <= 0)
-        { Fail(I18n.IsBangla ? "ঔষধের নাম, ডোজ ফরম, জেনেরিক এবং সরবরাহকারী আবশ্যক।" : "Medicine name, dosage form, generic and supplier are required."); return; }
+        {
+            Fail(I18n.IsBangla ? "ঔষধের নাম, ডোজ ফরম, জেনেরিক এবং সরবরাহকারী আবশ্যক।" : "Medicine name, dosage form, generic and supplier are required.");
+            return;
+        }
         if ((medicine.BuyRate ?? 0) < 0 || (medicine.SaleRate ?? 0) < 0 || (medicine.ReOrderLevel ?? 0) < 0)
-        { Fail(I18n.IsBangla ? "মূল্য এবং রিঅর্ডার লেভেল ঋণাত্মক হতে পারে না।" : "Rates and re-order level cannot be negative."); return; }
+        {
+            Fail(I18n.IsBangla ? "মূল্য এবং রিঅর্ডার লেভেল ঋণাত্মক হতে পারে না।" : "Rates and re-order level cannot be negative.");
+            return;
+        }
 
         await using var db = await DbFactory.CreateDbContextAsync();
         if (await db.Services.AnyAsync(x => x.CategoryID == MedicineCategoryId && x.Name == medicine.Name && x.ID != medicine.ID))
-        { Fail(I18n.IsBangla ? "এই নামের একটি ঔষধ ইতিমধ্যে বিদ্যমান।" : "A medicine with this name already exists."); return; }
+        {
+            Fail(I18n.IsBangla ? "এই নামের একটি ঔষধ ইতিমধ্যে বিদ্যমান।" : "A medicine with this name already exists.");
+            return;
+        }
 
         if (medicine.ID == 0)
         {
@@ -164,7 +802,43 @@
             current.ReOrderLevel = medicine.ReOrderLevel; current.IsVATApp = medicine.IsVATApp;
         }
         await db.SaveChangesAsync();
-        Success(I18n.IsBangla ? "ঔষধ সংরক্ষিত হয়েছে।" : "Medicine saved."); ResetMedicine(); await LoadAsync();
+        Success(I18n.IsBangla ? "ঔষধ সফলভাবে সংরক্ষিত হয়েছে।" : "Medicine saved successfully.");
+        ResetMedicine();
+        await LoadAsync();
+    }
+
+    private async Task SaveStoreAsync()
+    {
+        store.Name = store.Name.Trim();
+        if (string.IsNullOrWhiteSpace(store.Name))
+        {
+            Fail(I18n.IsBangla ? "স্টোরের নাম আবশ্যক।" : "Store name is required.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.MedicineStores.AnyAsync(x => x.Name == store.Name && x.ID != store.ID))
+        {
+            Fail(I18n.IsBangla ? "এই নামের একটি স্টোর ইতিমধ্যে বিদ্যমান।" : "A medicine store with this name already exists.");
+            return;
+        }
+
+        if (store.ID == 0)
+        {
+            db.MedicineStores.Add(store);
+        }
+        else
+        {
+            var current = await db.MedicineStores.FindAsync(store.ID);
+            if (current == null) return;
+            current.Name = store.Name;
+            current.IsActive = store.IsActive;
+            current.IsBufferStore = store.IsBufferStore;
+        }
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ফার্মেসি স্টোর সংরক্ষিত হয়েছে।" : "Medicine store saved successfully.");
+        ResetStore();
+        await LoadAsync();
     }
 
     private async Task SaveGenericAsync()
@@ -176,7 +850,10 @@
         var userId = await CurrentUserIdAsync();
         if (generic.ID == 0) { generic.EnteredBy = userId; generic.TransDate = DateTime.Now; db.GenericGroups.Add(generic); }
         else { var current = await db.GenericGroups.FindAsync(generic.ID); if (current == null) return; current.Name = generic.Name; current.EnteredBy = userId; current.TransDate = DateTime.Now; }
-        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "জেনেরিক নাম সংরক্ষিত হয়েছে।" : "Generic name saved."); ResetGeneric(); await LoadAsync();
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "জেনেরিক নাম সংরক্ষিত হয়েছে।" : "Generic name saved.");
+        ResetGeneric();
+        await LoadAsync();
     }
 
     private async Task SaveTypeAsync()
@@ -188,7 +865,10 @@
         var userId = await CurrentUserIdAsync();
         if (medicineType.ID == 0) { medicineType.EnteredBy = userId; medicineType.TransDate = DateTime.Now; db.MedicineTypes.Add(medicineType); }
         else { var current = await db.MedicineTypes.FindAsync(medicineType.ID); if (current == null) return; current.Type = medicineType.Type; current.EnteredBy = userId; current.TransDate = DateTime.Now; }
-        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "ঔষধের ধরন সংরক্ষিত হয়েছে।" : "Medicine type saved."); ResetType(); await LoadAsync();
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "ঔষধের ধরন সংরক্ষিত হয়েছে।" : "Medicine type saved.");
+        ResetType();
+        await LoadAsync();
     }
 
     private async Task SaveSupplierAsync()
@@ -201,7 +881,10 @@
         supplier.TransDate = DateTime.Now;
         if (supplier.ID == 0) db.PharmacySuppliers.Add(supplier);
         else { var current = await db.PharmacySuppliers.FindAsync(supplier.ID); if (current == null) return; current.Name = supplier.Name; current.Address = supplier.Address?.Trim(); current.Contact = supplier.Contact?.Trim(); current.Amount = supplier.Amount; current.TransDate = supplier.TransDate; }
-        await db.SaveChangesAsync(); Success(I18n.IsBangla ? "সরবরাহকারী সংরক্ষিত হয়েছে।" : "Supplier saved."); ResetSupplier(); await LoadAsync();
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "সরবরাহকারী সংরক্ষিত হয়েছে।" : "Supplier saved.");
+        ResetSupplier();
+        await LoadAsync();
     }
 
     private async Task DeleteMedicineAsync()
@@ -215,7 +898,27 @@
         if (used) { Fail(I18n.IsBangla ? "ঔষধের স্টক বা লেনদেনের রেকর্ড রয়েছে এবং এটি মুছে ফেলা যাবে না।" : "Medicine has stock or transaction history and cannot be deleted."); return; }
         var item = await db.Services.FirstOrDefaultAsync(x => x.ID == medicine.ID && x.CategoryID == MedicineCategoryId);
         if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
-        Success(I18n.IsBangla ? "ঔষধ মুছে ফেলা হয়েছে।" : "Medicine deleted."); ResetMedicine(); await LoadAsync();
+        Success(I18n.IsBangla ? "ঔষধ মুছে ফেলা হয়েছে।" : "Medicine deleted.");
+        ResetMedicine();
+        await LoadAsync();
+    }
+
+    private async Task DeleteStoreAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"স্টোর {store.Name} মুছে ফেলতে চান?" : $"Delete medicine store {store.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var usedInBalances = await db.MedicineStoreBalances.AnyAsync(x => x.MedicineStoreID == store.ID);
+        var usedInChallans = await db.MedicineReceivingChallans.AnyAsync(x => x.StoreID == store.ID);
+        if (usedInBalances || usedInChallans)
+        {
+            Fail(I18n.IsBangla ? "স্টোরে বর্তমান স্টক ব্যালেন্স বা ক্রয়ের চালান রয়েছে, এটি মুছে ফেলা যাবে না।" : "Store has active stock balances or purchase challans and cannot be deleted.");
+            return;
+        }
+        var item = await db.MedicineStores.FindAsync(store.ID);
+        if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
+        Success(I18n.IsBangla ? "স্টোর মুছে ফেলা হয়েছে।" : "Store deleted.");
+        ResetStore();
+        await LoadAsync();
     }
 
     private async Task DeleteGenericAsync()
@@ -224,7 +927,9 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         if (await db.Services.AnyAsync(x => x.GenericID == generic.ID)) { Fail(I18n.IsBangla ? "জেনেরিকটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Generic is used by medicines and cannot be deleted."); return; }
         var item = await db.GenericGroups.FindAsync(generic.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
-        Success(I18n.IsBangla ? "জেনেরিক মুছে ফেলা হয়েছে।" : "Generic deleted."); ResetGeneric(); await LoadAsync();
+        Success(I18n.IsBangla ? "জেনেরিক মুছে ফেলা হয়েছে।" : "Generic deleted.");
+        ResetGeneric();
+        await LoadAsync();
     }
 
     private async Task DeleteTypeAsync()
@@ -233,7 +938,9 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         if (await db.Services.AnyAsync(x => x.TypeID == medicineType.ID)) { Fail(I18n.IsBangla ? "ধরনটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Type is used by medicines and cannot be deleted."); return; }
         var item = await db.MedicineTypes.FindAsync(medicineType.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
-        Success(I18n.IsBangla ? "ঔষধের ধরন মুছে ফেলা হয়েছে।" : "Medicine type deleted."); ResetType(); await LoadAsync();
+        Success(I18n.IsBangla ? "ঔষধের ধরন মুছে ফেলা হয়েছে।" : "Medicine type deleted.");
+        ResetType();
+        await LoadAsync();
     }
 
     private async Task DeleteSupplierAsync()
@@ -242,22 +949,37 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         if (await db.Services.AnyAsync(x => x.SupplierID == supplier.ID)) { Fail(I18n.IsBangla ? "সরবরাহকারীটি ঔষধে ব্যবহৃত হচ্ছে এবং মুছে ফেলা যাবে না।" : "Supplier is used by medicines and cannot be deleted."); return; }
         var item = await db.PharmacySuppliers.FindAsync(supplier.ID); if (item != null) { db.Remove(item); await db.SaveChangesAsync(); }
-        Success(I18n.IsBangla ? "সরবরাহকারী মুছে ফেলা হয়েছে।" : "Supplier deleted."); ResetSupplier(); await LoadAsync();
+        Success(I18n.IsBangla ? "সরবরাহকারী মুছে ফেলা হয়েছে।" : "Supplier deleted.");
+        ResetSupplier();
+        await LoadAsync();
     }
 
     private void SelectMedicine(Service x) => medicine = new Service { ID = x.ID, Name = x.Name, CategoryID = x.CategoryID, TypeID = x.TypeID, GenericID = x.GenericID, SupplierID = x.SupplierID, BuyRate = x.BuyRate, SaleRate = x.SaleRate, ReOrderLevel = x.ReOrderLevel, IsVATApp = x.IsVATApp, InvestigationModuleID = x.InvestigationModuleID };
+    private void SelectStore(MedicineStore x) => store = new MedicineStore { ID = x.ID, Name = x.Name, IsActive = x.IsActive, IsBufferStore = x.IsBufferStore };
     private void SelectGeneric(GenericGroup x) => generic = new GenericGroup { ID = x.ID, Name = x.Name, EnteredBy = x.EnteredBy, TransDate = x.TransDate };
     private void SelectType(MedicineType x) => medicineType = new MedicineType { ID = x.ID, Type = x.Type, EnteredBy = x.EnteredBy, TransDate = x.TransDate };
     private void SelectSupplier(SupplierPharmacy x) => supplier = new SupplierPharmacy { ID = x.ID, Name = x.Name, Address = x.Address, Contact = x.Contact, Amount = x.Amount, TransDate = x.TransDate };
+
     private void ResetMedicine() => medicine = NewMedicine();
+    private void ResetStore() => store = NewStore();
     private void ResetGeneric() => generic = new();
     private void ResetType() => medicineType = new();
     private void ResetSupplier() => supplier = new();
+
     private static Service NewMedicine() => new() { CategoryID = MedicineCategoryId, BuyRate = 0, SaleRate = 0, ReOrderLevel = 0, IsVATApp = false, InvestigationModuleID = 0 };
+    private static MedicineStore NewStore() => new() { IsActive = true, IsBufferStore = false };
+
     private string GenericName(int? id) => genericGroups.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
     private string TypeName(int? id) => medicineTypes.FirstOrDefault(x => x.ID == id)?.Type ?? "—";
     private string SupplierName(int? id) => suppliers.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
-    private async Task<int> CurrentUserIdAsync() { var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
+    private string StoreName(int id) => stores.FirstOrDefault(x => x.ID == id)?.Name ?? $"Store #{id}";
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+    }
+
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
 }

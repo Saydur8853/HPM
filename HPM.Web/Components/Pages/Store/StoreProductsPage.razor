@@ -1,0 +1,394 @@
+@page "/store/products"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Data.Entities
+
+<PageTitle>@I18n.T("Hospital Store Products & Inventory") | @Branding.HospitalName</PageTitle>
+
+<div class="canteen-classic-fit">
+    <!-- Top Action & Status Bar -->
+    <div class="canteen-classic-topbar">
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>📋</span>
+                <span>@I18n.T("Hospital Store Products & Inventory", "Hospital Store Products & Inventory")</span>
+            </h1>
+            <span class="tickets-count-pill">
+                @products.Count @I18n.T("Items Listed", "Items Listed")
+            </span>
+            <span class="tickets-count-pill" style="background:#fef3c7; color:#92400e;">
+                @products.Count(p => p.Balance <= p.ReOrderLevel) @I18n.T("Low Stock", "Low Stock")
+            </span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass" title="@message">
+                    @(messageClass == "success" ? "✓" : "⚠") @message
+                </span>
+            }
+        </div>
+
+        <div class="tickets-top-actions">
+            <a href="/store/challan" class="btn btn-secondary tickets-btn" style="text-decoration:none;" title="@I18n.T("Go to Stock Receiving Challan")">
+                📥 @I18n.T("Receiving Challan", "Receiving Challan")
+            </a>
+            <button type="button" class="btn btn-ghost tickets-btn" @onclick="ResetForm" title="@I18n.T("New Product")">
+                + @I18n.T("New Product", "New Product")
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Workspace Grid -->
+    <div class="canteen-classic-workspace">
+        <!-- Left Panel: Product Editor Card -->
+        <div class="canteen-form-card" style="flex: 1.1;">
+            <div class="canteen-card-header">
+                <h2>@(editor.ID == 0 ? I18n.T("Add Store Consumable / Product", "Add Store Product") : $"{I18n.T("Edit Product", "Edit Product")} #{editor.ID}")</h2>
+                <span class="canteen-badge">
+                    @(editor.ID == 0 ? "NEW ITEM" : $"ID #{editor.ID}")
+                </span>
+            </div>
+
+            <EditForm Model="editor" OnValidSubmit="SaveProductAsync" class="canteen-form-wrapper">
+                <DataAnnotationsValidator />
+
+                <div class="canteen-form-body">
+                    <div class="billing-demographics-grid" style="grid-template-columns: 2fr 1fr;">
+                        <label>
+                            <span>@I18n.T("Product / Consumable Name", "Product Name")<span class="req">*</span></span>
+                            <InputText class="classic-input" @bind-Value="editor.Name" placeholder="e.g. Cotton 500g, Disposable Syringe 5ml, Surgical Gloves 7.5" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Unit of Measurement", "Unit")<span class="req">*</span></span>
+                            <select class="classic-input tickets-select" @bind="editor.Unit">
+                                <option value="Pcs">Pcs</option>
+                                <option value="Box">Box</option>
+                                <option value="Pack">Pack</option>
+                                <option value="Roll">Roll</option>
+                                <option value="Bottle">Bottle</option>
+                                <option value="Set">Set</option>
+                                <option value="Kg">Kg</option>
+                                <option value="Ltr">Ltr</option>
+                                <option value="Dozen">Dozen</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr; margin-top: 10px;">
+                        <label>
+                            <span>@I18n.T("Product Category", "Category")</span>
+                            <select class="classic-input tickets-select" @bind="editor.CategoryID">
+                                @foreach (var c in categories)
+                                {
+                                    <option value="@c.ID">@c.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label>
+                            <span>@I18n.T("Preferred Supplier", "Supplier")</span>
+                            <select class="classic-input tickets-select" @bind="editor.Supplier">
+                                <option value="0">-- @I18n.T("Select Supplier", "Select Supplier") --</option>
+                                @foreach (var s in suppliers)
+                                {
+                                    <option value="@s.ID">@s.Name</option>
+                                }
+                            </select>
+                        </label>
+                    </div>
+
+                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-top: 10px;">
+                        <label>
+                            <span>@I18n.T("Purchase Buy Rate", "Buy Rate") (@I18n.CurrencySymbol)</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.BuyRate" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Issue / Sale Rate", "Sale Rate") (@I18n.CurrencySymbol)</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.SaleRate" />
+                        </label>
+                        <label>
+                            <span>@I18n.T("Re-Order Threshold", "Re-Order Level")</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.ReOrderLevel" />
+                        </label>
+                    </div>
+
+                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr; margin-top: 10px;">
+                        <label>
+                            <span>@I18n.T("Current Balance Stock", "Balance Stock") (@editor.Unit)</span>
+                            <InputNumber class="classic-input bold-number" @bind-Value="editor.Balance" disabled="@(editor.ID > 0)" />
+                            @if (editor.ID > 0)
+                            {
+                                <small style="color:#64748b; font-size:11px;">@I18n.T("Stock adjusts automatically via Receiving Challans.", "Stock adjusts via Challan.")</small>
+                            }
+                        </label>
+                    </div>
+                </div>
+
+                <div class="results-form-footer">
+                    <div>
+                        @if (editor.ID > 0)
+                        {
+                            <button type="button" class="btn btn-ghost" style="color:#dc2626;" @onclick="DeleteProductAsync">
+                                🗑 @I18n.T("Delete", "Delete")
+                            </button>
+                        }
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="btn btn-ghost tickets-btn" @onclick="ResetForm">
+                            @I18n.T("Clear", "Clear")
+                        </button>
+                        <button type="submit" class="btn btn-primary tickets-btn" disabled="@isSaving">
+                            @(editor.ID == 0 ? I18n.T("Save Product", "Save") : I18n.T("Update Product", "Update"))
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Right Panel: Products Catalog List -->
+        <div class="canteen-queue-card" style="flex: 1.4;">
+            <div class="canteen-queue-top">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h2>@I18n.T("Store Inventory Directory", "Store Inventory Directory")</h2>
+                </div>
+                <span class="pill" style="font-size:11px; font-weight:700;">
+                    @FilteredProducts.Count() @I18n.T("Items", "Items")
+                </span>
+            </div>
+
+            <div class="tickets-scanner-bar">
+                <div class="tickets-scanner-input-wrap">
+                    <span class="tickets-scanner-icon"><SearchIcon /></span>
+                    <input type="text"
+                           class="classic-input tickets-scanner-input"
+                           placeholder="@I18n.T("Search product name, category or unit...", "Search product name, category or unit...")"
+                           @bind="searchQuery"
+                           @bind:event="oninput" />
+                    @if (!string.IsNullOrWhiteSpace(searchQuery))
+                    {
+                        <button type="button" class="tickets-scanner-clear" @onclick="() => searchQuery = string.Empty">✕</button>
+                    }
+                </div>
+            </div>
+
+            <div class="billing-queue-list">
+                @if (!FilteredProducts.Any())
+                {
+                    <div class="tickets-queue-empty">
+                        <span style="font-size:2rem;">📋</span>
+                        <span>@I18n.T("No matching products found.", "No matching products found.")</span>
+                    </div>
+                }
+                @foreach (var prod in FilteredProducts)
+                {
+                    var isLow = prod.Balance <= prod.ReOrderLevel;
+                    <div class="billing-queue-item @(editor.ID == prod.ID ? "active" : "")" @onclick="() => SelectProduct(prod)">
+                        <span class="billing-queue-serial">#@prod.ID</span>
+                        <div class="billing-queue-info">
+                            <span class="billing-queue-name">
+                                @prod.Name
+                                <small class="canteen-type-tag">(@prod.Unit)</small>
+                            </span>
+                            <span class="billing-queue-meta">
+                                @I18n.T("Buy"): @I18n.FormatCurrency(prod.BuyRate) &bull; @I18n.T("Sale/Issue"): @I18n.FormatCurrency(prod.SaleRate)
+                            </span>
+                        </div>
+                        <div class="tickets-queue-badges">
+                            @if (isLow)
+                            {
+                                <span class="badge" style="background:#fee2e2; color:#b91c1c; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11px;">
+                                    ⚠ @prod.Balance.ToString("0.##") @prod.Unit
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="badge" style="background:#dcfce7; color:#15803d; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11px;">
+                                    @prod.Balance.ToString("0.##") @prod.Unit
+                                </span>
+                            }
+                        </div>
+                        <div class="tickets-queue-actions" @onclick:stopPropagation="true">
+                            <button type="button" class="tickets-icon-action" title="@I18n.T("Edit")" @onclick="() => SelectProduct(prod)">✏️</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private StoreProduct editor = new() { CategoryID = 1, Unit = "Pcs", BuyRate = 0, SaleRate = 0, Balance = 0, ReOrderLevel = 10 };
+    private List<StoreProduct> products = [];
+    private List<StoreProductCategory> categories = [];
+    private List<SupplierStore> suppliers = [];
+
+    private string searchQuery = "";
+    private string message = "";
+    private string messageClass = "success";
+    private bool isSaving = false;
+
+    private IEnumerable<StoreProduct> FilteredProducts
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(searchQuery))
+                return products;
+
+            var q = searchQuery.Trim().ToLowerInvariant();
+            return products.Where(p =>
+                p.Name.ToLowerInvariant().Contains(q) ||
+                p.Unit.ToLowerInvariant().Contains(q) ||
+                (categories.FirstOrDefault(c => c.ID == p.CategoryID)?.Name.ToLowerInvariant().Contains(q) ?? false)
+            );
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadDataAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private async Task LoadDataAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        categories = await db.StoreProductCategories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        suppliers = await db.StoreSuppliers.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
+        products = await db.StoreProducts.AsNoTracking().OrderBy(p => p.Name).ToListAsync();
+
+        if (editor.CategoryID == 0 && categories.Count > 0)
+            editor.CategoryID = categories[0].ID;
+    }
+
+    private void SelectProduct(StoreProduct p)
+    {
+        editor = new StoreProduct
+        {
+            ID = p.ID,
+            Name = p.Name,
+            Unit = p.Unit,
+            CategoryID = p.CategoryID,
+            Supplier = p.Supplier,
+            BuyRate = p.BuyRate,
+            SaleRate = p.SaleRate,
+            Balance = p.Balance,
+            ReOrderLevel = p.ReOrderLevel,
+            EnteredBy = p.EnteredBy,
+            TransDate = p.TransDate
+        };
+        message = "";
+    }
+
+    private async Task SaveProductAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.Name))
+        {
+            ShowMsg(I18n.IsBangla ? "প্রোডাক্টের নাম প্রদান করুন।" : "Please provide product name.", "danger");
+            return;
+        }
+
+        isSaving = true;
+        message = "";
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            var uid = int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var parsed) ? parsed : 1;
+
+            editor.Name = editor.Name.Trim();
+
+            if (editor.ID == 0)
+            {
+                editor.EnteredBy = uid;
+                editor.TransDate = DateTime.Now;
+                db.StoreProducts.Add(editor);
+            }
+            else
+            {
+                var existing = await db.StoreProducts.FindAsync(editor.ID);
+                if (existing == null) return;
+                existing.Name = editor.Name;
+                existing.Unit = editor.Unit;
+                existing.CategoryID = editor.CategoryID;
+                existing.Supplier = editor.Supplier;
+                existing.BuyRate = editor.BuyRate;
+                existing.SaleRate = editor.SaleRate;
+                existing.ReOrderLevel = editor.ReOrderLevel;
+            }
+
+            await db.SaveChangesAsync();
+            ShowMsg(I18n.IsBangla ? "প্রোডাক্ট সফলভাবে সংরক্ষিত হয়েছে।" : "Store product saved successfully.", "success");
+            ResetForm();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowMsg($"Error saving product: {ex.Message}", "danger");
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task DeleteProductAsync()
+    {
+        if (editor.ID <= 0) return;
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্রোডাক্ট {editor.Name} মুছে ফেলতে চান?" : $"Delete product {editor.Name}?")) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var used = await db.StoreChallanItems.AnyAsync(i => i.ProductID == editor.ID);
+            if (used)
+            {
+                ShowMsg(I18n.IsBangla ? "এই প্রোডাক্টের ক্রয়ের চালান রয়েছে, এটি মুছে ফেলা যাবে না।" : "Product has purchase challan history and cannot be deleted.", "danger");
+                return;
+            }
+
+            var prod = await db.StoreProducts.FindAsync(editor.ID);
+            if (prod != null)
+            {
+                db.StoreProducts.Remove(prod);
+                await db.SaveChangesAsync();
+            }
+
+            ShowMsg(I18n.IsBangla ? "প্রোডাক্ট সফলভাবে মুছে ফেলা হয়েছে।" : "Product deleted successfully.", "success");
+            ResetForm();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowMsg($"Error deleting product: {ex.Message}", "danger");
+        }
+    }
+
+    private void ResetForm()
+    {
+        editor = new StoreProduct
+        {
+            CategoryID = categories.FirstOrDefault()?.ID ?? 1,
+            Unit = "Pcs",
+            BuyRate = 0,
+            SaleRate = 0,
+            Balance = 0,
+            ReOrderLevel = 10
+        };
+        message = "";
+    }
+
+    private void ShowMsg(string msg, string cls)
+    {
+        message = msg;
+        messageClass = cls;
+    }
+}
