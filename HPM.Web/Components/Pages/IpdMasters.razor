@@ -10,84 +10,450 @@
 <div class="page-heading">
     <div>
         <a class="back-link" href="masters">&larr; @I18n.T("Master setup")</a>
-        <h1>@I18n.T("IPD & bed setup")</h1>
-        <p>@I18n.T("Configure hospital departments, ward categories and bed numbers.", "Configure hospital departments, ward categories and bed numbers.")</p>
+        <h1>@I18n.T("IPD & Bed Masters", "আইপিডি ও বেড ব্যবস্থাপনা")</h1>
+        <p>@I18n.T("Configure hospital departments, ward categories, bed matrix and pricing.", "হাসপাতালের বিভাগ, ওয়ার্ড ক্যাটাগরি, বেড বিন্যাস ও চার্জসমূহ পরিচালনা করুন।")</p>
     </div>
 </div>
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
 
-<div class="master-layout">
-    <div>
-        <div class="panel form-panel">
-            <div class="panel-heading">
-                <div>
-                    <h2>@(department.ID==0?I18n.T("Add IPD department"):$"{I18n.T("Edit department")} #{department.ID}")</h2>
-                </div>
-                <button class="icon-btn" @onclick="ResetDepartment">@I18n.T("New")</button>
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" style="margin-bottom: 16px;">
+        @message
+    </div>
+}
+
+<!-- Top KPI Summary Cards -->
+<div class="metric-grid">
+    <div class="metric-card accent-blue">
+        <span>@I18n.T("Total Beds & Cabins", "মোট বেড ও কেবিন")</span>
+        <strong>@beds.Count</strong>
+        <small>@categories.Count @I18n.T("Categories") &bull; @departments.Count @I18n.T("Departments")</small>
+    </div>
+    <div class="metric-card accent-green">
+        <span>@I18n.T("Available Beds", "ফাঁকা বেড (উপলব্ধ)")</span>
+        <strong>@AvailableBedsCount</strong>
+        <small>@I18n.T("Ready for immediate admission", "রোগী ভর্তির জন্য প্রস্তুত")</small>
+    </div>
+    <div class="metric-card accent-red">
+        <span>@I18n.T("Occupied Beds", "ভর্তি রোগী রয়েছে")</span>
+        <strong>@OccupiedBedsCount</strong>
+        <small>@OccupancyRate% @I18n.T("Occupancy Rate", "অকুপেন্সি রেট")</small>
+    </div>
+    <div class="metric-card accent-amber">
+        <span>@I18n.T("Cleaning & Maintenance", "পরিচ্ছন্নতা ও রক্ষণাবেক্ষণ")</span>
+        <strong>@CleaningMaintenanceCount</strong>
+        <small>@CleaningBedsCount @I18n.T("Cleaning") &bull; @MaintenanceBedsCount @I18n.T("Maintenance")</small>
+    </div>
+</div>
+
+<!-- Navigation Tabs -->
+<div class="ipd-tabs-nav">
+    <button type="button" class="ipd-tab-btn @(activeTab == "beds" ? "active" : "")" @onclick='() => SetTab("beds")'>
+        <span>🛏️ @I18n.T("Beds & Cabins", "বেড ও কেবিনসমূহ")</span>
+        <span class="ipd-tab-count">@beds.Count</span>
+    </button>
+    <button type="button" class="ipd-tab-btn @(activeTab == "categories" ? "active" : "")" @onclick='() => SetTab("categories")'>
+        <span>🏷️ @I18n.T("Categories & Pricing", "ক্যাটাগরি ও মূল্য তালিকা")</span>
+        <span class="ipd-tab-count">@categories.Count</span>
+    </button>
+    <button type="button" class="ipd-tab-btn @(activeTab == "departments" ? "active" : "")" @onclick='() => SetTab("departments")'>
+        <span>🏢 @I18n.T("IPD Departments", "আইপিডি বিভাগসমূহ")</span>
+        <span class="ipd-tab-count">@departments.Count</span>
+    </button>
+    <button type="button" class="ipd-tab-btn @(activeTab == "bulk" ? "active" : "")" @onclick='() => SetTab("bulk")'>
+        <span>⚡ @I18n.T("Bulk Bed Generator", "একসাথে বহু বেড তৈরি")</span>
+    </button>
+</div>
+
+<!-- ==========================================
+     TAB 1: BEDS & CABINS (MATRIX & TABLE)
+     ========================================== -->
+@if (activeTab == "beds")
+{
+    <!-- Filter Toolbar -->
+    <div class="ipd-toolbar">
+        <div class="ipd-toolbar-filters">
+            <!-- Search -->
+            <div class="ipd-search-box">
+                <input type="text"
+                       class="classic-input"
+                       placeholder="@I18n.T("Search bed, category, patient...", "বেড, ক্যাটাগরি বা রোগী খুঁজুন...")"
+                       @bind="bedSearchQuery"
+                       @bind:event="oninput" />
             </div>
-            <EditForm Model="department" OnSubmit="SaveDepartmentAsync">
-                <div class="form-grid">
-                    <label class="span-2">
-                        <span>@I18n.T("Department name *")</span>
-                        <InputText @bind-Value="department.Name" />
-                    </label>
+
+            <!-- Category Filter -->
+            <select class="classic-input" style="max-width: 200px;" @bind="selectedCategoryFilter">
+                <option value="0">@I18n.T("All Categories", "সকল ক্যাটাগরি") (@beds.Count)</option>
+                @foreach (var cat in categories)
+                {
+                    var catBedCount = beds.Count(b => b.CategoryID == cat.ID);
+                    <option value="@cat.ID">@cat.Name (@catBedCount)</option>
+                }
+            </select>
+
+            <!-- Status Filter Pills -->
+            <div class="ipd-status-filters">
+                <button type="button" class="ipd-status-chip @(selectedStatusFilter == "All" ? "active" : "")" @onclick='() => selectedStatusFilter = "All"'>
+                    @I18n.T("All") (@beds.Count)
+                </button>
+                <button type="button" class="ipd-status-chip @(selectedStatusFilter == "Available" ? "active" : "")" @onclick='() => selectedStatusFilter = "Available"'>
+                    🟢 @I18n.T("Available") (@AvailableBedsCount)
+                </button>
+                <button type="button" class="ipd-status-chip @(selectedStatusFilter == "Occupied" ? "active" : "")" @onclick='() => selectedStatusFilter = "Occupied"'>
+                    🔴 @I18n.T("Occupied") (@OccupiedBedsCount)
+                </button>
+                <button type="button" class="ipd-status-chip @(selectedStatusFilter == "Cleaning" ? "active" : "")" @onclick='() => selectedStatusFilter = "Cleaning"'>
+                    🟡 @I18n.T("Cleaning") (@CleaningBedsCount)
+                </button>
+                <button type="button" class="ipd-status-chip @(selectedStatusFilter == "Maintenance" ? "active" : "")" @onclick='() => selectedStatusFilter = "Maintenance"'>
+                    ⚙️ @I18n.T("Maintenance") (@MaintenanceBedsCount)
+                </button>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <!-- View Mode Switch -->
+            <div class="ipd-status-filters">
+                <button type="button" class="ipd-status-chip @(bedViewMode == "grid" ? "active" : "")" @onclick='() => bedViewMode = "grid"' title="@I18n.T("Grid View")">
+                    🪟 @I18n.T("Grid")
+                </button>
+                <button type="button" class="ipd-status-chip @(bedViewMode == "table" ? "active" : "")" @onclick='() => bedViewMode = "table"' title="@I18n.T("Table View")">
+                    📑 @I18n.T("Table")
+                </button>
+            </div>
+
+            <!-- Add Bed Button -->
+            <button type="button" class="btn btn-primary" @onclick="OpenAddBedDrawer">
+                + @I18n.T("Add Bed/Cabin", "নতুন বেড যোগ করুন")
+            </button>
+        </div>
+    </div>
+
+    <!-- Bed List / Grid Display -->
+    @if (FilteredBeds.Count == 0)
+    {
+        <div class="panel" style="text-align: center; padding: 40px; color: #64748b;">
+            <p style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">@I18n.T("No beds found matching the criteria.", "কোনো বেড বা কেবিন পাওয়া যায়নি।")</p>
+            <button type="button" class="btn btn-outline" @onclick="ResetBedFilters">@I18n.T("Clear Filters", "ফিল্টার রিসেট করুন")</button>
+        </div>
+    }
+    else if (bedViewMode == "grid")
+    {
+        <!-- Grid Matrix View -->
+        <div class="bed-matrix-grid">
+            @foreach (var item in FilteredBeds)
+            {
+                var effectiveStatus = GetEffectiveStatus(item);
+                var statusClass = effectiveStatus.ToLowerInvariant();
+                var hasPatient = activeAdmissions.TryGetValue(item.ID, out var patInfo);
+                var cat = categories.FirstOrDefault(c => c.ID == item.CategoryID);
+                var deptName = cat != null ? DepartmentName(cat.IpdDepartmentID) : "—";
+
+                <div class="bed-matrix-card status-@statusClass">
+                    <div>
+                        <!-- Header -->
+                        <div class="bed-card-header">
+                            <div class="bed-card-title">
+                                <span class="bed-card-name">@item.Name</span>
+                                <span class="bed-card-cat" title="@I18n.T("Category & Department")">
+                                    @(cat?.Name ?? I18n.T("Unassigned")) &bull; @deptName
+                                </span>
+                            </div>
+                            <span class="pill" style="font-size: 11px; font-weight: 800; @GetStatusPillStyle(effectiveStatus)">
+                                @GetStatusLabel(effectiveStatus)
+                            </span>
+                        </div>
+
+                        <!-- Occupant Info / Bed State -->
+                        @if (item.IsAllocated && hasPatient && patInfo != null)
+                        {
+                            <div class="bed-patient-box">
+                                <div class="bed-patient-name">
+                                    <span>👤 @patInfo.PatientName</span>
+                                    @if (!string.IsNullOrEmpty(patInfo.Gender))
+                                    {
+                                        <span style="font-size: 11px; opacity: 0.85;">(@patInfo.Gender)</span>
+                                    }
+                                </div>
+                                <div class="bed-patient-meta">
+                                    <div><b>@I18n.T("Reg No"):</b> @patInfo.RegNo &bull; <b>@I18n.T("PID"):</b> @patInfo.PatientID</div>
+                                    @if (patInfo.AdmissionDate.HasValue)
+                                    {
+                                        <div><b>@I18n.T("Admitted"):</b> @patInfo.AdmissionDate.Value.ToString("dd-MMM-yyyy")</div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(patInfo.DoctorName))
+                                    {
+                                        <div style="margin-top: 2px;"><b>@I18n.T("Consultant"):</b> @patInfo.DoctorName</div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        else if (!item.IsAllocated)
+                        {
+                            <div style="padding: 12px 0 6px; font-size: 12px; color: #64748b;">
+                                @if (effectiveStatus == BedStatuses.Available)
+                                {
+                                    <div style="color: #059669; font-weight: 700;">
+                                        ✓ @I18n.T("Ready for patient admission", "ভর্তির জন্য সম্পূর্ণরূপে প্রস্তুত")
+                                    </div>
+                                    <div style="font-size: 11px; color: #64748b; margin-top: 3px;">
+                                        @I18n.T("Rate"): @I18n.FormatCurrency(cat?.Rate ?? 0) / @I18n.T("day")
+                                    </div>
+                                }
+                                else if (effectiveStatus == BedStatuses.Cleaning)
+                                {
+                                    <div style="color: #d97706; font-weight: 700;">
+                                        🧹 @I18n.T("Under housekeeping / sanitization", "হাউজকিপিং ও পরিচ্ছন্নতা চলছে")
+                                    </div>
+                                }
+                                else if (effectiveStatus == BedStatuses.Maintenance)
+                                {
+                                    <div style="color: #64748b; font-weight: 700;">
+                                        ⚙️ @I18n.T("Under maintenance / repair", "মেরামত ও রক্ষণাবেক্ষণ চলছে")
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Footer & Quick Actions -->
+                    <div class="bed-card-footer">
+                        <div style="display: flex; gap: 4px;">
+                            @if (!item.IsAllocated)
+                            {
+                                @if (effectiveStatus != BedStatuses.Available)
+                                {
+                                    <button type="button" class="bed-quick-status-btn" style="color: #059669;" @onclick='() => UpdateBedStatusAsync(item, BedStatuses.Available)' title="@I18n.T("Set Available")">
+                                        ✓ @I18n.T("Ready")
+                                    </button>
+                                }
+                                @if (effectiveStatus != BedStatuses.Cleaning)
+                                {
+                                    <button type="button" class="bed-quick-status-btn" style="color: #d97706;" @onclick='() => UpdateBedStatusAsync(item, BedStatuses.Cleaning)' title="@I18n.T("Set Cleaning")">
+                                        🧹 @I18n.T("Clean")
+                                    </button>
+                                }
+                                @if (effectiveStatus != BedStatuses.Maintenance)
+                                {
+                                    <button type="button" class="bed-quick-status-btn" style="color: #64748b;" @onclick='() => UpdateBedStatusAsync(item, BedStatuses.Maintenance)' title="@I18n.T("Set Maintenance")">
+                                        ⚙️
+                                    </button>
+                                }
+                            }
+                        </div>
+
+                        <div style="display: flex; gap: 6px;">
+                            <button type="button" class="icon-btn" @onclick="() => SelectBed(item)" title="@I18n.T("Edit Bed")">
+                                ✏️ @I18n.T("Edit")
+                            </button>
+                            @if (!item.IsAllocated)
+                            {
+                                <button type="button" class="icon-btn" style="color: #ef4444;" @onclick="() => DeleteBedDirectAsync(item)" title="@I18n.T("Delete Bed")">
+                                    🗑️
+                                </button>
+                            }
+                        </div>
+                    </div>
                 </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary">@I18n.T("Save department")</button>
-                    @if(department.ID>0){
-                        <button type="button" class="btn btn-ghost" @onclick="DeleteDepartmentAsync">@I18n.T("Delete")</button>
-                    }
-                </div>
-            </EditForm>
+            }
+        </div>
+    }
+    else
+    {
+        <!-- Table View -->
+        <div class="panel form-panel">
             <div class="data-table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>@I18n.T("Department")</th><th></th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Bed/Cabin Name", "বেড/কেবিন")</th>
+                            <th>@I18n.T("Category", "ক্যাটাগরি")</th>
+                            <th>@I18n.T("Department", "বিভাগ")</th>
+                            <th>@I18n.T("Daily Rate", "দৈনিক ভাড়া")</th>
+                            <th>@I18n.T("Status", "স্ট্যাটাস")</th>
+                            <th>@I18n.T("Current Occupant", "বর্তমান রোগী")</th>
+                            <th style="text-align: right;">@I18n.T("Actions")</th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        @foreach(var item in departments){
+                        @foreach (var item in FilteredBeds)
+                        {
+                            var effectiveStatus = GetEffectiveStatus(item);
+                            var cat = categories.FirstOrDefault(c => c.ID == item.CategoryID);
+                            var hasPatient = activeAdmissions.TryGetValue(item.ID, out var patInfo);
+
                             <tr>
-                                <td>@item.Name</td>
-                                <td><button class="icon-btn" @onclick="()=>SelectDepartment(item)">@I18n.T("Edit")</button></td>
+                                <td><b>@item.Name</b></td>
+                                <td>@(cat?.Name ?? "—")</td>
+                                <td>@(cat != null ? DepartmentName(cat.IpdDepartmentID) : "—")</td>
+                                <td>@I18n.FormatCurrency(cat?.Rate ?? 0)</td>
+                                <td>
+                                    <span class="pill" style="@GetStatusPillStyle(effectiveStatus)">
+                                        @GetStatusLabel(effectiveStatus)
+                                    </span>
+                                </td>
+                                <td>
+                                    @if (item.IsAllocated && hasPatient && patInfo != null)
+                                    {
+                                        <div>
+                                            <b>@patInfo.PatientName</b>
+                                            <span style="font-size: 11px; color: #64748b;">(Reg: @patInfo.RegNo)</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span style="color: #94a3b8;">—</span>
+                                    }
+                                </td>
+                                <td style="text-align: right;">
+                                    <button class="icon-btn" @onclick="() => SelectBed(item)">@I18n.T("Edit")</button>
+                                    @if (!item.IsAllocated)
+                                    {
+                                        <button class="icon-btn" style="color: #ef4444;" @onclick="() => DeleteBedDirectAsync(item)">@I18n.T("Delete")</button>
+                                    }
+                                </td>
                             </tr>
                         }
                     </tbody>
                 </table>
             </div>
         </div>
+    }
+}
 
+<!-- ==========================================
+     TAB 2: CATEGORIES & PRICING
+     ========================================== -->
+@if (activeTab == "categories")
+{
+    <div class="master-layout">
+        <!-- Form Panel -->
         <div class="panel form-panel">
             <div class="panel-heading">
                 <div>
-                    <h2>@(category.ID==0?I18n.T("Add bed category"):$"{I18n.T("Edit category")} #{category.ID}")</h2>
+                    <h2>@(category.ID == 0 ? I18n.T("Add Bed Category", "নতুন বেড ক্যাটাগরি") : $"{I18n.T("Edit Category")} #{category.ID}")</h2>
+                    <p>@I18n.T("Set room rates, service charges and admission fees", "রুম ভাড়া, সার্ভিস চার্জ ও ভর্তি ফি নির্ধারণ করুন")</p>
                 </div>
-                <button class="icon-btn" @onclick="ResetCategory">@I18n.T("New")</button>
+                <button type="button" class="icon-btn" @onclick="ResetCategory">@I18n.T("New")</button>
             </div>
             <EditForm Model="category" OnSubmit="SaveCategoryAsync">
                 <div class="form-grid">
-                    <label><span>@I18n.T("Category name *")</span><InputText @bind-Value="category.Name" /></label>
-                    <label><span>@I18n.T("IPD department *")</span><InputSelect @bind-Value="category.IpdDepartmentID"><option value="">@I18n.T("Select")</option>@foreach(var item in departments){<option value="@item.ID">@item.Name</option>}</InputSelect></label>
-                    <label><span>@I18n.T("Daily rate")</span><InputNumber @bind-Value="category.Rate" /></label>
-                    <label><span>@I18n.T("Admission fee")</span><InputNumber @bind-Value="category.AdmissionFee" /></label>
-                    <label><span>@I18n.T("Service charge")</span><InputNumber @bind-Value="category.ServiceCharge" /></label>
-                    <label><span>@I18n.T("Food charge")</span><InputNumber @bind-Value="category.Food" /></label>
-                    <label class="span-2"><span>@I18n.T("Specification")</span><InputTextArea @bind-Value="category.Specification" /></label>
+                    <label class="span-2">
+                        <span>@I18n.T("Category Name *", "ক্যাটাগরির নাম *")</span>
+                        <InputText class="classic-input" @bind-Value="category.Name" placeholder="e.g. VIP Cabin, Deluxe AC, General Ward" />
+                    </label>
+                    <label class="span-2">
+                        <span>@I18n.T("IPD Department *", "আইপিডি বিভাগ *")</span>
+                        <InputSelect class="classic-input" @bind-Value="category.IpdDepartmentID">
+                            <option value="">@I18n.T("Select Department", "বিভাগ নির্বাচন করুন")</option>
+                            @foreach (var item in departments)
+                            {
+                                <option value="@item.ID">@item.Name</option>
+                            }
+                        </InputSelect>
+                    </label>
+                    <label>
+                        <span>@I18n.T("Daily Bed Rate (Rent)", "দৈনিক বেড ভাড়া")</span>
+                        <InputNumber class="classic-input" @bind-Value="category.Rate" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Daily Service Charge", "দৈনিক সার্ভিস চার্জ")</span>
+                        <InputNumber class="classic-input" @bind-Value="category.ServiceCharge" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Daily Food Charge", "দৈনিক খাবারের চার্জ")</span>
+                        <InputNumber class="classic-input" @bind-Value="category.Food" />
+                    </label>
+                    <label>
+                        <span>@I18n.T("Admission Fee (One-time)", "ভর্তি ফি (এককালীন)")</span>
+                        <InputNumber class="classic-input" @bind-Value="category.AdmissionFee" />
+                    </label>
+                    <label class="span-2">
+                        <span>@I18n.T("Specification / Facilities", "সুবিধাসমূহ / বিবরণ")</span>
+                        <InputTextArea class="classic-input" @bind-Value="category.Specification" placeholder="e.g. AC, Attached Bath, LED TV, Attendant Bed" rows="2" />
+                    </label>
                 </div>
-                <div class="form-actions">
-                    <button class="btn btn-primary">@I18n.T("Save category")</button>
-                    @if(category.ID>0){
+
+                <!-- Live Calculated Cost Breakdown -->
+                <div class="pricing-calc-card">
+                    <div style="font-weight: 800; font-size: 12px; color: #0f172a; margin-bottom: 8px;">
+                        💡 @I18n.T("Estimated Daily Cost per Patient", "রোগীর আনুমানিক দৈনিক খরচ:")
+                    </div>
+                    <div class="pricing-calc-row">
+                        <span>@I18n.T("Daily Bed Rent"):</span>
+                        <span>@I18n.FormatCurrency(category.Rate ?? 0)</span>
+                    </div>
+                    <div class="pricing-calc-row">
+                        <span>@I18n.T("Daily Service Charge"):</span>
+                        <span>+ @I18n.FormatCurrency(category.ServiceCharge ?? 0)</span>
+                    </div>
+                    <div class="pricing-calc-row">
+                        <span>@I18n.T("Daily Food Charge"):</span>
+                        <span>+ @I18n.FormatCurrency(category.Food ?? 0)</span>
+                    </div>
+                    <div class="pricing-calc-total">
+                        <span>@I18n.T("Total Daily Charge"):</span>
+                        <span>@I18n.FormatCurrency((category.Rate ?? 0) + (category.ServiceCharge ?? 0) + (category.Food ?? 0)) / @I18n.T("day")</span>
+                    </div>
+                    @if ((category.AdmissionFee ?? 0) > 0)
+                    {
+                        <div style="margin-top: 6px; font-size: 11px; color: #64748b; text-align: right;">
+                            (@I18n.T("One-time Admission Fee"): @I18n.FormatCurrency(category.AdmissionFee ?? 0))
+                        </div>
+                    }
+                </div>
+
+                <div class="form-actions" style="margin-top: 16px;">
+                    <button class="btn btn-primary">@I18n.T("Save Category", "ক্যাটাগরি সংরক্ষণ করুন")</button>
+                    @if (category.ID > 0)
+                    {
                         <button type="button" class="btn btn-ghost" @onclick="DeleteCategoryAsync">@I18n.T("Delete")</button>
                     }
                 </div>
             </EditForm>
+        </div>
+
+        <!-- Table Panel -->
+        <div class="panel form-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>@I18n.T("Existing Categories", "বিদ্যমান ক্যাটাগরিসমূহ") (@categories.Count)</h2>
+                </div>
+            </div>
             <div class="data-table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>@I18n.T("Category")</th><th>@I18n.T("Department")</th><th class="num">@I18n.T("Daily rate")</th><th></th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Category")</th>
+                            <th>@I18n.T("Department")</th>
+                            <th class="num">@I18n.T("Daily Total")</th>
+                            <th class="num">@I18n.T("Beds")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        @foreach(var item in categories){
+                        @foreach (var item in categories)
+                        {
+                            var totalDaily = (item.Rate ?? 0) + (item.ServiceCharge ?? 0) + (item.Food ?? 0);
+                            var bedCount = beds.Count(b => b.CategoryID == item.ID);
                             <tr>
-                                <td>@item.Name</td>
+                                <td>
+                                    <b>@item.Name</b>
+                                    @if (!string.IsNullOrWhiteSpace(item.Specification))
+                                    {
+                                        <div style="font-size: 11px; color: #64748b;">@item.Specification</div>
+                                    }
+                                </td>
                                 <td>@DepartmentName(item.IpdDepartmentID)</td>
-                                <td class="num">@I18n.FormatCurrency(item.Rate??0)</td>
-                                <td><button class="icon-btn" @onclick="()=>SelectCategory(item)">@I18n.T("Edit")</button></td>
+                                <td class="num">
+                                    <b>@I18n.FormatCurrency(totalDaily)</b>
+                                    <div style="font-size: 10px; color: #64748b;">
+                                        (Rent: @I18n.FormatCurrency(item.Rate ?? 0))
+                                    </div>
+                                </td>
+                                <td class="num"><span class="pill">@bedCount</span></td>
+                                <td><button class="icon-btn" @onclick="() => SelectCategory(item)">@I18n.T("Edit")</button></td>
                             </tr>
                         }
                     </tbody>
@@ -95,57 +461,358 @@
             </div>
         </div>
     </div>
+}
 
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(bed.ID==0?I18n.T("Add bed/cabin"):$"{I18n.T("Edit bed")} #{bed.ID}")</h2>
-                <p>@beds.Count @I18n.T("Total"), @beds.Count(x=>x.IsAllocated) @I18n.T("Admitted")</p>
+<!-- ==========================================
+     TAB 3: IPD DEPARTMENTS
+     ========================================== -->
+@if (activeTab == "departments")
+{
+    <div class="master-layout">
+        <!-- Form Panel -->
+        <div class="panel form-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>@(department.ID == 0 ? I18n.T("Add IPD Department", "নতুন আইপিডি বিভাগ") : $"{I18n.T("Edit Department")} #{department.ID}")</h2>
+                    <p>@I18n.T("Define clinical departments for inpatient wards", "ইনপেশেন্ট ওয়ার্ডের ক্লিনিক্যাল বিভাগসমূহ নির্ধারণ করুন")</p>
+                </div>
+                <button type="button" class="icon-btn" @onclick="ResetDepartment">@I18n.T("New")</button>
             </div>
-            <button class="icon-btn" @onclick="ResetBed">@I18n.T("New")</button>
-        </div>
-        <EditForm Model="bed" OnSubmit="SaveBedAsync">
-            <div class="form-grid">
-                <label><span>@I18n.T("Bed/cabin name *")</span><InputText @bind-Value="bed.Name" /></label>
-                <label><span>@I18n.T("Category *")</span><InputSelect @bind-Value="bed.CategoryID"><option value="0">@I18n.T("Select")</option>@foreach(var item in categories){<option value="@item.ID">@item.Name</option>}</InputSelect></label>
-            </div>
-            @if(bed.ID>0){
-                <p><span class="pill">@(bed.IsAllocated?I18n.T("OCCUPIED"):I18n.T("AVAILABLE"))</span> @I18n.T("Occupancy changes only through admission/discharge.")</p>
-            }
-            <div class="form-actions">
-                <button class="btn btn-primary">@I18n.T("Save bed")</button>
-                @if(bed.ID>0){
-                    <button type="button" class="btn btn-ghost" @onclick="DeleteBedAsync">@I18n.T("Delete")</button>
-                }
-            </div>
-        </EditForm>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead><tr><th>@I18n.T("Bed/cabin")</th><th>@I18n.T("Category")</th><th>@I18n.T("Status")</th><th></th></tr></thead>
-                <tbody>
-                    @foreach(var item in beds){
-                        <tr>
-                            <td><b>@item.Name</b></td>
-                            <td>@CategoryName(item.CategoryID)</td>
-                            <td><span class="pill">@(item.IsAllocated?I18n.T("OCCUPIED"):I18n.T("AVAILABLE"))</span></td>
-                            <td><button class="icon-btn" @onclick="()=>SelectBed(item)">@I18n.T("Edit")</button></td>
-                        </tr>
+            <EditForm Model="department" OnSubmit="SaveDepartmentAsync">
+                <div class="form-grid">
+                    <label class="span-2">
+                        <span>@I18n.T("Department Name *", "বিভাগের নাম *")</span>
+                        <InputText class="classic-input" @bind-Value="department.Name" placeholder="e.g. Medicine, General Surgery, Gynecology, ICU" />
+                    </label>
+                </div>
+                <div class="form-actions" style="margin-top: 16px;">
+                    <button class="btn btn-primary">@I18n.T("Save Department", "বিভাগ সংরক্ষণ করুন")</button>
+                    @if (department.ID > 0)
+                    {
+                        <button type="button" class="btn btn-ghost" @onclick="DeleteDepartmentAsync">@I18n.T("Delete")</button>
                     }
-                </tbody>
-            </table>
+                </div>
+            </EditForm>
+        </div>
+
+        <!-- Table Panel -->
+        <div class="panel form-panel">
+            <div class="panel-heading">
+                <div>
+                    <h2>@I18n.T("Configured Departments", "নিবন্ধিত বিভাগসমূহ") (@departments.Count)</h2>
+                </div>
+            </div>
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Department")</th>
+                            <th class="num">@I18n.T("Categories")</th>
+                            <th class="num">@I18n.T("Total Beds")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in departments)
+                        {
+                            var catCount = categories.Count(c => c.IpdDepartmentID == item.ID);
+                            var deptCatIds = categories.Where(c => c.IpdDepartmentID == item.ID).Select(c => c.ID).ToHashSet();
+                            var bedCount = beds.Count(b => deptCatIds.Contains(b.CategoryID));
+                            <tr>
+                                <td><b>@item.Name</b></td>
+                                <td class="num"><span class="pill">@catCount</span></td>
+                                <td class="num"><span class="pill">@bedCount</span></td>
+                                <td><button class="icon-btn" @onclick="() => SelectDepartment(item)">@I18n.T("Edit")</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
-</div>
+}
 
-@code{
-    private IpdDepartment department=new();
-    private BedCategory category=new();
-    private BedCabin bed=new();
-    private List<IpdDepartment> departments=[];
-    private List<BedCategory> categories=[];
-    private List<BedCabin> beds=[];
-    private string message="";
-    private string messageClass="success";
+<!-- ==========================================
+     TAB 4: BULK BED GENERATOR
+     ========================================== -->
+@if (activeTab == "bulk")
+{
+    <div class="panel form-panel" style="max-width: 800px; margin: 0 auto;">
+        <div class="panel-heading">
+            <div>
+                <h2>⚡ @I18n.T("Bulk Bed & Cabin Generator", "একসাথে একাধিক বেড তৈরি করুন")</h2>
+                <p>@I18n.T("Quickly generate a sequence of beds (e.g. Bed-101 to Bed-120 or Cabin-01 to Cabin-10) with one click.", "এক ক্লিকে ধারাবাহিকভাবে বহু বেড বা কেবিন তৈরি করুন।")</p>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <label class="span-2">
+                <span>@I18n.T("Target Bed Category *", "বেড ক্যাটাগরি *")</span>
+                <select class="classic-input" @bind="bulkCategoryId">
+                    <option value="0">@I18n.T("Select Category", "ক্যাটাগরি নির্বাচন করুন")</option>
+                    @foreach (var cat in categories)
+                    {
+                        <option value="@cat.ID">@cat.Name (@DepartmentName(cat.IpdDepartmentID))</option>
+                    }
+                </select>
+            </label>
+
+            <label>
+                <span>@I18n.T("Name Prefix", "নামের প্রিফিক্স")</span>
+                <input type="text" class="classic-input" @bind="bulkPrefix" placeholder="e.g. Bed-, Cabin-, ICU-" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Name Suffix (Optional)", "সাফিক্স (ঐচ্ছিক)")</span>
+                <input type="text" class="classic-input" @bind="bulkSuffix" placeholder="e.g. -A, -East" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Start Number", "শুরুর নম্বর")</span>
+                <input type="number" class="classic-input" @bind="bulkStart" min="1" max="9999" />
+            </label>
+
+            <label>
+                <span>@I18n.T("End Number", "শেষ নম্বর")</span>
+                <input type="number" class="classic-input" @bind="bulkEnd" min="1" max="9999" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Zero Padding", "শূন্য প্যাডিং")</span>
+                <select class="classic-input" @bind="bulkZeroPad">
+                    <option value="0">@I18n.T("No Padding (1, 2, 3...)")</option>
+                    <option value="2">@I18n.T("2 Digits (01, 02, 03...)")</option>
+                    <option value="3">@I18n.T("3 Digits (001, 002, 003...)")</option>
+                    <option value="4">@I18n.T("4 Digits (0001, 0002...)")</option>
+                </select>
+            </label>
+
+            <label>
+                <span>@I18n.T("Initial Status", "প্রাথমিক অবস্থা")</span>
+                <select class="classic-input" @bind="bulkStatus">
+                    <option value="@BedStatuses.Available">🟢 @I18n.T("Available", "ফাঁকা (প্রস্তুত)")</option>
+                    <option value="@BedStatuses.Cleaning">🟡 @I18n.T("Cleaning", "পরিচ্ছন্নতা চলছে")</option>
+                    <option value="@BedStatuses.Maintenance">⚙️ @I18n.T("Maintenance", "রক্ষণাবেক্ষণ")</option>
+                </select>
+            </label>
+        </div>
+
+        <!-- Live Preview -->
+        @{
+            var previewList = GetBulkPreview();
+            var newCount = previewList.Count(x => !x.Exists);
+            var dupCount = previewList.Count(x => x.Exists);
+        }
+
+        <div class="bulk-preview-wrap">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 800; font-size: 13px; color: #0f172a;">
+                    🔍 @I18n.T("Live Preview", "প্রিভিউ:") (@previewList.Count @I18n.T("total"))
+                </span>
+                <div style="font-size: 12px;">
+                    <span style="color: #059669; font-weight: 700;">✅ @newCount @I18n.T("Ready to create")</span>
+                    @if (dupCount > 0)
+                    {
+                        <span style="color: #e11d48; font-weight: 700; margin-left: 10px;">⚠️ @dupCount @I18n.T("Already exist (skipped)")</span>
+                    }
+                </div>
+            </div>
+
+            @if (previewList.Count > 0)
+            {
+                <div class="bulk-chips-container">
+                    @foreach (var p in previewList)
+                    {
+                        <span class="bulk-bed-chip @(p.Exists ? "is-dup" : "is-new")" title="@(p.Exists ? I18n.T("Already exists") : I18n.T("New bed"))">
+                            @(p.Exists ? "⚠️" : "✓") @p.Name
+                        </span>
+                    }
+                </div>
+            }
+            else
+            {
+                <p style="font-size: 12px; color: #64748b; margin-top: 8px;">
+                    @I18n.T("Set valid start and end numbers (maximum 100 at a time) to see preview.", "সঠিক শুরু ও শেষ নম্বর নির্ধারণ করুন (একবারে সর্বোচ্চ ১০০টি)।")
+                </p>
+            }
+        </div>
+
+        <div class="form-actions" style="margin-top: 20px;">
+            <button type="button" class="btn btn-primary" disabled="@(newCount == 0 || bulkCategoryId <= 0)" @onclick="GenerateBedsAsync">
+                ⚡ @I18n.T("Generate") @newCount @I18n.T("Beds Now", "টি বেড এক ক্লিকে তৈরি করুন")
+            </button>
+        </div>
+    </div>
+}
+
+<!-- ==========================================
+     DRAWER / MODAL: ADD / EDIT SINGLE BED
+     ========================================== -->
+@if (showBedDrawer)
+{
+    <div class="doc-drawer-backdrop" @onclick="CloseBedDrawer"></div>
+    <div class="doc-drawer-panel" style="width: 500px;" role="dialog" aria-modal="true">
+        <div class="doc-drawer-header">
+            <div class="doc-drawer-title-wrap">
+                <div class="doc-drawer-icon">🛏️</div>
+                <div>
+                    <h2 class="doc-drawer-title">@(bed.ID == 0 ? I18n.T("Add Bed / Cabin", "নতুন বেড বা কেবিন যোগ করুন") : $"{I18n.T("Edit Bed")} #{bed.ID}")</h2>
+                    <p class="doc-drawer-sub">@I18n.T("Configure bed name, category and operational status.", "বেডের নাম, ক্যাটাগরি ও অবস্থা পরিবর্তন করুন।")</p>
+                </div>
+            </div>
+            <button type="button" class="doc-drawer-close" @onclick="CloseBedDrawer">✕</button>
+        </div>
+
+        <EditForm Model="bed" OnSubmit="SaveBedAsync" class="doc-drawer-form">
+            <div class="doc-drawer-body">
+                <div class="form-grid">
+                    <label class="span-2">
+                        <span>@I18n.T("Bed/Cabin Name *", "বেড বা কেবিনের নাম *")</span>
+                        <InputText class="classic-input" @bind-Value="bed.Name" placeholder="e.g. Bed-101, Cabin-204" />
+                    </label>
+
+                    <label class="span-2">
+                        <span>@I18n.T("Category *", "ক্যাটাগরি *")</span>
+                        <InputSelect class="classic-input" @bind-Value="bed.CategoryID">
+                            <option value="0">@I18n.T("Select Category", "ক্যাটাগরি নির্বাচন করুন")</option>
+                            @foreach (var item in categories)
+                            {
+                                <option value="@item.ID">@item.Name (@DepartmentName(item.IpdDepartmentID))</option>
+                            }
+                        </InputSelect>
+                    </label>
+
+                    <label class="span-2">
+                        <span>@I18n.T("Status", "বর্তমান অবস্থা")</span>
+                        @if (bed.IsAllocated)
+                        {
+                            <div style="padding: 10px; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; color: #9f1239; font-weight: 700; font-size: 13px;">
+                                🔴 @I18n.T("Occupied (Patient is Admitted)", "অধিভুক্ত (রোগী ভর্তি রয়েছে)")
+                                <p style="font-size: 11px; font-weight: 500; margin-top: 4px; color: #be123c;">
+                                    @I18n.T("Occupancy changes automatically when patient is admitted or discharged.", "রোগী ভর্তি বা রিলিজের মাধ্যমে স্বয়ংক্রিয়ভাবে অকুপেন্সি পরিবর্তন হয়।")
+                                </p>
+                            </div>
+                        }
+                        else
+                        {
+                            <InputSelect class="classic-input" @bind-Value="bed.Status">
+                                <option value="@BedStatuses.Available">🟢 @I18n.T("Available", "ফাঁকা (ভর্তির জন্য প্রস্তুত)")</option>
+                                <option value="@BedStatuses.Cleaning">🟡 @I18n.T("Cleaning", "পরিচ্ছন্নতা চলছে")</option>
+                                <option value="@BedStatuses.Maintenance">⚙️ @I18n.T("Maintenance", "রক্ষণাবেক্ষণ / মেরামত")</option>
+                            </InputSelect>
+                        }
+                    </label>
+                </div>
+            </div>
+
+            <div class="doc-drawer-footer">
+                <button type="button" class="btn btn-ghost" @onclick="CloseBedDrawer">@I18n.T("Cancel")</button>
+                @if (bed.ID > 0 && !bed.IsAllocated)
+                {
+                    <button type="button" class="btn btn-ghost" style="color: #ef4444;" @onclick="DeleteBedAsync">@I18n.T("Delete")</button>
+                }
+                <button type="submit" class="btn btn-primary">@I18n.T("Save Bed", "বেড সংরক্ষণ করুন")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@code {
+    private string activeTab = "beds";
+    private string bedViewMode = "grid";
+    private string bedSearchQuery = string.Empty;
+    private int selectedCategoryFilter = 0;
+    private string selectedStatusFilter = "All";
+
+    private bool showBedDrawer = false;
+
+    // Entities
+    private IpdDepartment department = new();
+    private BedCategory category = new();
+    private BedCabin bed = new();
+
+    private List<IpdDepartment> departments = [];
+    private List<BedCategory> categories = [];
+    private List<BedCabin> beds = [];
+
+    // Bulk generator fields
+    private int bulkCategoryId;
+    private string bulkPrefix = "Bed-";
+    private string bulkSuffix = string.Empty;
+    private int bulkStart = 1;
+    private int bulkEnd = 10;
+    private int bulkZeroPad = 2;
+    private string bulkStatus = BedStatuses.Available;
+
+    private string message = "";
+    private string messageClass = "success";
+
+    private class AdmittedPatientInfo
+    {
+        public string RegNo { get; set; } = string.Empty;
+        public string PatientID { get; set; } = string.Empty;
+        public string PatientName { get; set; } = string.Empty;
+        public string Gender { get; set; } = string.Empty;
+        public DateTime? AdmissionDate { get; set; }
+        public string DoctorName { get; set; } = string.Empty;
+    }
+
+    private Dictionary<int, AdmittedPatientInfo> activeAdmissions = new();
+
+    // KPI computed properties
+    private int OccupiedBedsCount => beds.Count(b => b.IsAllocated);
+    private int AvailableBedsCount => beds.Count(b => !b.IsAllocated && (b.Status == BedStatuses.Available || string.IsNullOrEmpty(b.Status)));
+    private int CleaningBedsCount => beds.Count(b => !b.IsAllocated && b.Status == BedStatuses.Cleaning);
+    private int MaintenanceBedsCount => beds.Count(b => !b.IsAllocated && b.Status == BedStatuses.Maintenance);
+    private int CleaningMaintenanceCount => CleaningBedsCount + MaintenanceBedsCount;
+    private double OccupancyRate => beds.Count == 0 ? 0 : Math.Round((double)OccupiedBedsCount / beds.Count * 100, 1);
+
+    // Filtered Beds
+    private List<BedCabin> FilteredBeds
+    {
+        get
+        {
+            var q = beds.AsEnumerable();
+
+            if (selectedCategoryFilter > 0)
+            {
+                q = q.Where(b => b.CategoryID == selectedCategoryFilter);
+            }
+
+            if (selectedStatusFilter == "Available")
+            {
+                q = q.Where(b => !b.IsAllocated && (b.Status == BedStatuses.Available || string.IsNullOrEmpty(b.Status)));
+            }
+            else if (selectedStatusFilter == "Occupied")
+            {
+                q = q.Where(b => b.IsAllocated);
+            }
+            else if (selectedStatusFilter == "Cleaning")
+            {
+                q = q.Where(b => !b.IsAllocated && b.Status == BedStatuses.Cleaning);
+            }
+            else if (selectedStatusFilter == "Maintenance")
+            {
+                q = q.Where(b => !b.IsAllocated && b.Status == BedStatuses.Maintenance);
+            }
+
+            if (!string.IsNullOrWhiteSpace(bedSearchQuery))
+            {
+                var term = bedSearchQuery.Trim();
+                q = q.Where(b =>
+                    b.Name.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || (categories.FirstOrDefault(c => c.ID == b.CategoryID)?.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (activeAdmissions.TryGetValue(b.ID, out var pat) && (
+                        pat.PatientName.Contains(term, StringComparison.OrdinalIgnoreCase)
+                        || pat.PatientID.Contains(term, StringComparison.OrdinalIgnoreCase)
+                        || pat.RegNo.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    ))
+                );
+            }
+
+            return q.ToList();
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -155,22 +822,232 @@
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
-    private async Task LoadAsync()
+    private void SetTab(string tab)
     {
-        await using var db=await DbFactory.CreateDbContextAsync();
-        departments=await db.IpdDepartments.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
-        categories=await db.BedCategories.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
-        beds=await db.BedCabins.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
+        activeTab = tab;
+        message = string.Empty;
     }
 
+    private void ResetBedFilters()
+    {
+        bedSearchQuery = string.Empty;
+        selectedCategoryFilter = 0;
+        selectedStatusFilter = "All";
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        departments = await db.IpdDepartments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        categories = await db.BedCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        beds = await db.BedCabins.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+
+        if (bulkCategoryId == 0 && categories.Count > 0)
+        {
+            bulkCategoryId = categories[0].ID;
+        }
+
+        // Load active patient admissions
+        activeAdmissions.Clear();
+        var rawAdmissions = await db.PatientAdmissions.AsNoTracking()
+            .Where(x => x.IsAdmitted == true && x.BedCabinID != null)
+            .Select(x => new
+            {
+                BedCabinId = x.BedCabinID!.Value,
+                RegNo = x.RegNo,
+                PatientId = x.PatientID,
+                AdmissionDate = x.AdmissionDate,
+                ConsultantId = x.Consultant
+            })
+            .ToListAsync();
+
+        if (rawAdmissions.Count > 0)
+        {
+            var pids = rawAdmissions.Where(a => !string.IsNullOrEmpty(a.PatientId)).Select(a => a.PatientId!).Distinct().ToList();
+            var docIds = rawAdmissions.Where(a => a.ConsultantId.HasValue).Select(a => a.ConsultantId!.Value).Distinct().ToList();
+
+            var patientMap = await db.Registrations.AsNoTracking()
+                .Where(p => pids.Contains(p.PatientID))
+                .Select(p => new { p.PatientID, p.Name, p.Sex })
+                .ToDictionaryAsync(p => p.PatientID, p => p);
+
+            var doctorMap = await db.Doctors.AsNoTracking()
+                .Where(d => docIds.Contains(d.ID))
+                .Select(d => new { d.ID, d.Name })
+                .ToDictionaryAsync(d => d.ID, d => d.Name);
+
+            foreach (var adm in rawAdmissions)
+            {
+                patientMap.TryGetValue(adm.PatientId ?? string.Empty, out var pat);
+                doctorMap.TryGetValue(adm.ConsultantId ?? 0, out var docName);
+
+                activeAdmissions[adm.BedCabinId] = new AdmittedPatientInfo
+                {
+                    RegNo = adm.RegNo,
+                    PatientID = adm.PatientId ?? string.Empty,
+                    PatientName = pat?.Name ?? I18n.T("Admitted Patient"),
+                    Gender = pat?.Sex ?? "",
+                    AdmissionDate = adm.AdmissionDate,
+                    DoctorName = docName ?? ""
+                };
+            }
+        }
+    }
+
+    private string GetEffectiveStatus(BedCabin b)
+    {
+        if (b.IsAllocated) return BedStatuses.Occupied;
+        if (string.Equals(b.Status, BedStatuses.Cleaning, StringComparison.OrdinalIgnoreCase)) return BedStatuses.Cleaning;
+        if (string.Equals(b.Status, BedStatuses.Maintenance, StringComparison.OrdinalIgnoreCase)) return BedStatuses.Maintenance;
+        return BedStatuses.Available;
+    }
+
+    private string GetStatusLabel(string status)
+    {
+        return status switch
+        {
+            BedStatuses.Occupied => I18n.IsBangla ? "ভর্তি রোগী" : "OCCUPIED",
+            BedStatuses.Cleaning => I18n.IsBangla ? "পরিচ্ছন্নতা" : "CLEANING",
+            BedStatuses.Maintenance => I18n.IsBangla ? "রক্ষণাবেক্ষণ" : "MAINTENANCE",
+            _ => I18n.IsBangla ? "ফাঁকা (প্রস্তুত)" : "AVAILABLE"
+        };
+    }
+
+    private string GetStatusPillStyle(string status)
+    {
+        return status switch
+        {
+            BedStatuses.Occupied => "background: #ffe4e6; color: #9f1239; border: 1px solid #fecdd3;",
+            BedStatuses.Cleaning => "background: #fef3c7; color: #92400e; border: 1px solid #fde68a;",
+            BedStatuses.Maintenance => "background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;",
+            _ => "background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0;"
+        };
+    }
+
+    private async Task UpdateBedStatusAsync(BedCabin item, string newStatus)
+    {
+        if (item.IsAllocated)
+        {
+            Fail(I18n.IsBangla ? "রোগী ভর্তি থাকা অবস্থায় বেডের অবস্থা পরিবর্তন করা যাবে না।" : "Cannot change status while patient is admitted.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var current = await db.BedCabins.FindAsync(item.ID);
+        if (current != null)
+        {
+            current.Status = newStatus;
+            await db.SaveChangesAsync();
+            item.Status = newStatus;
+            Success(I18n.IsBangla ? $"বেড {item.Name}-এর স্ট্যাটাস আপডেট হয়েছে।" : $"Bed {item.Name} status updated to {newStatus}.");
+            StateHasChanged();
+        }
+    }
+
+    // Single Bed Drawer Management
+    private void OpenAddBedDrawer()
+    {
+        bed = new BedCabin
+        {
+            CategoryID = categories.Count > 0 ? categories[0].ID : 0,
+            Status = BedStatuses.Available
+        };
+        showBedDrawer = true;
+    }
+
+    private void CloseBedDrawer()
+    {
+        showBedDrawer = false;
+        ResetBed();
+    }
+
+    private void SelectBed(BedCabin x)
+    {
+        bed = new BedCabin
+        {
+            ID = x.ID,
+            Name = x.Name,
+            CategoryID = x.CategoryID,
+            IsAllocated = x.IsAllocated,
+            Status = x.Status ?? BedStatuses.Available
+        };
+        showBedDrawer = true;
+    }
+
+    private async Task SaveBedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(bed.Name) || bed.CategoryID <= 0)
+        {
+            Fail(I18n.IsBangla ? "বেড/কেবিনের নাম ও ক্যাটাগরি আবশ্যক।" : "Bed/cabin name and category are required.");
+            return;
+        }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.BedCabins.AnyAsync(x => x.Name == bed.Name.Trim() && x.ID != bed.ID))
+        {
+            Fail(I18n.IsBangla ? "এই নামের বেড/কেবিন ইতিমধ্যে বিদ্যমান।" : "This bed/cabin name already exists.");
+            return;
+        }
+        if (bed.ID == 0)
+        {
+            bed.Name = bed.Name.Trim();
+            db.BedCabins.Add(bed);
+        }
+        else
+        {
+            var current = await db.BedCabins.FindAsync(bed.ID);
+            if (current is null)
+            {
+                Fail(I18n.IsBangla ? "বেড পাওয়া যায়নি।" : "Bed was not found.");
+                return;
+            }
+            current.Name = bed.Name.Trim();
+            current.CategoryID = bed.CategoryID;
+            if (!current.IsAllocated)
+            {
+                current.Status = bed.Status;
+            }
+        }
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? "বেড/কেবিন সংরক্ষিত হয়েছে।" : "Bed/cabin saved successfully.");
+        CloseBedDrawer();
+        await LoadAsync();
+    }
+
+    private async Task DeleteBedAsync()
+    {
+        await DeleteBedDirectAsync(bed);
+        CloseBedDrawer();
+    }
+
+    private async Task DeleteBedDirectAsync(BedCabin item)
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বেড/কেবিন {item.Name} মুছে ফেলতে চান?" : $"Delete bed/cabin {item.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (item.IsAllocated || await db.PatientAdmissions.AnyAsync(x => x.BedCabinID == item.ID) || await db.BedCabinTransactions.AnyAsync(x => x.BedCabinID == item.ID))
+        {
+            Fail(I18n.IsBangla ? "বেডটিতে রোগী ভর্তি বা ইতিহাস রয়েছে, তাই মুছে ফেলা যাবে না।" : "Bed/cabin is occupied or has transaction history and cannot be deleted.");
+            return;
+        }
+        var current = await db.BedCabins.FindAsync(item.ID);
+        if (current is not null)
+        {
+            db.Remove(current);
+            await db.SaveChangesAsync();
+        }
+        Success(I18n.IsBangla ? "বেড/কেবিন মুছে ফেলা হয়েছে।" : "Bed/cabin deleted.");
+        await LoadAsync();
+    }
+
+    // Departments Management
     private async Task SaveDepartmentAsync()
     {
-        if(string.IsNullOrWhiteSpace(department.Name)){
+        if (string.IsNullOrWhiteSpace(department.Name))
+        {
             Fail(I18n.IsBangla ? "বিভাগের নাম আবশ্যক।" : "Department name is required.");
             return;
         }
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(department.ID==0) db.IpdDepartments.Add(department);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (department.ID == 0) db.IpdDepartments.Add(department);
         else db.IpdDepartments.Update(department);
         await db.SaveChangesAsync();
         Success(I18n.IsBangla ? "আইপিডি বিভাগ সংরক্ষিত হয়েছে।" : "IPD department saved.");
@@ -178,15 +1055,38 @@
         await LoadAsync();
     }
 
+    private async Task DeleteDepartmentAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বিভাগ {department.Name} মুছে ফেলতে চান?" : $"Delete department {department.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.BedCategories.AnyAsync(x => x.IpdDepartmentID == department.ID) || await db.PatientAdmissions.AnyAsync(x => x.Department == department.ID))
+        {
+            Fail(I18n.IsBangla ? "এই বিভাগটি অন্যান্য রেকর্ডে ব্যবহৃত হচ্ছে, তাই মুছে ফেলা যাবে না।" : "Department is referenced and cannot be deleted.");
+            return;
+        }
+        var item = await db.IpdDepartments.FindAsync(department.ID);
+        if (item is not null)
+        {
+            db.Remove(item);
+            await db.SaveChangesAsync();
+        }
+        Success(I18n.IsBangla ? "বিভাগ মুছে ফেলা হয়েছে।" : "Department deleted.");
+        ResetDepartment();
+        await LoadAsync();
+    }
+
+    // Categories Management
     private async Task SaveCategoryAsync()
     {
-        if(string.IsNullOrWhiteSpace(category.Name)||category.IpdDepartmentID is null){
+        if (string.IsNullOrWhiteSpace(category.Name) || category.IpdDepartmentID is null)
+        {
             Fail(I18n.IsBangla ? "ক্যাটাগরির নাম ও বিভাগ আবশ্যক।" : "Category name and department are required.");
             return;
         }
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(category.ID==0){
-            category.ID=(await db.BedCategories.MaxAsync(x=>(int?)x.ID)??0)+1;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (category.ID == 0)
+        {
+            category.ID = (await db.BedCategories.MaxAsync(x => (int?)x.ID) ?? 0) + 1;
             db.BedCategories.Add(category);
         }
         else db.BedCategories.Update(category);
@@ -196,61 +1096,18 @@
         await LoadAsync();
     }
 
-    private async Task SaveBedAsync()
-    {
-        if(string.IsNullOrWhiteSpace(bed.Name)||bed.CategoryID<=0){
-            Fail(I18n.IsBangla ? "বেড/কেবিনের নাম ও ক্যাটাগরি আবশ্যক।" : "Bed/cabin name and category are required.");
-            return;
-        }
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(await db.BedCabins.AnyAsync(x=>x.Name==bed.Name&&x.ID!=bed.ID)){
-            Fail(I18n.IsBangla ? "এই নামের বেড/কেবিন ইতিমধ্যে বিদ্যমান।" : "This bed/cabin name already exists.");
-            return;
-        }
-        if(bed.ID==0) db.BedCabins.Add(bed);
-        else{
-            var current=await db.BedCabins.FindAsync(bed.ID);
-            if(current is null){
-                Fail(I18n.IsBangla ? "বেড পাওয়া যায়নি।" : "Bed was not found.");
-                return;
-            }
-            current.Name=bed.Name.Trim();
-            current.CategoryID=bed.CategoryID;
-        }
-        await db.SaveChangesAsync();
-        Success(I18n.IsBangla ? "বেড/কেবিন সংরক্ষিত হয়েছে।" : "Bed/cabin saved.");
-        ResetBed();
-        await LoadAsync();
-    }
-
-    private async Task DeleteDepartmentAsync()
-    {
-        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বিভাগ {department.Name} মুছে ফেলতে চান?" : $"Delete department {department.Name}?")) return;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(await db.BedCategories.AnyAsync(x=>x.IpdDepartmentID==department.ID)||await db.PatientAdmissions.AnyAsync(x=>x.Department==department.ID)){
-            Fail(I18n.IsBangla ? "এই বিভাগটি অন্যান্য রেকর্ডে ব্যবহৃত হচ্ছে, তাই মুছে ফেলা যাবে না।" : "Department is referenced and cannot be deleted.");
-            return;
-        }
-        var item=await db.IpdDepartments.FindAsync(department.ID);
-        if(item is not null){
-            db.Remove(item);
-            await db.SaveChangesAsync();
-        }
-        Success(I18n.IsBangla ? "বিভাগ মুছে ফেলা হয়েছে।" : "Department deleted.");
-        ResetDepartment();
-        await LoadAsync();
-    }
-
     private async Task DeleteCategoryAsync()
     {
-        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ক্যাটাগরি {category.Name} মুছে ফেলতে চান?" : $"Delete category {category.Name}?")) return;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(await db.BedCabins.AnyAsync(x=>x.CategoryID==category.ID)){
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ক্যাটাগরি {category.Name} মুছে ফেলতে চান?" : $"Delete category {category.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.BedCabins.AnyAsync(x => x.CategoryID == category.ID))
+        {
             Fail(I18n.IsBangla ? "এই ক্যাটাগরিতে বেড/কেবিন বিদ্যমান থাকায় মুছে ফেলা যাবে না।" : "Category contains beds/cabins and cannot be deleted.");
             return;
         }
-        var item=await db.BedCategories.FindAsync(category.ID);
-        if(item is not null){
+        var item = await db.BedCategories.FindAsync(category.ID);
+        if (item is not null)
+        {
             db.Remove(item);
             await db.SaveChangesAsync();
         }
@@ -259,34 +1116,64 @@
         await LoadAsync();
     }
 
-    private async Task DeleteBedAsync()
+    // Bulk Generator
+    private List<(string Name, bool Exists)> GetBulkPreview()
     {
-        if(!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"বেড/কেবিন {bed.Name} মুছে ফেলতে চান?" : $"Delete bed/cabin {bed.Name}?")) return;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        if(bed.IsAllocated||await db.PatientAdmissions.AnyAsync(x=>x.BedCabinID==bed.ID)||await db.BedCabinTransactions.AnyAsync(x=>x.BedCabinID==bed.ID)){
-            Fail(I18n.IsBangla ? "বেডটিতে রোগী ভর্তি বা ইতিহাস রয়েছে, তাই মুছে ফেলা যাবে না।" : "Bed/cabin is occupied or has transaction history and cannot be deleted.");
-            return;
+        if (bulkCategoryId <= 0 || bulkEnd < bulkStart || (bulkEnd - bulkStart) > 100) return new();
+        var existingNames = new HashSet<string>(beds.Select(b => b.Name), StringComparer.OrdinalIgnoreCase);
+        var list = new List<(string Name, bool Exists)>();
+        for (int i = bulkStart; i <= bulkEnd; i++)
+        {
+            var numStr = bulkZeroPad > 0 ? i.ToString(new string('0', bulkZeroPad)) : i.ToString();
+            var name = $"{bulkPrefix}{numStr}{bulkSuffix}".Trim();
+            list.Add((name, existingNames.Contains(name)));
         }
-        var item=await db.BedCabins.FindAsync(bed.ID);
-        if(item is not null){
-            db.Remove(item);
-            await db.SaveChangesAsync();
-        }
-        Success(I18n.IsBangla ? "বেড/কেবিন মুছে ফেলা হয়েছে।" : "Bed/cabin deleted.");
-        ResetBed();
-        await LoadAsync();
+        return list;
     }
 
-    private void SelectDepartment(IpdDepartment x)=>department=new(){ID=x.ID,Name=x.Name};
-    private void SelectCategory(BedCategory x)=>category=new(){ID=x.ID,Name=x.Name,Rate=x.Rate,Specification=x.Specification,IpdDepartmentID=x.IpdDepartmentID,AdmissionFee=x.AdmissionFee,ServiceCharge=x.ServiceCharge,Food=x.Food};
-    private void SelectBed(BedCabin x)=>bed=new(){ID=x.ID,Name=x.Name,CategoryID=x.CategoryID,IsAllocated=x.IsAllocated};
-    private void ResetDepartment()=>department=new();
-    private void ResetCategory()=>category=new();
-    private void ResetBed()=>bed=new();
-    private string DepartmentName(int? id)=>departments.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private string CategoryName(int id)=>categories.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private void Success(string text){messageClass="success";message=text;}
-    private void Fail(string text){messageClass="danger";message=text;}
+    private async Task GenerateBedsAsync()
+    {
+        var preview = GetBulkPreview();
+        var toCreate = preview.Where(x => !x.Exists).Select(x => x.Name).ToList();
+
+        if (toCreate.Count == 0)
+        {
+            Fail(I18n.IsBangla ? "তৈরি করার মতো কোনো নতুন বেড নেই। সবগুলো নাম ইতিমধ্যে বিদ্যমান।" : "No new beds to create. All names already exist.");
+            return;
+        }
+
+        if (bulkCategoryId <= 0)
+        {
+            Fail(I18n.IsBangla ? "দয়া করে একটি বেড ক্যাটাগরি নির্বাচন করুন।" : "Please select a target category.");
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var newBeds = toCreate.Select(name => new BedCabin
+        {
+            Name = name,
+            CategoryID = bulkCategoryId,
+            IsAllocated = false,
+            Status = bulkStatus
+        }).ToList();
+
+        db.BedCabins.AddRange(newBeds);
+        await db.SaveChangesAsync();
+
+        Success(I18n.IsBangla ? $"{newBeds.Count}টি বেড সফলভাবে তৈরি হয়েছে!" : $"Successfully generated {newBeds.Count} beds!");
+        await LoadAsync();
+        activeTab = "beds";
+    }
+
+    private void SelectDepartment(IpdDepartment x) => department = new() { ID = x.ID, Name = x.Name };
+    private void SelectCategory(BedCategory x) => category = new() { ID = x.ID, Name = x.Name, Rate = x.Rate, Specification = x.Specification, IpdDepartmentID = x.IpdDepartmentID, AdmissionFee = x.AdmissionFee, ServiceCharge = x.ServiceCharge, Food = x.Food };
+    private void ResetDepartment() => department = new();
+    private void ResetCategory() => category = new();
+    private void ResetBed() => bed = new();
+    private string DepartmentName(int? id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string CategoryName(int id) => categories.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
 
     public void Dispose()
     {
