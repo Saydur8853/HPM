@@ -1589,6 +1589,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal?>("Balance")
                         .HasColumnType("numeric(18,0)");
 
+                    b.Property<string>("ConsultationTime")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Consultation_Time");
+
                     b.Property<string>("Contact")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
@@ -1617,6 +1622,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<string>("Name")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("OffDay")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Off_Day");
 
                     b.Property<decimal?>("OpeningBalance")
                         .HasColumnType("numeric(18,0)")
@@ -1660,6 +1670,7 @@ namespace HPM.Web.Data.Migrations
                             EnteredBy = 1,
                             IsActive = true,
                             Name = "Duty Doctor",
+                            OffDay = "Friday",
                             Room = "ER-01",
                             Title = "Dr.",
                             TransDate = new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
@@ -4190,7 +4201,7 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
-                    b.Property<DateTime>("DateOfBirth")
+                    b.Property<DateTime?>("DateOfBirth")
                         .HasColumnType("datetime")
                         .HasColumnName("Date_Of_Birth");
 
@@ -4308,6 +4319,10 @@ namespace HPM.Web.Data.Migrations
                     b.Property<int?>("CategoryID")
                         .HasColumnType("int")
                         .HasColumnName("Category_ID");
+
+                    b.Property<int?>("DeliveryHours")
+                        .HasColumnType("int")
+                        .HasColumnName("Delivery_Hours");
 
                     b.Property<string>("DiagnosticType")
                         .HasMaxLength(20)
