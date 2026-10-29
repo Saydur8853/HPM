@@ -138,7 +138,7 @@ namespace HPM.Web.Data.Migrations
                         column: x => x.Supplier,
                         principalTable: "Supplier_Store",
                         principalColumn: "ID",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
@@ -166,13 +166,13 @@ namespace HPM.Web.Data.Migrations
                         column: x => x.Category,
                         principalTable: "Store_Product_Category",
                         principalColumn: "ID",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Store_Product_Supplier_Store_Supplier",
                         column: x => x.Supplier,
                         principalTable: "Supplier_Store",
                         principalColumn: "ID",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
@@ -196,13 +196,13 @@ namespace HPM.Web.Data.Migrations
                         column: x => x.Challan_No,
                         principalTable: "Store_Challan",
                         principalColumn: "ID",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                     table.ForeignKey(
                         name: "FK_Store_Challan_Sub_Store_Product_Product_ID",
                         column: x => x.Product_ID,
                         principalTable: "Store_Product",
                         principalColumn: "ID",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.NoAction);
                 });
 
             migrationBuilder.CreateTable(
