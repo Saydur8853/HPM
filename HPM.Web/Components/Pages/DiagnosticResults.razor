@@ -8,6 +8,7 @@
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
 @inject NavigationManager Navigation
+@inject HospitalSetupService Branding
 @implements IDisposable
 @using HPM.Web.Components.Common
 
@@ -24,7 +25,7 @@
             @if (selectedMemo != null)
             {
                 <span class="tickets-count-pill" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">
-                    #@selectedMemo.ID &bull; @selectedMemo.PatientName
+                    #@selectedMemo.ID &bull; @selectedMemo.PatientName @(string.IsNullOrWhiteSpace(selectedMemo.PatientID) ? "" : $"(PID: {selectedMemo.PatientID})")
                 </span>
             }
             @if (!string.IsNullOrWhiteSpace(message))
@@ -35,8 +36,6 @@
             }
         </div>
 
-        <DiagnosticNavTabs />
-
         <div class="tickets-top-actions" style="display:flex; align-items:center; gap:8px;">
             <button class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("Clear / New search")">
                 + @I18n.T("Clear / New")
@@ -44,12 +43,12 @@
         </div>
     </div>
 
-    <!-- Main Workspace Grid: Left Result Entry Form, Right Recent Lab Orders -->
+    <!-- Main Workspace Grid: Left Result Entry Form, Right Recent Orders -->
     <div class="results-classic-workspace">
         <!-- Left Panel: Result Entry Card -->
         <div class="results-form-card">
             <div class="results-card-header">
-                <h2>@(selectedMemo == null ? I18n.T("Search Invoice No or Scan Specimen Tube") : $"{I18n.T("Results & Report Entry")} — #{selectedMemo.ID}")</h2>
+                <h2>@(selectedMemo == null ? I18n.T("Search Test #, Memo #, or Patient ID (PID)") : $"{I18n.T(IsImagingMode ? "Imaging Report Entry" : "Results & Report Entry")} — #{selectedMemo.ID}")</h2>
                 @if (selectedMemo != null)
                 {
                     <span class="diagnostic-badge">
@@ -59,31 +58,51 @@
             </div>
 
             <div class="results-form-body">
-                <!-- Search & Scanner Bar -->
+                <!-- Enhanced Search & Scanner Bar: Accepts Memo #, Test #, Patient ID (PID), Phone, or Barcode -->
                 <div style="display:flex; gap:8px; align-items:center;">
                     <div class="tickets-scanner-bar" style="margin:0; flex:1;">
                         <div class="tickets-scanner-input-wrap">
-                            <span class="tickets-scanner-icon" title="Barcode Scanner">📷</span>
+                            <span class="tickets-scanner-icon" title="Barcode Scanner">🔍</span>
                             <input type="text"
                                    class="classic-input tickets-scanner-input"
-                                   placeholder="@I18n.T("Scan Sample Tube (SMP-XXXX), Invoice (LAB-XXXX), or Diagnostic QR & press Enter...")"
-                                   @bind="resultsScanQuery"
+                                   placeholder="@I18n.T(IsImagingMode ? "Enter Study #, Memo #, Patient ID (PID e.g. H2610...), Phone, or Scan..." : "Enter Test #, Memo #, Patient ID (PID e.g. H2610...), Phone, or Scan...")"
+                                   @bind="searchQuery"
                                    @bind:event="oninput"
-                                   @onkeydown="HandleResultsScanKeyDown" />
-                            @if (!string.IsNullOrWhiteSpace(resultsScanQuery))
+                                   @onkeydown="HandleSearchKeyDown" />
+                            @if (!string.IsNullOrWhiteSpace(searchQuery))
                             {
-                                <button type="button" class="tickets-scanner-clear" @onclick="ClearResultsScan" title="Clear">✕</button>
+                                <button type="button" class="tickets-scanner-clear" @onclick="ClearSearch" title="Clear">✕</button>
                             }
                         </div>
                     </div>
 
-                    <div style="display:flex; gap:4px; align-items:center;">
-                        <InputNumber class="classic-input" style="width:110px;" @bind-Value="searchMemoId" placeholder="@I18n.T("Memo #")" />
-                        <button type="button" class="btn btn-secondary tickets-btn" @onclick="LoadMemoAsync">
-                            <SearchIcon /> @I18n.T("Load")
-                        </button>
-                    </div>
+                    <button type="button" class="btn btn-primary tickets-btn" @onclick="ExecuteSearchAsync" disabled="@searching">
+                        <SearchIcon /> @(searching ? I18n.T("Searching...") : I18n.T("Search / Fetch"))
+                    </button>
                 </div>
+
+                @if (patientMemosList.Count > 1)
+                {
+                    <!-- Patient ID Invoices Switcher Banner -->
+                    <div class="results-patient-memos-bar">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span>👤</span>
+                            <strong style="font-size:11.5px; color:#065f46;">
+                                @I18n.T("Patient Bills"): @patientMemosList[0].PatientName (@(patientMemosList[0].PatientID ?? "Walk-in"))
+                            </strong>
+                        </div>
+                        <div class="results-patient-memos-pills">
+                            @foreach (var pm in patientMemosList)
+                            {
+                                <button type="button"
+                                        class="results-memo-pill @(selectedMemo?.ID == pm.ID ? "active" : "")"
+                                        @onclick="() => SwitchPatientMemo(pm.ID)">
+                                    #@pm.ID (@pm.TransDate.ToString("dd/MM/yy"))
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
 
                 @if (selectedMemo != null)
                 {
@@ -94,8 +113,8 @@
                             <strong>@selectedMemo.PatientName</strong>
                         </div>
                         <div>
-                            <span>@I18n.T("Patient ID / Sex")</span>
-                            <strong>@(selectedMemo.PatientID ?? I18n.T("Walk-in")) (@selectedMemo.Age / @selectedMemo.Sex)</strong>
+                            <span>@I18n.T("Patient ID (PID) / Sex")</span>
+                            <strong style="color:#0369a1;">@(selectedMemo.PatientID ?? I18n.T("Walk-in")) (@selectedMemo.Age / @selectedMemo.Sex)</strong>
                         </div>
                         <div>
                             <span>@I18n.T("Contact")</span>
@@ -103,14 +122,47 @@
                         </div>
                         <div>
                             <span>@I18n.T("Referred by")</span>
-                            <strong>@DoctorName(selectedMemo.DoctorID)</strong>
+                            <strong>@DoctorFormatted(selectedMemo.DoctorID)</strong>
                         </div>
                     </div>
+
+                    <!-- Film Delivery Notice for Imaging Mode -->
+                    @if (IsImagingMode)
+                    {
+                        <div class="delta-film-counter-banner" style="margin-bottom: 8px;">
+                            <span style="font-size: 18px;">🎞️</span>
+                            <div style="flex: 1;">
+                                <strong style="color: #92400e;">@I18n.T("FILM PICKUP FROM COUNTER"):</strong>
+                                <span style="color: #78350f;"> @(I18n.IsBangla ? "রোগী এক্স-রে/আল্ট্রা/সিটি/এমআরআই ফিল্ম ডায়াগনস্টিক কাউন্টার থেকে সংগ্রহ করবেন। এই পেজ থেকে চিকিৎসকের জন্য অফিসিয়াল লিখিত রেডিওলজি রিপোর্ট প্রিন্ট দেওয়া যাবে।" : "Patient collects the physical imaging film/plate from the Diagnostic Imaging Counter. The official signed written report can be printed directly from this page.")</span>
+                            </div>
+                            <span class="pill" style="background:#ffffff; color:#92400e; font-weight:700; border:1px solid #fde047; font-size:10px;">
+                                Counter Delivery
+                            </span>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- Specimen Type & Collection Summary Strip for Lab Mode -->
+                        <div style="display:flex; gap:12px; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 12px; font-size:11.5px;">
+                            <div>
+                                <span style="color:#64748b; font-weight:600;">🧪 @I18n.T("Specimen / Sample"):</span>
+                                <input type="text" class="classic-input" style="width:130px; height:24px; padding:2px 6px; display:inline-block; font-weight:700; margin-left:4px;" @bind="currentSampleType" placeholder="Blood" />
+                            </div>
+                            <div>
+                                <span style="color:#64748b;">🕒 Coll:</span>
+                                <b>@GetSampleCollectionTime()</b>
+                            </div>
+                            <div>
+                                <span style="color:#64748b;">📥 Recv:</span>
+                                <b>@GetSampleReceiveTime()</b>
+                            </div>
+                        </div>
+                    }
 
                     <!-- Test Selector Tabs -->
                     <div>
                         <div class="billing-section-heading" style="margin-bottom:4px;">
-                            🔬 @I18n.T("Selected Tests & Investigations")
+                            @(IsImagingMode ? "🩻 " + I18n.T("Selected Imaging Studies") : "🔬 " + I18n.T("Selected Tests & Investigations"))
                         </div>
                         <div class="results-test-tabs">
                             @foreach (var test in orderItems)
@@ -122,7 +174,7 @@
                                         class="btn tickets-btn @(activeTestId == test.TestID ? "btn-primary" : "btn-secondary")"
                                         style="font-size:11px; padding:3px 10px; border-radius:14px;"
                                         @onclick="() => SwitchActiveTest(test.TestID)">
-                                    @(isTestVerified ? "✓ " : hasResults ? "📝 " : "")@sName
+                                    @(isTestVerified ? "✓ " : hasResults ? "📝 " : "⏳ ")@sName
                                 </button>
                             }
                         </div>
@@ -130,22 +182,45 @@
 
                     @if (activeTestId > 0)
                     {
-                        <!-- Parameter Table -->
+                        <!-- Quick Templates Bar for Imaging Mode -->
+                        @if (IsImagingMode)
+                        {
+                            <div class="imaging-template-bar">
+                                <span style="font-size: 11px; font-weight: 700; color: #475569;">🩻 @I18n.T("Quick Templates"):</span>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("Chest")'>
+                                    + Normal Chest X-Ray
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("Abdomen")'>
+                                    + Normal USG Abdomen
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("KUB")'>
+                                    + Normal KUB Study
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("Bone")'>
+                                    + Normal Bone / Extremity
+                                </button>
+                            </div>
+                        }
+
+                        <!-- Parameter / Section Table -->
                         <div>
-                            <div class="billing-section-heading" style="margin-bottom:4px;">
-                                📋 @I18n.T("Investigation Details"): @ServiceName(activeTestId)
+                            <div class="billing-section-heading" style="margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
+                                <span>📋 @I18n.T(IsImagingMode ? "Radiology Report Sections" : "Investigation Details"): <strong>@ServiceName(activeTestId)</strong></span>
+                                <span style="font-size:11px; color:#64748b; font-weight:normal;">
+                                    (@currentTestResults.Count @I18n.T(IsImagingMode ? "sections" : "parameters"))
+                                </span>
                             </div>
                             <div class="results-param-table-wrap">
                                 <table class="data-table">
                                     <thead>
                                         <tr>
-                                            <th>@I18n.T(IsImagingMode ? "Report Section" : "Parameter Name")</th>
-                                            <th style="width:@(IsImagingMode ? "360px" : "160px");">@I18n.T(IsImagingMode ? "Findings / Impression" : "Observed Value")<span style="color:#dc2626;">*</span></th>
+                                            <th>@I18n.T(IsImagingMode ? "Report Section Heading" : "Parameter Name")</th>
+                                            <th style="width:@(IsImagingMode ? "420px" : "170px");">@I18n.T(IsImagingMode ? "Radiological Findings / Detailed Report" : "Observed Value")<span style="color:#dc2626;">*</span></th>
                                             @if (!IsImagingMode)
                                             {
-                                                <th style="width:85px;">@I18n.T("Unit")</th>
-                                                <th style="width:130px;">@I18n.T("Reference Range")</th>
-                                                <th style="width:100px;">@I18n.T("Flag")</th>
+                                                <th style="width:95px;">@I18n.T("Unit")</th>
+                                                <th style="width:180px;">@I18n.T("Reference Range")</th>
+                                                <th style="width:105px;">@I18n.T("Flag")</th>
                                             }
                                             <th style="width:30px;"></th>
                                         </tr>
@@ -155,27 +230,33 @@
                                         {
                                             var idx = i;
                                             var row = currentTestResults[idx];
-                                            <tr>
+                                            var isHeaderRow = string.IsNullOrWhiteSpace(row.ResultValue) && string.IsNullOrWhiteSpace(row.Unit) && !IsImagingMode;
+                                            <tr style="@(isHeaderRow ? "background:#f1f5f9;" : "")">
                                                 <td>
-                                                    <InputText class="classic-input" @bind-Value="row.ParameterName" style="font-weight:700; height:26px !important; padding:2px 6px !important;" />
+                                                    <InputText class="classic-input" @bind-Value="row.ParameterName" style="font-weight:700; height:26px !important; padding:2px 6px !important;" placeholder="Section Heading" />
                                                 </td>
                                                 <td>
                                                     @if (IsImagingMode)
                                                     {
-                                                        <InputTextArea class="classic-input" @bind-Value="row.ResultValue" style="min-height:74px !important; padding:6px !important; resize:vertical;" placeholder="@I18n.T("Enter radiology findings or impression")" />
+                                                        <InputTextArea class="classic-input" @bind-Value="row.ResultValue" style="min-height:85px !important; line-height:1.5; font-size:12px; padding:6px 8px !important; resize:vertical; font-family:Arial, sans-serif;" placeholder="@I18n.T("Enter detailed radiology findings, impressions or clinical observations")" />
                                                     }
                                                     else
                                                     {
-                                                        <InputText class="classic-input bold-number" @bind-Value="row.ResultValue" style="height:26px !important; padding:2px 6px !important;" placeholder="e.g. 14.5 or Negative" />
+                                                        <InputText class="classic-input bold-number" @bind-Value="row.ResultValue" style="height:26px !important; padding:2px 6px !important;" placeholder="e.g. 12.7 or Negative" />
                                                     }
                                                 </td>
                                                 @if (!IsImagingMode)
                                                 {
-                                                    <td><InputText class="classic-input" @bind-Value="row.Unit" style="width:80px; height:26px !important; padding:2px 6px !important;" placeholder="g/dL" /></td>
+                                                    <td><InputText class="classic-input" @bind-Value="row.Unit" style="width:88px; height:26px !important; padding:2px 6px !important;" placeholder="g/dL" /></td>
                                                     <td><InputText class="classic-input" @bind-Value="row.ReferenceRange" style="height:26px !important; padding:2px 6px !important;" placeholder="12.0 - 16.0" /></td>
                                                     <td>
                                                         <InputSelect class="classic-input tickets-select" @bind-Value="row.Flag" style="font-size:11px; height:26px !important; padding:2px 4px !important;">
-                                                            <option value="Normal">Normal</option><option value="High">High</option><option value="Low">Low</option><option value="Positive">Positive</option><option value="Negative">Negative</option>
+                                                            <option value="Normal">Normal</option>
+                                                            <option value="High">High</option>
+                                                            <option value="Low">Low</option>
+                                                            <option value="Positive">Positive</option>
+                                                            <option value="Negative">Negative</option>
+                                                            <option value="Critical">Critical</option>
                                                         </InputSelect>
                                                     </td>
                                                 }
@@ -189,22 +270,39 @@
                             </div>
                         </div>
 
+                        <!-- Analyzer / Method Note (Lab Mode) -->
+                        @if (!IsImagingMode)
+                        {
+                            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px; margin-top:6px; display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:11px; font-weight:700; color:#475569; white-space:nowrap;">🔬 @I18n.T("Analyzer / Method Note"):</span>
+                                <input type="text" class="classic-input" @bind="analyzerMethodNote" style="height:26px !important; font-size:11px;" placeholder="Estimations were carried out by automated analyzer..." />
+                            </div>
+                        }
+
                         <!-- Verification & Add Parameter Bar -->
                         <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px;">
-                            <button class="btn btn-secondary tickets-btn" type="button" style="font-size:11px;" @onclick="AddBlankParameter">
-                                + @I18n.T(IsImagingMode ? "Add Report Section" : "Add Parameter")
-                            </button>
+                            <div style="display:flex; gap:6px;">
+                                <button class="btn btn-secondary tickets-btn" type="button" style="font-size:11px;" @onclick="AddBlankParameter">
+                                    + @I18n.T(IsImagingMode ? "Add Report Section" : "Add Parameter")
+                                </button>
+                                @if (!IsImagingMode)
+                                {
+                                    <button class="btn btn-secondary tickets-btn" type="button" style="font-size:11px;" @onclick="AddSectionHeader">
+                                        + @I18n.T("Add Group Heading")
+                                    </button>
+                                }
+                            </div>
 
                             @if (canVerify)
                             {
                                 <div style="display:flex; align-items:center; gap:10px;">
                                     <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:11px; font-weight:700; color:#334155;">
-                                        <span>@I18n.T(IsImagingMode ? "Radiologist / Consultant" : "Pathologist / Consultant"):</span>
-                                        <InputSelect class="classic-input tickets-select" style="min-width:140px; height:26px !important;" @bind-Value="selectedDoctorId" disabled="@(!isAdministrator)">
+                                        <span>@I18n.T(IsImagingMode ? "Consultant Radiologist" : "Pathologist / Consultant"):</span>
+                                        <InputSelect class="classic-input tickets-select" style="min-width:160px; height:26px !important;" @bind-Value="selectedDoctorId">
                                             <option value="0">@I18n.T("Select Doctor")</option>
                                             @foreach (var d in doctors)
                                             {
-                                                <option value="@d.ID">@d.Title @d.Name</option>
+                                                <option value="@d.ID">@d.Title @d.Name @(string.IsNullOrWhiteSpace(d.Degree) ? "" : $"({d.Degree})")</option>
                                             }
                                         </InputSelect>
                                     </label>
@@ -217,7 +315,7 @@
                             else
                             {
                                 <span style="font-size:11px; color:#64748b; font-style:italic;">
-                                    @I18n.T("Draft results only. Pathologist / Doctor must verify.")
+                                    @I18n.T(IsImagingMode ? "Draft imaging report only. Consultant Radiologist must verify & sign." : "Draft results only. Pathologist / Doctor must verify.")
                                 </span>
                             }
                         </div>
@@ -227,9 +325,9 @@
                 {
                     <div class="tickets-queue-empty" style="padding: 3rem 1rem;">
                         <span style="font-size: 2.5rem;">@(IsImagingMode ? "🩻" : "🧪")</span>
-                        <strong style="font-size: 13.5px; color:#1e293b;">@I18n.T(IsImagingMode ? "Select a completed imaging study to enter its report" : "Select a Diagnostic Bill to Enter Test Results")</strong>
+                        <strong style="font-size: 13.5px; color:#1e293b;">@I18n.T(IsImagingMode ? "Search Study #, Memo #, or Patient ID to Enter Imaging Report" : "Search Test #, Memo #, or Patient ID to Enter Lab Results")</strong>
                         <span style="font-size: 11.5px; color:#64748b;">
-                            @I18n.T("Scan barcode from specimen tube or bill invoice, or click an order from the list on the right.")
+                            @I18n.T(IsImagingMode ? "Patient collects film from counter; enter findings & print official written radiology report here." : "Scan barcode from specimen tube, or enter Patient ID (PID) to fetch patient tests and print reports.")
                         </span>
                     </div>
                 }
@@ -240,11 +338,14 @@
                 @if (selectedMemo != null && activeTestId > 0)
                 {
                     <button class="btn btn-primary tickets-btn" type="button" @onclick="SaveResultsAsync">
-                        💾 @I18n.T(IsImagingMode ? "Save Imaging Report" : "Save Test Results")
+                        💾 @I18n.T(IsImagingMode ? "Save Written Imaging Report" : "Save Test Results")
                     </button>
                     <div style="display:flex; align-items:center; gap:6px;">
-                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintAsync" disabled="@(!ReportVerified)" title="@(ReportVerified ? I18n.T(IsImagingMode ? "Print Imaging Report" : "Print Lab Report") : I18n.T("Report must be verified before printing"))">
-                            🖨 @I18n.T(IsImagingMode ? "Print Imaging Report" : "Print Lab Report")
+                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintAsync" title="@I18n.T("Print official report")">
+                            🖨 @I18n.T(IsImagingMode ? "Print Written Imaging Report" : "Print Lab Report")
+                        </button>
+                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="DownloadPdfAsync" title="@I18n.T("Download official report as PDF")">
+                            📄 @I18n.T("Download PDF")
                         </button>
                         <button class="btn btn-ghost tickets-btn" type="button" @onclick="Reset">
                             @I18n.T("Clear")
@@ -261,7 +362,7 @@
             </div>
         </div>
 
-        <!-- Right Panel: Recent Lab Orders Queue Card -->
+        <!-- Right Panel: Recent Lab / Imaging Orders Queue Card -->
         <div class="results-queue-card">
             <div class="results-queue-top">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -279,8 +380,8 @@
                 @if (!recentOrders.Any())
                 {
                     <div class="tickets-queue-empty">
-                        <span style="font-size: 2rem;">🧪</span>
-                        <span>@I18n.T("No recent lab orders found.")</span>
+                        <span style="font-size: 2rem;">@(IsImagingMode ? "🩻" : "🧪")</span>
+                        <span>@I18n.T(IsImagingMode ? "No recent imaging orders found." : "No recent lab orders found.")</span>
                     </div>
                 }
                 @foreach (var o in recentOrders)
@@ -313,148 +414,329 @@
 
 @if (selectedMemo != null)
 {
-    <div id="lab-report-print" class="print-sheet print-document">
-        <div class="clinical-report-sheet a4-page-sheet">
-            <PrintDocumentHeader Title="@I18n.T(IsImagingMode ? "OFFICIAL IMAGING & RADIOLOGY REPORT" : "OFFICIAL CLINICAL LABORATORY INVESTIGATION REPORT")"
-                                 Subtitle="@(IsImagingMode ? I18n.T("Department of Imaging & Radiology") : Branding.LabHeaderDept)"
-                                 DocNo="@($"#{selectedMemo.ID}")"
-                                 DocNoLabel="Invoice #"
-                                 BarcodeCode="@($"LAB-{selectedMemo.ID}")"
-                                 QrPayload="@BarcodeQr.GenerateLabQrPayload(selectedMemo.ID, selectedMemo.PatientID ?? "", selectedMemo.PatientName, $"SMP-{selectedMemo.ID}", Navigation.BaseUri)" />
+    <!-- Print Mode Switcher Toolbar (On-Screen Preview Toolbar) -->
+    <div class="results-print-toolbar no-print" style="max-width:820px; margin:20px auto 10px auto;">
+        <div class="results-print-mode-group">
+            <span style="font-weight:700; font-size:12px; color:#334155;">🖨️ @I18n.T("Print Scope"):</span>
+            <button type="button" class="btn btn-sm @(printMode == "active" ? "btn-primary active" : "btn-secondary")" @onclick='() => printMode = "active"' title="@I18n.T("Print only currently selected test/study")">
+                @(IsImagingMode ? "🩻 " : "🔬 ")@I18n.T("Active Study / Test") (@ServiceName(activeTestId))
+            </button>
+            <button type="button" class="btn btn-sm @(printMode == "all" ? "btn-primary active" : "btn-secondary")" @onclick='() => printMode = "all"' title="@I18n.T("Print all studies/tests for this patient / memo")">
+                📑 @I18n.T("Patient ID Wise (All Studies)") (@orderItems.Count @I18n.T("items"))
+            </button>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <button type="button" class="btn btn-primary" @onclick="PrintAsync" title="@I18n.T("Print to printer or PDF preview")">
+                🖨️ @I18n.T(IsImagingMode ? "Print Written Imaging Report" : "Print Lab Report")
+            </button>
+            <button type="button" class="btn btn-secondary" @onclick="DownloadPdfAsync" title="@I18n.T("Download report directly as a PDF file")">
+                📄 @I18n.T("Download PDF")
+            </button>
+        </div>
+    </div>
 
-            <!-- Patient Demographics Info Grid -->
-            <div class="report-patient-grid">
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Patient Name"):</span>
-                    <strong class="grid-value">@selectedMemo.PatientName</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Patient ID (PID)"):</span>
-                    <strong class="grid-value">@(selectedMemo.PatientID ?? I18n.T("Walk-in"))</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Age / Gender"):</span>
-                    <strong class="grid-value">@selectedMemo.Age / @selectedMemo.Sex</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Contact No"):</span>
-                    <strong class="grid-value">@(selectedMemo.Contact ?? "—")</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Invoice / Memo #"):</span>
-                    <strong class="grid-value">#@selectedMemo.ID</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Specimen / Tube ID"):</span>
-                    <strong class="grid-value">SMP-@selectedMemo.ID</strong>
-                </div>
-                <div class="patient-grid-item span-2">
-                    <span class="grid-label">@I18n.T("Referred By Doctor"):</span>
-                    <strong class="grid-value">@DoctorName(selectedMemo.DoctorID)</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Date of Order"):</span>
-                    <strong class="grid-value">@selectedMemo.TransDate.ToString("dd MMM yyyy, hh:mm tt")</strong>
-                </div>
-                <div class="patient-grid-item">
-                    <span class="grid-label">@I18n.T("Report Released"):</span>
-                    <strong class="grid-value">@DateTime.Now.ToString("dd MMM yyyy, hh:mm tt")</strong>
+    <!-- Delta Hospital Official Clinical Laboratory & Written Radiology Report Sheet -->
+    <div id="lab-report-print" class="print-sheet print-document">
+        <div class="delta-report-sheet">
+            <!-- Top Hospital Letterhead / Banner -->
+            <div class="delta-report-header">
+                <div class="delta-hosp-banner">
+                    @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                    {
+                        <img src="@Branding.LogoData" alt="Logo" class="delta-hosp-logo" />
+                    }
+                    else
+                    {
+                        <div class="delta-logo-placeholder">🏥</div>
+                    }
+                    <div class="delta-hosp-info">
+                        <h1 class="delta-hosp-name">@Branding.HospitalName</h1>
+                        <p class="delta-hosp-tagline">@(string.IsNullOrWhiteSpace(Branding.Tagline) ? "Delta Hospital Limited, Dhaka" : Branding.Tagline)</p>
+                        <p class="delta-hosp-addr">📍 @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}") &bull; 📞 Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</p>
+                    </div>
                 </div>
             </div>
 
-            <!-- Investigation Test Results -->
-            @foreach (var testId in orderItems.Select(x => x.TestID).Distinct())
-            {
-                var testResults = allResults.Where(r => r.ServiceID == testId).ToList();
-                if (testResults.Count > 0)
-                {
-                    <div class="report-investigation-block">
-                        <div class="investigation-title-bar">
-                            <h3 class="investigation-name">🔬 @ServiceName(testId)</h3>
-                            <span class="investigation-badge">@I18n.T("VERIFIED TEST", "VERIFIED TEST")</span>
-                        </div>
+            <!-- Barcodes & Department Title Row -->
+            <div class="delta-barcodes-strip">
+                <div class="delta-barcode-left" title="Invoice Barcode: *D@selectedMemo.ID*">
+                    @((MarkupString)BarcodeQr.GenerateBarcodeSvg($"D{selectedMemo.ID}", 22, true))
+                </div>
+                <div class="delta-report-title-wrap">
+                    <h2 class="delta-report-title">@GetReportCategoryTitle()</h2>
+                </div>
+                <div class="delta-barcode-right" title="Report Barcode: *@selectedMemo.ID*">
+                    @((MarkupString)BarcodeQr.GenerateBarcodeSvg($"{selectedMemo.ID}", 22, true))
+                </div>
+            </div>
 
-                        @if (IsImagingMode)
-                        {
-                            <div style="padding:16px 18px; border:1px solid #cbd5e1; border-top:0;">
-                                @foreach (var res in testResults)
-                                {
-                                    <section style="margin-bottom:18px;">
-                                        <h4 style="margin:0 0 6px; color:#0f172a; text-transform:uppercase; letter-spacing:.04em;">@res.ParameterName</h4>
-                                        <div style="white-space:pre-wrap; line-height:1.65; color:#1e293b;">@res.ResultValue</div>
-                                    </section>
-                                }
+            <!-- Delta Patient Demographics Box -->
+            <div class="delta-patient-box">
+                <div class="delta-patient-grid-4">
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Invoice No</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">D@(selectedMemo.ID)</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Invoice Date</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@selectedMemo.TransDate.ToString("dd/MM/yy hh:mm:ss tt")</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Delivery Date</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@GetExpectedDeliveryDate()</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Report No</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@selectedMemo.ID</strong>
+                    </div>
+                </div>
+
+                <div class="delta-patient-grid-3" style="margin-top: 4px;">
+                    <div class="delta-cell span-2">
+                        <span class="delta-lbl">Patient Name</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val delta-pt-name">@selectedMemo.PatientName.ToUpperInvariant()</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Age / Gender</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@selectedMemo.Age / @selectedMemo.Sex</strong>
+                    </div>
+                </div>
+
+                <div class="delta-patient-grid-1" style="margin-top: 4px;">
+                    <div class="delta-cell">
+                        <span class="delta-lbl">Referred By</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@DoctorFormatted(selectedMemo.DoctorID)</strong>
+                    </div>
+                </div>
+
+                <div class="delta-patient-grid-2" style="margin-top: 4px;">
+                    <div class="delta-cell">
+                        <span class="delta-lbl">@(IsImagingMode ? "Modality" : "Sample")</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@(IsImagingMode ? GetImagingModality(ServiceName(activeTestId)) : (string.IsNullOrWhiteSpace(currentSampleType) ? "BLOOD" : currentSampleType.ToUpperInvariant()))</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">@(IsImagingMode ? "Examination" : "Tests")</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">@GetReportTestsTitle()</strong>
+                    </div>
+                </div>
+
+                <div class="delta-patient-grid-3" style="margin-top: 4px;">
+                    <div class="delta-cell">
+                        <span class="delta-lbl">@(IsImagingMode ? "Accession #" : "Lab No")</span>
+                        <span class="delta-sep">:</span>
+                        <strong class="delta-val">#D@(selectedMemo.ID)</strong>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">@(IsImagingMode ? "Study Time" : "Coll Time")</span>
+                        <span class="delta-sep">:</span>
+                        <span class="delta-val">@GetSampleCollectionTime()</span>
+                    </div>
+                    <div class="delta-cell">
+                        <span class="delta-lbl">@(IsImagingMode ? "Film Status" : "Lab Receive Time")</span>
+                        <span class="delta-sep">:</span>
+                        <span class="delta-val">@(IsImagingMode ? "Counter Delivery" : GetSampleReceiveTime())</span>
+                    </div>
+                </div>
+
+                @if (IsImagingMode)
+                {
+                    <div class="delta-analyzer-note" style="color: #854d0e; font-style: normal; font-weight: 600;">
+                        🎞️ <b>FILM COUNTER NOTICE:</b> Original imaging film/plate is to be collected from the Diagnostic Imaging Delivery Counter. This document constitutes the certified written radiology report.
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(analyzerMethodNote))
+                {
+                    <div class="delta-analyzer-note">
+                        @analyzerMethodNote
+                    </div>
+                }
+            </div>
+
+            <!-- Vertical Left HN Barcode Watermark/Indicator (matches HN: *H2610065515* on PDF) -->
+            <div class="delta-hn-indicator">
+                <span>HN: <b>@(selectedMemo.PatientID ?? $"P-{selectedMemo.ID}")</b></span>
+                <span>&bull;</span>
+                <span>Report Status: <b>@(ReportVerified ? "Finalized" : "Draft / In Process")</b></span>
+            </div>
+
+            @if (IsImagingMode)
+            {
+                <!-- =================================================================
+                     Official Written Radiology / Imaging Report Layout
+                     ================================================================= -->
+                <div class="delta-imaging-report-body">
+                    <div class="delta-imaging-study-header">
+                        <span class="delta-imaging-lbl">EXAMINATION / STUDY:</span>
+                        <strong class="delta-imaging-study-name">@ServiceName(activeTestId).ToUpperInvariant()</strong>
+                    </div>
+
+                    <div class="delta-film-counter-banner">
+                        <span style="font-size: 16px;">🎞️</span>
+                        <div>
+                            <strong>@I18n.T("FILM PICKUP NOTICE"):</strong>
+                            <span>@(I18n.IsBangla ? "মূল এক্স-রে/সিটি/এমআরআই ফিল্ম ডেলিভারি কাউন্টার থেকে সংগ্রহ করুন। এটি চিকিৎসকের মূল লিখিত ডায়াগনস্টিক রিপোর্ট।" : "Physical imaging film/plate is to be collected from the Diagnostic Imaging Counter. Below is the official written diagnostic radiology report.")</span>
+                        </div>
+                    </div>
+
+                    @foreach (var res in currentTestResults.Where(x => !string.IsNullOrWhiteSpace(x.ResultValue) || !string.IsNullOrWhiteSpace(x.ParameterName)))
+                    {
+                        <div class="delta-imaging-section">
+                            <div class="delta-imaging-section-title">@res.ParameterName.ToUpperInvariant():</div>
+                            <div class="delta-imaging-section-content">
+                                @res.ResultValue
                             </div>
-                        }
-                        else
+                        </div>
+                    }
+
+                    <div class="delta-imaging-counter-footer-notice">
+                        <b>@I18n.T("Important Note"):</b> @(I18n.IsBangla ? "রোগীর মূল ফিল্ম ডায়াগনস্টিক কাউন্টারে হস্তান্তরের জন্য প্রস্তুত থাকে। এই লিখিত রিপোর্টে রেডিওলজিস্টের চূড়ান্ত অভিমত রয়েছে, যা রোগীর ব্যবস্থাপত্রে সংযুক্ত করার জন্য প্রযোজ্য।" : "Original films/plates are available for patient collection at the Diagnostic Imaging Counter upon showing this invoice. This written diagnostic report contains the certified clinical radiological interpretation.")
+                    </div>
+                </div>
+            }
+            else
+            {
+                <!-- =================================================================
+                     Pathology / Clinical Laboratory Test Table (Delta Hospital standard)
+                     ================================================================= -->
+                <table class="delta-results-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 36%;">Test</th>
+                            <th class="text-center" style="width: 18%;">Result</th>
+                            <th class="text-center" style="width: 14%;">Unit</th>
+                            <th style="width: 32%;">Reference Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var testId in GetTestsToDisplay())
                         {
-                        <table class="report-parameter-table">
-                            <thead>
-                                <tr>
-                                    <th style="width: 32%;">@I18n.T("Investigation Parameter", "Investigation Parameter")</th>
-                                    <th class="text-center" style="width: 20%;">@I18n.T("Observed Result", "Observed Result")</th>
-                                    <th class="text-center" style="width: 14%;">@I18n.T("Unit", "Unit")</th>
-                                    <th style="width: 22%;">@I18n.T("Reference Range", "Reference Range")</th>
-                                    <th class="text-center" style="width: 12%;">@I18n.T("Status", "Status")</th>
+                            var testResults = allResults.Where(r => r.ServiceID == testId).ToList();
+                            @if (printMode == "all" && GetTestsToDisplay().Count > 1)
+                            {
+                                <tr class="delta-test-separator-row">
+                                    <td colspan="4">
+                                        🔬 <b>@ServiceName(testId).ToUpperInvariant()</b>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                @foreach (var res in testResults)
+                            }
+                            @if (testResults.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="4" style="text-align:center; color:#94a3b8; font-style:italic;">
+                                        @I18n.T("No results recorded yet for") @ServiceName(testId)
+                                    </td>
+                                </tr>
+                            }
+                            @foreach (var res in testResults)
+                            {
+                                var isGroupHeader = string.IsNullOrWhiteSpace(res.ResultValue) && string.IsNullOrWhiteSpace(res.Unit);
+                                if (isGroupHeader)
                                 {
-                                    var flagClass = (res.Flag ?? "Normal").ToLowerInvariant() switch
-                                    {
-                                        "high" => "flag-high",
-                                        "low" => "flag-low",
-                                        "critical" => "flag-critical",
-                                        "positive" => "flag-high",
-                                        _ => "flag-normal"
-                                    };
+                                    <tr class="delta-group-heading">
+                                        <td colspan="4"><b>@res.ParameterName.Trim()</b></td>
+                                    </tr>
+                                }
+                                else
+                                {
+                                    var flag = (res.Flag ?? "Normal").ToLowerInvariant();
+                                    var isAbnormal = flag == "high" || flag == "low" || flag == "positive" || flag == "critical";
                                     <tr>
-                                        <td class="param-name"><b>@res.ParameterName</b></td>
-                                        <td class="param-value text-center">
-                                            <span class="value-highlight @flagClass">@res.ResultValue</span>
+                                        <td class="delta-param-name @(res.ParameterName.StartsWith("  ") ? "delta-sub-param" : "")">
+                                            @res.ParameterName.Trim()
                                         </td>
-                                        <td class="param-unit text-center">@(res.Unit ?? "—")</td>
-                                        <td class="param-range">@(res.ReferenceRange ?? "—")</td>
-                                        <td class="param-flag text-center">
-                                            <span class="flag-pill @flagClass">
-                                                @(res.Flag ?? "Normal")
-                                            </span>
+                                        <td class="text-center delta-val-cell @(flag == "high" ? "delta-val-high" : flag == "low" ? "delta-val-low" : "")">
+                                            <b>@res.ResultValue</b>
+                                            @if (isAbnormal)
+                                            {
+                                                <span class="delta-abnormal-marker" title="@res.Flag">▲</span>
+                                            }
+                                        </td>
+                                        <td class="text-center delta-unit-cell">@(res.Unit ?? "—")</td>
+                                        <td class="delta-ref-cell">
+                                            @if (!string.IsNullOrWhiteSpace(res.ReferenceRange))
+                                            {
+                                                <div style="white-space: pre-line;">@res.ReferenceRange</div>
+                                            }
+                                            else
+                                            {
+                                                <span>—</span>
+                                            }
                                         </td>
                                     </tr>
                                     @if (!string.IsNullOrWhiteSpace(res.Interpretation))
                                     {
-                                        <tr class="interpretation-row">
-                                            <td colspan="5">
-                                                <small><b>@I18n.T("Interpretation / Clinical Note:", "Interpretation / Clinical Note:"):</b> @res.Interpretation</small>
+                                        <tr class="delta-interpretation-row">
+                                            <td colspan="4">
+                                                <small><em>Note: @res.Interpretation</em></small>
                                             </td>
                                         </tr>
                                     }
                                 }
-                            </tbody>
-                        </table>
+                            }
                         }
-                    </div>
-                }
+                    </tbody>
+                </table>
             }
 
-            <PrintDocumentFooter SignTitle1="@I18n.T(IsImagingMode ? "Radiology Technologist" : "Medical Technologist (Lab)")"
-                                 SignTitle3="@DoctorName(selectedDoctorId > 0 ? selectedDoctorId : selectedMemo.DoctorID)"
-                                 PageNumberText="Page 1 of 1" />
+            <!-- Signatures Row (Technologist / Radiographer on Left, Consultant Radiologist / Pathologist on Right) -->
+            <div class="delta-signatures-row">
+                <div class="delta-sign-col">
+                    <div class="delta-sign-line"></div>
+                    <div class="delta-sign-name">@GetTechnicianName()</div>
+                    <div class="delta-sign-sub">@(IsImagingMode ? "Medical Radiographer / Imaging Technologist" : "Senior Medical Technologist / Lab Technician")</div>
+                    <div class="delta-sign-sub">@Branding.HospitalName</div>
+                </div>
+                <div class="delta-sign-col" style="text-align: right;">
+                    <div class="delta-sign-line" style="margin-left: auto;"></div>
+                    <div class="delta-sign-name">@GetConsultantDoctorTitleAndName()</div>
+                    <div class="delta-sign-sub">@GetConsultantDoctorDegree()</div>
+                    <div class="delta-sign-sub">@(IsImagingMode ? "Consultant Radiologist & Imaging Specialist" : "Consultant, Laboratory Medicine")</div>
+                    <div class="delta-sign-sub">BM&DC Reg. No: @GetConsultantDoctorBmdc()</div>
+                    <div class="delta-sign-sub">@Branding.HospitalName</div>
+                </div>
+            </div>
+
+            <!-- Footer Strip -->
+            <div class="delta-report-footer">
+                <div>
+                    Print by &amp; Date: <b>@currentUserDisplayName</b> on @DateTime.Now.ToString("dd/MM/yyyy hh:mm:ss tt")
+                </div>
+                <div>
+                    Page 1 of 1
+                </div>
+            </div>
         </div>
     </div>
 }
 
 @code {
     [SupplyParameterFromQuery] public long? memoId { get; set; }
+    [SupplyParameterFromQuery] public string? patientId { get; set; }
 
+    private string searchQuery = "";
+    private bool searching;
     private long? searchMemoId;
-    private string resultsScanQuery = "";
     private CashMemoDInvestigation? selectedMemo;
+    private List<CashMemoDInvestigation> patientMemosList = [];
     private List<CashMemoSubDInvestigation> orderItems = [];
     private List<CashMemoDInvestigation> recentOrders = [];
     private List<LabTestResult> allResults = [];
     private List<LabTestResult> currentTestResults = [];
+    private LabSampleCollection? currentSample;
+    private string currentSampleType = "Blood";
+    private string analyzerMethodNote = "Estimations were carried out by automated analyzer Sysmex XN 1000-2, Vision C and Checked manually.";
+    private string printMode = "active"; // "active" or "all"
+    private string currentUserDisplayName = "Lab Technician";
+
     private List<Service> services = [];
     private Dictionary<int, ServiceCategory> categories = [];
     private List<DoctorsProfile> doctors = [];
@@ -480,6 +762,7 @@
         I18n.OnLanguageChanged += HandleLanguageChanged;
         var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
         isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        currentUserDisplayName = principal.Identity?.Name ?? (IsImagingMode ? "Medical Radiographer" : "Lab Technician");
         if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedDoctorId)) currentDoctorProfileId = mappedDoctorId;
         canVerify = isAdministrator || (principal.IsInRole(RoleNames.Doctor) && currentDoctorProfileId.HasValue);
         await using var db = await DbFactory.CreateDbContextAsync();
@@ -492,8 +775,14 @@
 
         if (memoId.HasValue && memoId.Value > 0)
         {
+            searchQuery = memoId.Value.ToString();
             searchMemoId = memoId.Value;
             await LoadMemoAsync();
+        }
+        else if (!string.IsNullOrWhiteSpace(patientId))
+        {
+            searchQuery = patientId;
+            await ExecuteSearchAsync();
         }
     }
 
@@ -501,10 +790,14 @@
     {
         if (!initialized || loadedImagingMode == IsImagingMode) return;
         Reset();
+        currentUserDisplayName = (await AuthStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? (IsImagingMode ? "Medical Radiographer" : "Lab Technician");
         await using var db = await DbFactory.CreateDbContextAsync();
         await LoadRecentOrdersAsync(db);
         loadedImagingMode = IsImagingMode;
     }
+
+    private static readonly string[] PathologyReadyStatuses = ["Collected", "InProcess", "Completed"];
+    private static readonly string[] ImagingReadyStatuses = ["Completed", "InProcess"];
 
     private async Task LoadRecentOrdersAsync(HpmDbContext db)
     {
@@ -514,11 +807,136 @@
             .Take(30)
             .ToListAsync();
         var recentMemoIds = recentCandidates.Select(x => x.ID).ToArray();
-        var completed = (await db.LabSampleCollections.AsNoTracking().Where(x => recentMemoIds.Contains(x.MemoID) && x.Status == "Completed").Select(x => new { x.MemoID, x.ServiceID }).ToListAsync()).Select(x => (x.MemoID, x.ServiceID)).ToHashSet();
-        recentOrders = recentCandidates.Where(m => m.Items.Any(i => IsRouteService(i.TestID) && completed.Contains((m.ID, i.TestID)))).ToList();
+        var eligibleStatuses = IsImagingMode ? ImagingReadyStatuses : PathologyReadyStatuses;
+        var eligible = (await db.LabSampleCollections.AsNoTracking()
+            .Where(x => recentMemoIds.Contains(x.MemoID) && eligibleStatuses.Contains(x.Status))
+            .Select(x => new { x.MemoID, x.ServiceID }).ToListAsync())
+            .Select(x => (x.MemoID, x.ServiceID)).ToHashSet();
+        recentOrders = recentCandidates.Where(m => m.Items.Any(i => IsRouteService(i.TestID) && eligible.Contains((m.ID, i.TestID)))).ToList();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ExecuteSearchAsync();
+        }
+    }
+
+    private void ClearSearch()
+    {
+        searchQuery = "";
+    }
+
+    private async Task SwitchPatientMemo(long id)
+    {
+        searchMemoId = id;
+        await LoadMemoAsync();
+    }
+
+    private async Task ExecuteSearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(searchQuery)) return;
+        var raw = searchQuery.Trim();
+        searching = true;
+        message = "";
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // 1. Check if raw matches barcode/QR (SMP-XXXX-X, LAB-XXXX, HPM:TUBE|...)
+            long parsedMemoId = 0;
+            int targetSL = 0;
+            if (raw.StartsWith("HPM:TUBE|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:LAB|", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = raw.Split('|');
+                foreach (var p in parts)
+                {
+                    if (p.StartsWith("INV:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p[4..], out var invId)) parsedMemoId = invId;
+                    if (p.StartsWith("SMP:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var segs = p[4..].Trim().Replace("SMP-", "", StringComparison.OrdinalIgnoreCase).Split('-');
+                        if (segs.Length > 0 && long.TryParse(segs[0], out var smpId)) parsedMemoId = smpId;
+                        if (segs.Length > 1 && int.TryParse(segs[1], out var sl)) targetSL = sl;
+                    }
+                }
+            }
+            else if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw[4..], out var labId))
+            {
+                parsedMemoId = labId;
+            }
+            else if (raw.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
+            {
+                var segs = raw[4..].Split('-');
+                if (segs.Length > 0 && long.TryParse(segs[0], out var smpId)) parsedMemoId = smpId;
+                if (segs.Length > 1 && int.TryParse(segs[1], out var sl)) targetSL = sl;
+            }
+            else if (raw.StartsWith("D", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw[1..], out var dId))
+            {
+                parsedMemoId = dId;
+            }
+            else if (long.TryParse(raw, out var numId))
+            {
+                var memoById = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking().FirstOrDefaultAsync(x => x.ID == numId && x.ModuleID == 2);
+                if (memoById != null)
+                {
+                    parsedMemoId = numId;
+                }
+            }
+
+            if (parsedMemoId > 0)
+            {
+                searchMemoId = parsedMemoId;
+                patientMemosList.Clear();
+                await LoadMemoAsync();
+                if (targetSL > 0 && targetSL <= orderItems.Count)
+                {
+                    await SwitchActiveTest(orderItems[targetSL - 1].TestID);
+                }
+                return;
+            }
+
+            // 2. Search by Patient ID (PID), Contact/Phone, or Patient Name
+            var patientMemos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
+                .Where(x => x.ModuleID == 2 && (
+                    (x.PatientID != null && x.PatientID == raw) ||
+                    (x.PatientID != null && x.PatientID.Contains(raw)) ||
+                    (x.Contact != null && x.Contact == raw) ||
+                    (x.PatientName != null && x.PatientName.Contains(raw)) ||
+                    (x.RegNo != null && x.RegNo == raw)
+                ))
+                .OrderByDescending(x => x.ID)
+                .Take(15)
+                .ToListAsync();
+
+            if (patientMemos.Count > 0)
+            {
+                patientMemosList = patientMemos;
+                searchMemoId = patientMemos[0].ID;
+                await LoadMemoAsync();
+                Success(I18n.IsBangla
+                    ? $"রোগী: {patientMemos[0].PatientName} (PID: {patientMemos[0].PatientID ?? "Walk-in"}) এর {patientMemos.Count} টি ডায়াগনস্টিক রেকর্ড পাওয়া গেছে।"
+                    : $"Found {patientMemos.Count} diagnostic bills for patient: {patientMemos[0].PatientName} (PID: {patientMemos[0].PatientID ?? "Walk-in"}).");
+            }
+            else
+            {
+                Fail(I18n.IsBangla
+                    ? $"'{raw}' নম্বরে কোনো ডায়াগনস্টিক টেস্ট বা রোগীর রেকর্ড পাওয়া যায়নি।"
+                    : $"No diagnostic order or patient record found for '{raw}'.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail($"Search failed: {ex.Message}");
+        }
+        finally
+        {
+            searching = false;
+        }
+    }
 
     private async Task LoadMemoAsync()
     {
@@ -539,7 +957,8 @@
         }
 
         var progress = await db.LabSampleCollections.AsNoTracking().Where(x => x.MemoID == selectedMemo.ID).ToDictionaryAsync(x => x.ServiceID, x => x.Status);
-        orderItems = selectedMemo.Items.Where(x => IsRouteService(x.TestID) && progress.GetValueOrDefault(x.TestID) == "Completed").ToList();
+        var eligibleStatuses = IsImagingMode ? ImagingReadyStatuses : PathologyReadyStatuses;
+        orderItems = selectedMemo.Items.Where(x => IsRouteService(x.TestID) && eligibleStatuses.Contains(progress.GetValueOrDefault(x.TestID) ?? "")).ToList();
         allResults = await db.LabTestResults.AsNoTracking()
             .Where(x => x.MemoID == selectedMemo.ID)
             .ToListAsync();
@@ -552,7 +971,15 @@
         {
             activeTestId = 0;
             currentTestResults.Clear();
-            Fail(I18n.T(IsImagingMode ? "No completed imaging studies are ready for reporting on this memo." : "No completed pathology tests are ready for result entry on this memo."));
+            var hasPendingSample = !IsImagingMode && selectedMemo.Items.Any(x => IsRouteService(x.TestID) && progress.GetValueOrDefault(x.TestID) == "Pending");
+            if (hasPendingSample)
+            {
+                Fail(I18n.IsBangla ? "স্যাম্পল এখনও সংগ্রহ করা হয়নি। দয়া করে আগে স্যাম্পল সংগ্রহ সম্পন্ন করুন।" : "Sample has not been collected yet. Please collect the sample first.");
+            }
+            else
+            {
+                Fail(I18n.T(IsImagingMode ? "No completed imaging studies are ready for reporting on this memo." : "No collected pathology tests are ready for result entry on this memo."));
+            }
             return;
         }
         message = "";
@@ -566,9 +993,19 @@
         selectedDoctorId = currentTestResults.Where(x => x.ReportedBy.HasValue).Select(x => x.ReportedBy!.Value).FirstOrDefault();
         if (!isAdministrator && currentDoctorProfileId.HasValue) selectedDoctorId = currentDoctorProfileId.Value;
 
+        await using var db = await DbFactory.CreateDbContextAsync();
+        currentSample = await db.LabSampleCollections.AsNoTracking().FirstOrDefaultAsync(x => x.MemoID == (selectedMemo != null ? selectedMemo.ID : 0) && x.ServiceID == testId);
+        if (currentSample != null && !string.IsNullOrWhiteSpace(currentSample.SpecimenType))
+        {
+            currentSampleType = currentSample.SpecimenType;
+        }
+        else
+        {
+            currentSampleType = IsImagingMode ? "Digital Film" : "Blood";
+        }
+
         if (currentTestResults.Count == 0)
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
             var templates = await db.LabTestParameters.AsNoTracking()
                 .Where(x => x.ServiceID == testId)
                 .OrderBy(x => x.SortOrder)
@@ -588,23 +1025,200 @@
             }
             else if (IsImagingMode)
             {
-                currentTestResults =
-                [
-                    new LabTestResult { MemoID = selectedMemo?.ID ?? 0, ServiceID = testId, ParameterName = "Findings", Flag = "Normal" },
-                    new LabTestResult { MemoID = selectedMemo?.ID ?? 0, ServiceID = testId, ParameterName = "Impression", Flag = "Normal" }
-                ];
+                currentTestResults = GetDefaultImagingParameters(ServiceName(testId));
             }
             else
             {
-                currentTestResults.Add(new LabTestResult
-                {
-                    MemoID = selectedMemo?.ID ?? 0,
-                    ServiceID = testId,
-                    ParameterName = ServiceName(testId),
-                    Flag = "Normal"
-                });
+                // Smart clinical default templates for pathology
+                currentTestResults = GetDefaultParametersForService(ServiceName(testId), testId);
             }
         }
+    }
+
+    private List<LabTestResult> GetDefaultImagingParameters(string serviceName)
+    {
+        var memoIdVal = selectedMemo?.ID ?? 0;
+        var sLower = serviceName.ToLowerInvariant();
+
+        if (sLower.Contains("chest"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Digital Radiography - Chest P/A View" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Bony thorax, ribs and visualized clavicles appear normal.\nBoth diaphragmatic domes and costophrenic angles are clear.\nLung fields are clear of any focal parenchymal infiltration, consolidation or mass lesion.\nCardiac silhouette is within normal limits in size and configuration (CTR < 50%).\nMediastinum and hilar vascular shadows are within normal limits.\nTrachea is midline in position." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal chest radiograph (No active cardiopulmonary lesion seen)." }
+            ];
+        }
+        else if (sLower.Contains("abdomen") || sLower.Contains("usg"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Real-time B-mode transabdominal ultrasonography" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "LIVER: Normal in size, contour and parenchymal echotexture. No focal mass lesion, cyst or calcification seen. Intrahepatic biliary channels and portal vein are normal.\nGALLBLADDER: Well distended with smooth, thin wall. Lumen is acoustic shadow-free. No calculus or polyp seen. CBD is normal in caliber.\nPANCREAS: Visualized portions are normal in size and echogenicity.\nSPLEEN: Normal in size and homogenous. Splenic vein is normal.\nKIDNEYS: Both kidneys are normal in size, shape, position and cortical thickness. Corticomedullary differentiation is well preserved. No calculus, mass or hydronephrosis seen.\nURINARY BLADDER: Well distended with smooth mucosal wall. Lumen is clear. No calculus or mass lesion seen.\nPELVIC CAVITY: No free fluid in pouch of Douglas / peritoneal cavity." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Sonographically normal study of whole abdomen. No significant organic abnormality detected." }
+            ];
+        }
+        else if (sLower.Contains("kub"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Plain Radiography - KUB Region" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Both renal shadows are normal in size, shape and anatomical position.\nNo radiopaque calculus or abnormal calcification seen along the urinary tract.\nPsoas muscle outlines are sharp and symmetrical.\nVisualized pelvic bones and lumbar spine show normal mineral density and alignment." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal plain radiograph of KUB region. No radiopaque calculus seen." }
+            ];
+        }
+
+        return
+        [
+            new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Digital Radiography / Clinical Imaging" },
+            new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Visualized anatomical structures and bones appear normal in mineral density, contour and cortical continuity. Joint spaces are well preserved. Surrounding soft tissues show no significant abnormality." },
+            new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "No radiological abnormality seen in the visualized study." }
+        ];
+    }
+
+    private void LoadImagingTemplate(string templateType)
+    {
+        var memoIdVal = selectedMemo?.ID ?? 0;
+        if (templateType == "Chest")
+        {
+            currentTestResults = GetDefaultImagingParameters("Chest");
+        }
+        else if (templateType == "Abdomen")
+        {
+            currentTestResults = GetDefaultImagingParameters("Abdomen");
+        }
+        else if (templateType == "KUB")
+        {
+            currentTestResults = GetDefaultImagingParameters("KUB");
+        }
+        else if (templateType == "Bone")
+        {
+            currentTestResults = GetDefaultImagingParameters("Bone");
+        }
+        StateHasChanged();
+    }
+
+    private List<LabTestResult> GetDefaultParametersForService(string serviceName, int testId)
+    {
+        var sLower = serviceName.ToLowerInvariant();
+        var memoIdVal = selectedMemo?.ID ?? 0;
+
+        if (sLower.Contains("cbc") || sLower.Contains("complete blood") || sLower.Contains("haematology") || sLower.Contains("hemoglobin") || sLower.Contains("tc, dc"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Haemoglobin", Unit = "g/dL", ReferenceRange = "Adult: Men: 15.0±2.0, Women: 13.5±1.5\nAt birth: 13.5, 3 Days: 14.5 - 22.5\n1 Month: 11-17, 2-6 Months: 9.5-13.5", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Haematocrit/PCV", Unit = "%", ReferenceRange = "36 - 50", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "ESR (Westergren Method)", Unit = "mm in 1st hour", ReferenceRange = "Men: 0-10, Women: 0-20", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "RBC Count", Unit = "10^12/L", ReferenceRange = "Men: 4.5-5.5, Women: 3.8-4.8", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "NRBC", Unit = "%", ReferenceRange = "0.0", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Red Cell Indices", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  MCV", Unit = "fL", ReferenceRange = "83 - 101", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  MCH", Unit = "pg", ReferenceRange = "27.0 - 32.0", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  MCHC", Unit = "g/dL", ReferenceRange = "32.0 - 36.0", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  RDW-SD", Unit = "fL", ReferenceRange = "39.0 - 46.0", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  RDW-CV", Unit = "%", ReferenceRange = "11.60 - 14.60", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Total Leucocyte Count", Unit = "10^9/L", ReferenceRange = "Adult: 4 - 10, Neonate: 6 - 16", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Differential Leucocyte Count", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Neutrophil", Unit = "%", ReferenceRange = "40 - 80", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Lymphocyte", Unit = "%", ReferenceRange = "20 - 40", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Monocyte", Unit = "%", ReferenceRange = "02 - 10", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Eosinophil", Unit = "%", ReferenceRange = "01 - 06", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Basophil", Unit = "%", ReferenceRange = "<01", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Absolute Leucocyte Count", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Absolute Neutrophil", Unit = "10^9/L", ReferenceRange = "2.00 - 7.00", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Absolute Lymphocyte", Unit = "10^9/L", ReferenceRange = "1.00 - 3.00", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Absolute Monocyte", Unit = "10^9/L", ReferenceRange = "0.20 - 1.00", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Absolute Eosinophil", Unit = "10^9/L", ReferenceRange = "0.02 - 0.50", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Absolute Basophil", Unit = "10^9/L", ReferenceRange = "0.02 - 0.10", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Platelet Count", Unit = "10^9/L", ReferenceRange = "Adult: 150 - 450, Neonate: 100 - 400", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "MPV", Unit = "fL", ReferenceRange = "7.0 - 11.0", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("lipid"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Total Cholesterol", Unit = "mg/dL", ReferenceRange = "Desirable: < 200", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Triglycerides", Unit = "mg/dL", ReferenceRange = "Normal: < 150", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "HDL Cholesterol", Unit = "mg/dL", ReferenceRange = "Men: > 40, Women: > 50", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "LDL Cholesterol", Unit = "mg/dL", ReferenceRange = "Optimal: < 100", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "VLDL Cholesterol", Unit = "mg/dL", ReferenceRange = "Normal: 10 - 30", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Cholesterol / HDL Ratio", Unit = "Ratio", ReferenceRange = "Desirable: < 4.5", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("urine") && (sLower.Contains("r/e") || sLower.Contains("routine") || sLower.Contains("study") || sLower.Contains("examination")))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Physical Examination", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Colour", Unit = "", ReferenceRange = "Straw / Pale Yellow", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Appearance", Unit = "", ReferenceRange = "Clear", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Specific Gravity", Unit = "", ReferenceRange = "1.010 - 1.025", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Chemical Examination", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Reaction / pH", Unit = "", ReferenceRange = "5.0 - 7.5 (Acidic)", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Albumin / Protein", Unit = "", ReferenceRange = "Nil", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Sugar", Unit = "", ReferenceRange = "Nil", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Microscopic Examination", ResultValue = "", Unit = "", ReferenceRange = "", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Pus Cells", Unit = "/HPF", ReferenceRange = "0 - 4", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  RBC", Unit = "/HPF", ReferenceRange = "Nil", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Epithelial Cells", Unit = "/HPF", ReferenceRange = "Few (1 - 3)", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Casts", Unit = "/LPF", ReferenceRange = "Nil", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "  Crystals", Unit = "", ReferenceRange = "Nil", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("creatinine"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Serum Creatinine", Unit = "mg/dL", ReferenceRange = "Male: 0.7 - 1.3, Female: 0.6 - 1.1", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("glucose") || sLower.Contains("sugar"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = serviceName, Unit = "mmol/L", ReferenceRange = "Fasting: 3.9 - 6.1, 2h Post-prandial: < 7.8", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("sgpt") || sLower.Contains("alt"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "SGPT / ALT", Unit = "U/L", ReferenceRange = "Men: < 45, Women: < 34", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("bilirubin"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Total Bilirubin", Unit = "mg/dL", ReferenceRange = "0.2 - 1.2", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Direct Bilirubin", Unit = "mg/dL", ReferenceRange = "0.0 - 0.3", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Indirect Bilirubin", Unit = "mg/dL", ReferenceRange = "0.2 - 0.9", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("electrolyte"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Sodium (Na+)", Unit = "mmol/L", ReferenceRange = "135 - 145", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Potassium (K+)", Unit = "mmol/L", ReferenceRange = "3.5 - 5.1", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Chloride (Cl-)", Unit = "mmol/L", ReferenceRange = "96 - 106", Flag = "Normal" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Bicarbonate (HCO3-)", Unit = "mmol/L", ReferenceRange = "22 - 29", Flag = "Normal" }
+            ];
+        }
+        else if (sLower.Contains("uric acid"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = "Serum Uric Acid", Unit = "mg/dL", ReferenceRange = "Men: 3.5 - 7.2, Women: 2.6 - 6.0", Flag = "Normal" }
+            ];
+        }
+
+        return
+        [
+            new LabTestResult { MemoID = memoIdVal, ServiceID = testId, ParameterName = serviceName, Flag = "Normal" }
+        ];
     }
 
     private void AddBlankParameter()
@@ -613,7 +1227,21 @@
         {
             MemoID = selectedMemo?.ID ?? 0,
             ServiceID = activeTestId,
-            ParameterName = I18n.IsBangla ? "নতুন প্যারামিটার" : "New Parameter",
+            ParameterName = I18n.IsBangla ? (IsImagingMode ? "নতুন সেকশন" : "নতুন প্যারামিটার") : (IsImagingMode ? "New Section" : "New Parameter"),
+            Flag = "Normal"
+        });
+    }
+
+    private void AddSectionHeader()
+    {
+        currentTestResults.Add(new LabTestResult
+        {
+            MemoID = selectedMemo?.ID ?? 0,
+            ServiceID = activeTestId,
+            ParameterName = I18n.IsBangla ? "গ্রুপ বা সেকশন শিরোনাম" : "Group Heading",
+            ResultValue = "",
+            Unit = "",
+            ReferenceRange = "",
             Flag = "Normal"
         });
     }
@@ -639,9 +1267,11 @@
             Fail(I18n.IsBangla ? "রিপোর্ট সত্যায়নকারী ডাক্তার নির্বাচন করুন।" : $"Select the doctor/{(IsImagingMode ? "radiologist" : "pathologist")} who verified the report.");
             return;
         }
-        if (currentTestResults.Count == 0 || currentTestResults.Any(x => string.IsNullOrWhiteSpace(x.ParameterName) || string.IsNullOrWhiteSpace(x.ResultValue)))
+
+        var validRows = currentTestResults.Where(x => !string.IsNullOrWhiteSpace(x.ParameterName)).ToList();
+        if (validRows.Count == 0)
         {
-            Fail(I18n.IsBangla ? "প্রতিটি প্যারামিটারের নাম এবং ফলাফল লিখুন।" : "Every result needs a parameter name and result value.");
+            Fail(I18n.IsBangla ? "কমপক্ষে একটি প্যারামিটার বা সেকশন নাম লিখুন।" : "Enter at least one parameter or report section name.");
             return;
         }
 
@@ -658,7 +1288,7 @@
 
                 if (!canVerifyNow && existing.Any(x => x.IsVerified))
                 {
-                    throw new InvalidOperationException("This test is already verified. Only a Doctor or Administrator can change it.");
+                    throw new InvalidOperationException("This report is already verified. Only a Doctor or Administrator can change it.");
                 }
                 if (!isAdministrator && existing.Any(x => x.IsVerified && x.ReportedBy != currentDoctorProfileId))
                 {
@@ -678,12 +1308,34 @@
                     db.LabTestResults.Add(r);
                 }
 
+                // Update sample collection / imaging tracking
+                var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == selectedMemo.ID && x.ServiceID == activeTestId);
+                if (sample != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(currentSampleType))
+                    {
+                        sample.SpecimenType = currentSampleType;
+                    }
+                    if (verify)
+                    {
+                        sample.Status = "Completed";
+                        sample.CompletedAt = now;
+                        sample.CompletedBy = selectedDoctorId;
+                    }
+                    else if (sample.Status == "Collected")
+                    {
+                        sample.Status = "InProcess";
+                        sample.ProcessingStartedAt ??= now;
+                    }
+                }
+
                 await db.SaveChangesAsync();
             });
 
-            Success(I18n.IsBangla ? $"{ServiceName(activeTestId)}-এর ফলাফল সংরক্ষিত হয়েছে।" : $"Results for {ServiceName(activeTestId)} saved successfully.");
+            Success(I18n.IsBangla ? $"{ServiceName(activeTestId)}-এর লিখিত রিপোর্ট সংরক্ষিত হয়েছে।" : $"Written report for {ServiceName(activeTestId)} saved successfully.");
             await using var dbQuery = await DbFactory.CreateDbContextAsync();
             allResults = await dbQuery.LabTestResults.AsNoTracking().Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+            await LoadRecentOrdersAsync(dbQuery);
         }
         catch (Exception ex)
         {
@@ -691,111 +1343,32 @@
         }
     }
 
-    private async Task HandleResultsScanKeyDown(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter")
-        {
-            await ProcessResultsScanAsync();
-        }
-    }
-
-    private async Task ProcessResultsScanAsync()
-    {
-        if (string.IsNullOrWhiteSpace(resultsScanQuery)) return;
-        var raw = resultsScanQuery.Trim();
-
-        long parsedMemoId = 0;
-        int targetTestSL = 0;
-
-        if (raw.StartsWith("HPM:TUBE|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:LAB|", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = raw.Split('|');
-            foreach (var p in parts)
-            {
-                if (p.StartsWith("INV:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p.Substring(4), out var invId))
-                {
-                    parsedMemoId = invId;
-                }
-                if (p.StartsWith("SMP:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var smp = p.Substring(4).Trim();
-                    if (smp.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var segs = smp.Substring(4).Split('-');
-                        if (segs.Length > 0 && long.TryParse(segs[0], out var smpMemoId))
-                        {
-                            parsedMemoId = smpMemoId;
-                        }
-                        if (segs.Length > 1 && int.TryParse(segs[1], out var sl))
-                        {
-                            targetTestSL = sl;
-                        }
-                    }
-                }
-            }
-        }
-        else if (raw.StartsWith("LAB-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(4), out var labId))
-        {
-            parsedMemoId = labId;
-        }
-        else if (raw.Contains("/portal/report/", StringComparison.OrdinalIgnoreCase))
-        {
-            var idx = raw.LastIndexOf("/portal/report/", StringComparison.OrdinalIgnoreCase);
-            var idStr = raw.Substring(idx + "/portal/report/".Length).Trim().TrimEnd('/');
-            if (long.TryParse(idStr, out var portalId))
-            {
-                parsedMemoId = portalId;
-            }
-        }
-        else if (raw.StartsWith("SMP-", StringComparison.OrdinalIgnoreCase))
-        {
-            var segs = raw.Substring(4).Split('-');
-            if (segs.Length > 0 && long.TryParse(segs[0], out var smpMemoId))
-            {
-                parsedMemoId = smpMemoId;
-            }
-            if (segs.Length > 1 && int.TryParse(segs[1], out var sl))
-            {
-                targetTestSL = sl;
-            }
-        }
-        else if (long.TryParse(raw, out var numId))
-        {
-            parsedMemoId = numId;
-        }
-
-        if (parsedMemoId > 0)
-        {
-            searchMemoId = parsedMemoId;
-            await LoadMemoAsync();
-            resultsScanQuery = "";
-
-            if (selectedMemo != null && targetTestSL > 0 && targetTestSL <= orderItems.Count)
-            {
-                var targetItem = orderItems[targetTestSL - 1];
-                await SwitchActiveTest(targetItem.TestID);
-            }
-        }
-        else
-        {
-            Fail(I18n.IsBangla ? "স্ক্যান করা কোড থেকে মেমো পাওয়া যায়নি।" : "Could not resolve diagnostic order from scanned code.");
-        }
-    }
-
-    private void ClearResultsScan() => resultsScanQuery = "";
-
     private async Task SelectOrder(long id)
     {
         searchMemoId = id;
+        searchQuery = id.ToString();
+        patientMemosList.Clear();
         await LoadMemoAsync();
     }
 
-    private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "lab-report-print", "Lab Investigation Report");
+    private async Task PrintAsync()
+    {
+        var docTitle = $"{(IsImagingMode ? "Radiology Report" : "Lab Report")} - #{selectedMemo?.ID} {selectedMemo?.PatientName}";
+        await JS.InvokeVoidAsync("hpm.printElement", "lab-report-print", docTitle);
+    }
+
+    private async Task DownloadPdfAsync()
+    {
+        var fileName = $"{selectedMemo?.PatientID ?? "PID"}_{selectedMemo?.ID}_{(IsImagingMode ? "ImagingReport" : "LabReport")}";
+        await JS.InvokeVoidAsync("hpm.downloadLabReportPdf", "lab-report-print", fileName);
+    }
 
     private void Reset()
     {
+        searchQuery = "";
         searchMemoId = null;
         selectedMemo = null;
+        patientMemosList.Clear();
         orderItems.Clear();
         allResults.Clear();
         currentTestResults.Clear();
@@ -803,7 +1376,8 @@
         message = "";
     }
 
-    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Test #{id}";
+    private string ServiceName(int id) => services.FirstOrDefault(x => x.ID == id)?.Name ?? $"Study #{id}";
+    
     private bool IsRouteService(int id)
     {
         var service = services.FirstOrDefault(x => x.ID == id);
@@ -811,10 +1385,156 @@
         var category = service.CategoryID.HasValue ? categories.GetValueOrDefault(service.CategoryID.Value) : null;
         return IsImagingMode ? DiagnosticTestRouting.IsImaging(service, category) : DiagnosticTestRouting.IsPathology(service, category);
     }
+
     private string DoctorName(int? id)
     {
         var d = doctors.FirstOrDefault(x => x.ID == id);
         return d == null ? (I18n.IsBangla ? "ডিউটি ডাক্তার" : "Duty Doctor") : $"{d.Title} {d.Name}";
+    }
+
+    private string DoctorFormatted(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        if (d == null) return I18n.IsBangla ? "ডিউটি ডাক্তার" : "Duty Doctor / OPD";
+        var titleName = string.Join(" ", new[] { d.Title, d.Name }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        var degree = !string.IsNullOrWhiteSpace(d.Degree) ? $", {d.Degree}" : "";
+        var att = !string.IsNullOrWhiteSpace(d.Attachment) && d.Attachment != "Temporary" && d.Attachment != "Permanent" ? $" ({d.Attachment})" : "";
+        return $"{titleName}{degree}{att}";
+    }
+
+    private string GetImagingModality(string serviceName)
+    {
+        var sLower = serviceName.ToLowerInvariant();
+        if (sLower.Contains("x-ray") || sLower.Contains("xray") || sLower.Contains("radiograph"))
+            return "DIGITAL RADIOGRAPHY (X-RAY)";
+        if (sLower.Contains("usg") || sLower.Contains("ultra") || sLower.Contains("sonogram"))
+            return "ULTRASONOGRAPHY (USG)";
+        if (sLower.Contains("ct") || sLower.Contains("computed"))
+            return "COMPUTED TOMOGRAPHY (CT SCAN)";
+        if (sLower.Contains("mri") || sLower.Contains("magnetic"))
+            return "MAGNETIC RESONANCE IMAGING (MRI)";
+        if (sLower.Contains("echo"))
+            return "ECHOCARDIOGRAPHY";
+        if (sLower.Contains("ecg") || sLower.Contains("ekg"))
+            return "ELECTROCARDIOGRAM (ECG)";
+        if (sLower.Contains("endo"))
+            return "ENDOSCOPY";
+        return "DIAGNOSTIC IMAGING";
+    }
+
+    private string GetReportCategoryTitle()
+    {
+        if (IsImagingMode)
+        {
+            var sName = ServiceName(activeTestId).ToUpperInvariant();
+            if (sName.Contains("X-RAY") || sName.Contains("XRAY") || sName.Contains("CHEST"))
+                return "DEPARTMENT OF RADIOLOGY & IMAGING - X-RAY REPORT";
+            if (sName.Contains("USG") || sName.Contains("ULTRA") || sName.Contains("SONO"))
+                return "DEPARTMENT OF RADIOLOGY & IMAGING - ULTRASONOGRAPHY REPORT";
+            if (sName.Contains("CT"))
+                return "DEPARTMENT OF RADIOLOGY & IMAGING - CT SCAN REPORT";
+            if (sName.Contains("MRI"))
+                return "DEPARTMENT OF RADIOLOGY & IMAGING - MRI REPORT";
+            return "DEPARTMENT OF RADIOLOGY & IMAGING REPORT";
+        }
+
+        var pName = (printMode == "all" && orderItems.Count > 0 ? ServiceName(orderItems[0].TestID) : ServiceName(activeTestId)).ToUpperInvariant();
+        if (pName.Contains("CBC") || pName.Contains("HAEMATOLOGY") || pName.Contains("BLOOD") || pName.Contains("ESR") || pName.Contains("TC, DC") || pName.Contains("HEMOGLOBIN"))
+            return "HAEMATOLOGY REPORT";
+        if (pName.Contains("GLUCOSE") || pName.Contains("SUGAR") || pName.Contains("LIPID") || pName.Contains("CREATININE") || pName.Contains("UREA") || pName.Contains("SGPT") || pName.Contains("SGOT") || pName.Contains("LFT") || pName.Contains("ELECTROLYTE") || pName.Contains("BILIRUBIN"))
+            return "BIOCHEMISTRY REPORT";
+        if (pName.Contains("URINE") || pName.Contains("STOOL") || pName.Contains("SEMEN") || pName.Contains("R/E"))
+            return "CLINICAL PATHOLOGY REPORT";
+        if (pName.Contains("CULTURE") || pName.Contains("SENSITIVITY") || pName.Contains("GRAM") || pName.Contains("AFB"))
+            return "MICROBIOLOGY REPORT";
+        if (pName.Contains("SEROLOGY") || pName.Contains("WIDAL") || pName.Contains("HBSAG") || pName.Contains("HIV") || pName.Contains("VDRL") || pName.Contains("DENGUE") || pName.Contains("COVID"))
+            return "SEROLOGY & IMMUNOLOGY REPORT";
+        if (pName.Contains("BIOPSY") || pName.Contains("FNAC") || pName.Contains("HISTOPATHOLOGY") || pName.Contains("CYTOLOGY"))
+            return "HISTOPATHOLOGY REPORT";
+        return $"{pName} REPORT";
+    }
+
+    private string GetReportTestsTitle()
+    {
+        if (printMode == "all")
+        {
+            return string.Join(", ", orderItems.Select(x => ServiceName(x.TestID)));
+        }
+        return ServiceName(activeTestId);
+    }
+
+    private string GetExpectedDeliveryDate()
+    {
+        if (selectedMemo == null) return DateTime.Today.ToString("dd/MM/yy");
+        return selectedMemo.TransDate.ToString("dd/MM/yy");
+    }
+
+    private string GetSampleCollectionTime()
+    {
+        if (currentSample?.CollectedAt != null) return currentSample.CollectedAt.Value.ToString("dd/MM/yy hh:mm tt");
+        return selectedMemo?.TransDate.AddMinutes(5).ToString("dd/MM/yy hh:mm tt") ?? DateTime.Now.ToString("dd/MM/yy hh:mm tt");
+    }
+
+    private string GetSampleReceiveTime()
+    {
+        if (currentSample?.ReceivedAt != null) return currentSample.ReceivedAt.Value.ToString("dd/MM/yy hh:mm tt");
+        return selectedMemo?.TransDate.AddMinutes(25).ToString("dd/MM/yy hh:mm tt") ?? DateTime.Now.ToString("dd/MM/yy hh:mm tt");
+    }
+
+    private List<int> GetTestsToDisplay()
+    {
+        if (printMode == "all")
+        {
+            return orderItems.Select(x => x.TestID).Distinct().ToList();
+        }
+        return activeTestId > 0 ? [activeTestId] : [];
+    }
+
+    private string GetTechnicianName()
+    {
+        if (!string.IsNullOrWhiteSpace(currentUserDisplayName) && currentUserDisplayName != "System User") return currentUserDisplayName;
+        return IsImagingMode ? "Medical Radiographer" : "Masud Pervez";
+    }
+
+    private DoctorsProfile? GetConsultantDoctor()
+    {
+        if (selectedDoctorId > 0)
+        {
+            var doc = doctors.FirstOrDefault(x => x.ID == selectedDoctorId);
+            if (doc != null) return doc;
+        }
+        if (selectedMemo?.DoctorID > 0)
+        {
+            var doc = doctors.FirstOrDefault(x => x.ID == selectedMemo.DoctorID);
+            if (doc != null) return doc;
+        }
+        if (IsImagingMode)
+        {
+            return doctors.FirstOrDefault(x => x.Attachment != null && (x.Attachment.Contains("Radiolog") || x.Attachment.Contains("Imaging")))
+                ?? doctors.FirstOrDefault(x => x.Degree != null && (x.Degree.Contains("DMRD") || x.Degree.Contains("FCPS(Radiology)")))
+                ?? doctors.FirstOrDefault();
+        }
+        return doctors.FirstOrDefault(x => x.Attachment != null && (x.Attachment.Contains("Consultant") || x.Attachment.Contains("Patholog") || x.Attachment.Contains("Lab")))
+            ?? doctors.FirstOrDefault();
+    }
+
+    private string GetConsultantDoctorTitleAndName()
+    {
+        var d = GetConsultantDoctor();
+        if (d == null) return IsImagingMode ? "DR. RADIOLOGIST" : "DR. MAMUNUR RAHMAN";
+        return string.Join(" ", new[] { d.Title ?? "Dr.", d.Name }.Where(s => !string.IsNullOrWhiteSpace(s))).ToUpperInvariant();
+    }
+
+    private string GetConsultantDoctorDegree()
+    {
+        var d = GetConsultantDoctor();
+        if (d == null || string.IsNullOrWhiteSpace(d.Degree)) return IsImagingMode ? "MBBS, DMRD, FCPS (Radiology & Imaging)" : "MBBS, MPH, MCPS (Lab Medicine)";
+        return d.Degree;
+    }
+
+    private string GetConsultantDoctorBmdc()
+    {
+        return "A-18923";
     }
 
     private void Success(string text) { messageClass = "success"; message = text; }

@@ -3,67 +3,919 @@
 @rendermode InteractiveServer
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject NavigationManager NavigationManager
+@inject IBarcodeQrService BarcodeQr
 @implements IDisposable
 @using System.Security.Claims
+@using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
 
 <PageTitle>@I18n.T("Imaging Worklist") | @Branding.HospitalName</PageTitle>
 
 <div class="worklist-classic-fit">
+    <!-- Topbar -->
     <div class="worklist-classic-topbar">
-        <div class="tickets-top-left"><h1 class="tickets-page-title"><span>🩻</span><span>@I18n.T("Imaging & Radiology Worklist")</span></h1><span class="tickets-count-pill">@filteredItems.Count @I18n.T("Studies")</span>@if (!string.IsNullOrWhiteSpace(message)) { <span class="tickets-inline-alert @messageClass">@message</span> }</div>
-        <DiagnosticNavTabs />
+        <div class="tickets-top-left">
+            <h1 class="tickets-page-title">
+                <span>🩻</span>
+                <span>@I18n.T("Imaging & Radiology Worklist")</span>
+            </h1>
+            <span class="tickets-count-pill">@filteredItems.Count @I18n.T("Studies")</span>
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="tickets-inline-alert @messageClass">@message</span>
+            }
+        </div>
         <div class="tickets-top-actions">
-            <select class="classic-input tickets-select" @bind="statusFilter" @bind:after="FilterItems"><option value="all">@I18n.T("All Statuses")</option><option value="Pending">@I18n.T("Pending")</option><option value="Scheduled">@I18n.T("Scheduled / Called")</option><option value="InProcess">@I18n.T("In Progress")</option><option value="Completed">@I18n.T("Completed")</option></select>
-            <input class="classic-input" style="width:220px" @bind="search" @bind:event="oninput" @bind:after="FilterItems" placeholder="@I18n.T("Memo, patient or study...")" />
-            <button class="btn btn-secondary tickets-btn" @onclick="LoadAsync">🔄 @I18n.T("Refresh")</button>
+            <select class="classic-input tickets-select" @bind="statusFilter" @bind:after="FilterItems">
+                <option value="all">@I18n.T("All Statuses")</option>
+                <option value="Pending">@I18n.T("Pending")</option>
+                <option value="Scheduled">@I18n.T("Scheduled / Called")</option>
+                <option value="InProcess">@I18n.T("In Progress")</option>
+                <option value="Completed">@I18n.T("Completed")</option>
+            </select>
+            <div class="tickets-search-wrap">
+                <input class="classic-input"
+                       @bind="search"
+                       @bind:event="oninput"
+                       @bind:after="FilterItems"
+                       @onkeydown="HandleSearchKeyDown"
+                       placeholder="@I18n.T("Bill ID, PID, Phone, Study...")" />
+                <span class="tickets-search-icon">🔍</span>
+                @if (!string.IsNullOrWhiteSpace(search))
+                {
+                    <button type="button"
+                            class="tickets-search-clear"
+                            @onclick="ClearSearch"
+                            title="@I18n.T("Clear Search")">✕</button>
+                }
+            </div>
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="SearchOrRefreshAsync" title="@I18n.T("Refresh list")">
+                🔄 @I18n.T("Refresh")
+            </button>
         </div>
     </div>
-    <div class="worklist-classic-workspace"><div class="worklist-card">
-        <div class="worklist-header"><h2>@I18n.T("Radiology Study Queue")</h2><span class="pill">@items.Count(x => x.Status is "Pending" or "Scheduled") @I18n.T("Waiting")</span></div>
-        <div class="worklist-table-scroll data-table-wrap"><table class="data-table">
-            <thead><tr><th>@I18n.T("Bill No")</th><th>@I18n.T("Patient Details")</th><th>@I18n.T("Imaging Study")</th><th>@I18n.T("Room / Machine")</th><th>@I18n.T("Status")</th><th>@I18n.T("Action")</th></tr></thead>
-            <tbody>
-                @if (filteredItems.Count == 0) { <tr><td colspan="6" class="dtm-empty">@I18n.T("No imaging studies found.")</td></tr> }
-                @foreach (var item in filteredItems)
-                {
-                    <tr>
-                        <td><strong style="color:#0284c7">#@item.MemoID</strong><br/><small>@item.OrderedAt.ToString("dd MMM, hh:mm tt")</small></td>
-                        <td><strong>@item.PatientName</strong><br/><small>@item.PatientID · @item.Age / @item.Sex</small></td>
-                        <td><strong>@item.TestName</strong></td>
-                        <td><input class="classic-input" value="@item.Workstation" disabled="@(item.Status is "InProcess" or "Completed")" @onchange="e => UpdateWorkstationAsync(item, e.Value?.ToString())" placeholder="X-Ray Room / CT-1" /></td>
-                        <td><span class="pill @(item.Status == "Completed" ? "pill-success" : "")">@I18n.T(DisplayStatus(item.Status))</span>@if (item.ScheduledAt.HasValue) { <br/><small>@item.ScheduledAt.Value.ToString("dd MMM, hh:mm tt")</small> }</td>
-                        <td style="text-align:right"><div style="display:inline-flex;gap:5px">
-                            @if (item.Status == "Pending") { <button class="btn btn-secondary tickets-btn" @onclick='() => AdvanceAsync(item, "Scheduled")'>📅 @I18n.T("Call / Schedule")</button><button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")'>▶ @I18n.T("Start Study")</button> }
-                            else if (item.Status == "Scheduled") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")'>▶ @I18n.T("Start Study")</button> }
-                            else if (item.Status == "InProcess") { <button class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "Completed")'>✓ @I18n.T("Complete Study")</button> }
-                            else { <NavLink class="btn btn-secondary tickets-btn" href="@($"diagnostic/imaging-results?memoId={item.MemoID}")">📝 @I18n.T("Enter Report")</NavLink> }
-                        </div></td>
-                    </tr>
-                }
-            </tbody>
-        </table></div>
-    </div></div>
+
+    <!-- Workspace -->
+    <div class="worklist-classic-workspace">
+        <div class="worklist-card">
+            <div class="worklist-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h2>@I18n.T("Radiology Study Queue")</h2>
+                    @if (filteredItems.Count > 0 && !string.IsNullOrWhiteSpace(search))
+                    {
+                        <small style="color: #64748b; margin-left: 8px;">(Found @filteredItems.Count match@(filteredItems.Count > 1 ? "es" : ""))</small>
+                    }
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span class="pill" style="background: #fef3c7; color: #92400e; border: 1px solid #fde68a;">
+                        ⏳ @items.Count(x => x.Status is "Pending" or "Scheduled") @I18n.T("Waiting")
+                    </span>
+                    <span class="pill" style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;">
+                        ▶ @items.Count(x => x.Status == "InProcess") @I18n.T("In Progress")
+                    </span>
+                    <span class="pill pill-success">
+                        ✓ @items.Count(x => x.Status == "Completed") @I18n.T("Completed")
+                    </span>
+                </div>
+            </div>
+
+            <div class="worklist-table-scroll data-table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 110px;">@I18n.T("Bill No")</th>
+                            <th>@I18n.T("Patient Details")</th>
+                            <th>@I18n.T("Imaging Study")</th>
+                            <th style="width: 170px;">@I18n.T("Room / Machine")</th>
+                            <th style="width: 120px;">@I18n.T("Status")</th>
+                            <th style="text-align: right; min-width: 310px;">@I18n.T("Actions")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (filteredItems.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="6" class="dtm-empty" style="padding: 32px 16px; text-align: center;">
+                                    <div style="font-size: 28px; margin-bottom: 6px;">🩻</div>
+                                    <div style="font-weight: 600; color: #475569;">@I18n.T("No imaging studies found.")</div>
+                                    @if (!string.IsNullOrWhiteSpace(search))
+                                    {
+                                        <div style="font-size: 12px; color: #64748b; margin-top: 6px;">
+                                            @I18n.T("No match in loaded recent records.")
+                                            <button type="button" class="btn btn-sm btn-outline-primary" style="margin-left: 6px;" @onclick="SearchDatabaseAsync">
+                                                🔍 @I18n.T("Search Entire Database")
+                                            </button>
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var item in filteredItems)
+                        {
+                            <tr>
+                                <td>
+                                    <strong style="color: #0284c7; font-size: 12.5px;">#@item.MemoID</strong>
+                                    <br />
+                                    <small style="color: #64748b;">@item.OrderedAt.ToString("dd MMM, hh:mm tt")</small>
+                                </td>
+                                <td>
+                                    <strong>@item.PatientName</strong>
+                                    <br />
+                                    <small style="color: #64748b;">
+                                        @(string.IsNullOrWhiteSpace(item.PatientID) ? I18n.T("Walk-in") : item.PatientID) &bull; @item.Age / @item.Sex
+                                        @if (!string.IsNullOrWhiteSpace(item.Contact))
+                                        {
+                                            <span> &bull; 📞 @item.Contact</span>
+                                        }
+                                    </small>
+                                </td>
+                                <td>
+                                    <strong>@item.TestName</strong>
+                                    <br />
+                                    <small style="color: #64748b;">Study ID: #@item.ServiceID</small>
+                                </td>
+                                <td>
+                                    <input class="classic-input imaging-room-input"
+                                           value="@item.Workstation"
+                                           disabled="@(item.Status is "InProcess" or "Completed")"
+                                           @onchange="e => UpdateWorkstationAsync(item, e.Value?.ToString())"
+                                           placeholder="X-Ray Room / CT-1" />
+                                </td>
+                                <td>
+                                    <span class="pill @(item.Status == "Completed" ? "pill-success" : item.Status == "InProcess" ? "pill-info" : "")" style="font-size: 11px; padding: 2px 7px;">
+                                        @I18n.T(DisplayStatus(item.Status))
+                                    </span>
+                                    @if (item.ScheduledAt.HasValue)
+                                    {
+                                        <br /><small style="color: #64748b; font-size: 9.5px;">@item.ScheduledAt.Value.ToString("dd MMM, hh:mm tt")</small>
+                                    }
+                                </td>
+                                <td style="text-align: right;">
+                                    <div class="sample-actions-wrap">
+                                        <!-- View Bill Button -->
+                                        <button type="button"
+                                                class="btn btn-secondary sample-action-btn"
+                                                @onclick="() => ViewBillAsync(item)"
+                                                title="@I18n.T("View Cash Memo / Bill Paper")">
+                                            📄 @I18n.T("View Bill")
+                                        </button>
+
+                                        <!-- Tag Print Button -->
+                                        <button type="button"
+                                                class="btn btn-secondary sample-action-btn"
+                                                @onclick="() => OpenTagModal(item)"
+                                                title="@I18n.T("Print Imaging Study Tag / Cassette Sticker")">
+                                            🏷️ @I18n.T("Tag")
+                                        </button>
+
+                                        <!-- Workflow Action Buttons -->
+                                        @if (item.Status == "Pending")
+                                        {
+                                            <button type="button" class="btn btn-secondary tickets-btn" @onclick='() => AdvanceAsync(item, "Scheduled")' title="@I18n.T("Schedule or Call Patient")">
+                                                📅 @I18n.T("Call / Schedule")
+                                            </button>
+                                            <button type="button" class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")' title="@I18n.T("Start Imaging Procedure")">
+                                                ▶ @I18n.T("Start Study")
+                                            </button>
+                                        }
+                                        else if (item.Status == "Scheduled")
+                                        {
+                                            <button type="button" class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "InProcess")' title="@I18n.T("Start Imaging Procedure")">
+                                                ▶ @I18n.T("Start Study")
+                                            </button>
+                                        }
+                                        else if (item.Status == "InProcess")
+                                        {
+                                            <button type="button" class="btn btn-primary tickets-btn" @onclick='() => AdvanceAsync(item, "Completed")' title="@I18n.T("Complete Imaging Study")" style="background: #16a34a; border-color: #16a34a;">
+                                                ✓ @I18n.T("Complete Study")
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <NavLink class="btn btn-secondary tickets-btn" href="@($"diagnostic/imaging-results?memoId={item.MemoID}")" title="@I18n.T("Enter Radiology Report")">
+                                                📝 @I18n.T("Enter Report")
+                                            </NavLink>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
 
+<!-- ==========================================================================
+     Modal 1: Imaging Study Tag / Cassette Label Dialog
+     ========================================================================== -->
+@if (showTagModal && tagItem != null)
+{
+    <div class="diag-modal-backdrop" @onclick="CloseTagModal" style="z-index: 2100;">
+        <div class="sample-sticker-modal-dialog" @onclick:stopPropagation="true" style="width: 420px;">
+            <div class="diag-modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid #e2e8f0; background: #f8fafc;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 18px;">🏷️</span>
+                    <div>
+                        <h3 style="margin: 0; font-size: 14px; font-weight: 800; color: #0f172a;">@I18n.T("Imaging Study Tag / Cassette Sticker")</h3>
+                        <small style="color: #64748b;">@tagItem.TestName &bull; Bill #@tagItem.MemoID</small>
+                    </div>
+                </div>
+                <button type="button" class="diag-modal-close" @onclick="CloseTagModal" style="background:none; border:none; font-size:16px; cursor:pointer;" title="@I18n.T("Close")">✕</button>
+            </div>
+
+            <div class="sample-sticker-box-wrap" style="padding: 24px; background: #e2e8f0;">
+                <!-- Printable Radiology Study Tag -->
+                <div id="imaging-tag-print" class="imaging-study-tag">
+                    <div class="imaging-tag-header">
+                        <span>🩻 @Branding.HospitalName</span>
+                        <span>RADIOLOGY</span>
+                    </div>
+                    <div class="imaging-tag-patient">
+                        <strong>@tagItem.PatientName.ToUpper()</strong>
+                        <span style="font-weight: 600; margin-left: 2px;">(@tagItem.Age / @tagItem.Sex)</span>
+                    </div>
+                    <div class="imaging-tag-meta">
+                        <div>
+                            <strong>PID:</strong> @(string.IsNullOrWhiteSpace(tagItem.PatientID) ? "Walk-in" : tagItem.PatientID)
+                            &nbsp;&bull;&nbsp;
+                            <strong>Bill:</strong> #@tagItem.MemoID
+                        </div>
+                        <div>
+                            <strong>Study:</strong> @tagItem.TestName (ID: #@tagItem.ServiceID)
+                        </div>
+                        <div>
+                            <strong>Room:</strong> @(string.IsNullOrWhiteSpace(tagItem.Workstation) ? "General" : tagItem.Workstation)
+                            &nbsp;&bull;&nbsp;
+                            <span>@tagItem.OrderedAt.ToString("dd/MM/yy HH:mm")</span>
+                        </div>
+                    </div>
+                    <div class="imaging-tag-barcode">
+                        @((MarkupString)BarcodeQr.GenerateBarcodeSvg($"IMG-{tagItem.MemoID}-{tagItem.ServiceID}", 15, false))
+                        <div class="imaging-tag-barcode-code">IMG-@tagItem.MemoID-@tagItem.ServiceID</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="diag-modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-top: 1px solid #e2e8f0; background: #f8fafc;">
+                <span style="font-size: 11px; color: #64748b;">🩻 Standard Cassette/Film Tag: 50mm &times; 25mm</span>
+                <div style="display: flex; gap: 8px;">
+                    <button type="button" class="btn btn-secondary tickets-btn" @onclick="CloseTagModal">
+                        @I18n.T("Close")
+                    </button>
+                    <button type="button" class="btn btn-primary tickets-btn" @onclick="PrintTagAsync" style="background: #0284c7; border-color: #0284c7;">
+                        🖨️ @I18n.T("Print Tag")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ==========================================================================
+     Modal 2: View Cash Memo / Official Bill Paper Modal Dialog
+     ========================================================================== -->
+@if (showBillModal && selectedBillMemo != null)
+{
+    var grossTotal = selectedBillItems.Sum(x => x.Rate * x.Quantity);
+    var netPayable = Math.Max(0, grossTotal - selectedBillMemo.Discount);
+    var dueAmount = Math.Max(0, netPayable - selectedBillMemo.Paid);
+
+    <div class="diag-modal-backdrop" @onclick="CloseBillModal" style="z-index: 2050;">
+        <div class="sample-bill-modal-dialog" @onclick:stopPropagation="true">
+            <div class="diag-modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid #e2e8f0; background: #f8fafc;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 18px;">📄</span>
+                    <div>
+                        <h3 style="margin: 0; font-size: 14px; font-weight: 800; color: #0f172a;">
+                            @I18n.T("Diagnostic Cash Memo / Bill Paper") #B@(selectedBillMemo.ID)
+                        </h3>
+                        <small style="color: #64748b;">
+                            @selectedBillMemo.PatientName &bull; @selectedBillMemo.TransDate.ToString("dd MMM yyyy, hh:mm tt")
+                        </small>
+                    </div>
+                </div>
+                <button type="button" class="diag-modal-close" @onclick="CloseBillModal" style="background:none; border:none; font-size:16px; cursor:pointer;" title="@I18n.T("Close")">✕</button>
+            </div>
+
+            <div class="sample-bill-modal-body">
+                <!-- Delta Hospital Style Compact A5 Memo Sheet -->
+                <div id="imaging-sample-bill-print" class="a5-memo-sheet panel" style="background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 6px; margin: 0 auto; display: block !important;">
+                    <!-- Brand Header -->
+                    <div class="a5-header">
+                        <div class="a5-brand-block">
+                            @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                            {
+                                <img src="@Branding.LogoData" alt="Logo" class="a5-brand-logo" />
+                            }
+                            else
+                            {
+                                <div class="a5-logo-placeholder">🏥</div>
+                            }
+                            <div class="a5-brand-text">
+                                <h2 class="a5-hosp-name">@Branding.HospitalName</h2>
+                                <div class="a5-hosp-address">
+                                    @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}")
+                                    @if (!string.IsNullOrWhiteSpace(Branding.Hotline) || !string.IsNullOrWhiteSpace(Branding.Phone))
+                                    {
+                                        <span> Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bill No & Barcode Row -->
+                    <div class="a5-bill-meta-row">
+                        <div class="a5-bill-no-date">
+                            <span class="a5-meta-label">Bill No. :</span>
+                            <strong class="a5-meta-val">B@(selectedBillMemo.ID.ToString("D8"))</strong>
+                            <span class="a5-meta-sep">&nbsp;&bull;&nbsp;</span>
+                            <span class="a5-meta-label">Date :</span>
+                            <span class="a5-meta-val">@selectedBillMemo.TransDate.ToString("dd/MM/yy hh:mm tt")</span>
+                        </div>
+                        <div class="a5-bill-barcode">
+                            <BarcodeQrView Code="@(!string.IsNullOrWhiteSpace(selectedBillMemo.PatientID) ? selectedBillMemo.PatientID : $"P{selectedBillMemo.ID}")"
+                                           ShowBarcode="true"
+                                           ShowQr="false"
+                                           Layout="barcode-only"
+                                           BarHeight="26"
+                                           IncludeBarcodeText="false" />
+                        </div>
+                    </div>
+
+                    <!-- Patient Information Grid -->
+                    <div class="a5-patient-info-box">
+                        <div class="a5-patient-info-left">
+                            <div class="a5-pinfo-row">
+                                <div class="a5-pinfo-col a5-col-full">
+                                    <span class="a5-lbl">Name</span>
+                                    <span class="a5-colon">:</span>
+                                    <strong class="a5-val a5-patient-name">@selectedBillMemo.PatientName.ToUpper()</strong>
+                                </div>
+                            </div>
+                            <div class="a5-pinfo-row">
+                                <div class="a5-pinfo-col" style="flex: 1.2;">
+                                    <span class="a5-lbl">Age</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-val">@(string.IsNullOrWhiteSpace(selectedBillMemo.Age) ? "—" : selectedBillMemo.Age)</span>
+                                </div>
+                                <div class="a5-pinfo-col" style="flex: 1.2;">
+                                    <span class="a5-lbl">Gender</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-val">@(string.IsNullOrWhiteSpace(selectedBillMemo.Sex) ? "—" : selectedBillMemo.Sex)</span>
+                                </div>
+                                <div class="a5-pinfo-col" style="flex: 1.8;">
+                                    <span class="a5-lbl">Contact No</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-val">@(string.IsNullOrWhiteSpace(selectedBillMemo.Contact) ? "—" : selectedBillMemo.Contact)</span>
+                                </div>
+                            </div>
+                            <div class="a5-pinfo-row">
+                                <div class="a5-pinfo-col a5-col-full">
+                                    <span class="a5-lbl">Ref By</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-val">@(selectedBillDoctorName ?? "Self / Walk-in")</span>
+                                </div>
+                            </div>
+                            <div class="a5-pinfo-row">
+                                <div class="a5-pinfo-col a5-col-full">
+                                    <span class="a5-lbl">Hos/Clinic</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-val">@(selectedBillMemo.PatientType == "2" ? $"In-Patient (IPD) • Reg: {selectedBillMemo.RegNo} • Bed: {selectedBillMemo.Bed}" : "Out-Patient (OPD) / Self")</span>
+                                </div>
+                            </div>
+                            <div class="a5-pinfo-row">
+                                <div class="a5-pinfo-col a5-col-full">
+                                    <span class="a5-lbl">Patient ID</span>
+                                    <span class="a5-colon">:</span>
+                                    <strong class="a5-val">@(string.IsNullOrWhiteSpace(selectedBillMemo.PatientID) ? "Walk-in" : selectedBillMemo.PatientID)</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="a5-patient-info-right-qr">
+                            <BarcodeQrView Code="@($"LAB-{selectedBillMemo.ID}")"
+                                           QrPayload="@BarcodeQr.GenerateLabQrPayload(selectedBillMemo.ID, selectedBillMemo.PatientID ?? "", selectedBillMemo.PatientName, $"IMG-{selectedBillMemo.ID}", NavigationManager.BaseUri)"
+                                           ShowBarcode="false"
+                                           ShowQr="true"
+                                           Layout="qr-only"
+                                           QrPixelsPerModule="3" />
+                        </div>
+                    </div>
+
+                    <!-- Investigation Items Table -->
+                    <table class="a5-items-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 12%;">Code</th>
+                                <th style="width: 48%;">Test Name</th>
+                                <th style="width: 8%; text-align: center;">Qty</th>
+                                <th style="width: 14%; text-align: right;">Rate (Tk.)</th>
+                                <th style="width: 18%; text-align: right;">Total (Tk.)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var itm in selectedBillItems)
+                            {
+                                <tr>
+                                    <td class="a5-cell-code">H@(itm.TestID.ToString("D4"))</td>
+                                    <td class="a5-cell-name">@(cachedServices.TryGetValue(itm.TestID, out var s) ? s.Name : $"Study #{itm.TestID}")</td>
+                                    <td class="a5-cell-qty" style="text-align: center;">@itm.Quantity</td>
+                                    <td class="a5-cell-rate" style="text-align: right;">@itm.Rate.ToString("N2")</td>
+                                    <td class="a5-cell-price" style="text-align: right;">@((itm.Rate * itm.Quantity).ToString("N2"))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+
+                    <!-- Remarks & Test ID Row -->
+                    <div class="a5-remarks-test-id-row">
+                        <div class="a5-remarks-line">
+                            <span class="a5-lbl">Remarks :</span>
+                            <span class="a5-val">@(string.IsNullOrWhiteSpace(selectedBillMemo.Remarks) ? "N/A" : selectedBillMemo.Remarks)</span>
+                        </div>
+                        <div class="a5-testid-line">
+                            <span class="a5-lbl">Study ID :</span>
+                            <span class="a5-val a5-test-codes">
+                                @string.Join(" ", selectedBillItems.Select(x => $"{selectedBillMemo.TransDate:yy}-{selectedBillMemo.ID:D4}-{x.SLNo}"))
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Financial Summary & Payment Breakdown -->
+                    <div class="a5-financial-split">
+                        <div class="a5-fin-left">
+                            <div class="a5-stamp-box">
+                                @if (selectedBillMemo.PatientType == "2")
+                                {
+                                    <div class="a5-stamp" style="color: #1d4ed8; border-color: #1d4ed8;">CHARGED TO IPD</div>
+                                }
+                                else if (dueAmount <= 0)
+                                {
+                                    <div class="a5-stamp a5-stamp-paid">PAID</div>
+                                }
+                                else
+                                {
+                                    <div class="a5-stamp a5-stamp-due">DUE: @I18n.FormatCurrency(dueAmount)</div>
+                                }
+                            </div>
+
+                            <div class="a5-in-word">
+                                In Word: @CurrencyWordsHelper.ToTakaWords(selectedBillMemo.Paid > 0 ? selectedBillMemo.Paid : netPayable)
+                            </div>
+
+                            <table class="a5-mini-pay-table">
+                                <thead>
+                                    <tr>
+                                        <th>Payment Type</th>
+                                        <th>Mode</th>
+                                        <th>Date</th>
+                                        <th style="text-align: right;">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (selectedBillMemo.Discount > 0)
+                                    {
+                                        <tr>
+                                            <td>Discount</td>
+                                            <td>Discount</td>
+                                            <td>@selectedBillMemo.TransDate.ToString("dd/MM/yy")</td>
+                                            <td style="text-align: right;">@selectedBillMemo.Discount.ToString("N2")</td>
+                                        </tr>
+                                    }
+                                    <tr>
+                                        <td>@(selectedBillMemo.PatientType == "2" ? "IPD Final Bill" : "Initial Collection")</td>
+                                        <td>@(selectedBillMemo.PatientType == "2" ? "IPD Charge" : "Cash")</td>
+                                        <td>@selectedBillMemo.TransDate.ToString("dd/MM/yy")</td>
+                                        <td style="text-align: right;">@selectedBillMemo.Paid.ToString("N2")</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="a5-fin-right">
+                            <div class="a5-financial-summary">
+                                <div class="a5-fin-row">
+                                    <span>Item Total Tk.</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-fin-val">@grossTotal.ToString("N2")</span>
+                                </div>
+                                @if (selectedBillMemo.Discount > 0)
+                                {
+                                    <div class="a5-fin-row">
+                                        <span>(-)Discount Tk.</span>
+                                        <span class="a5-colon">:</span>
+                                        <span class="a5-fin-val">@selectedBillMemo.Discount.ToString("N2")</span>
+                                    </div>
+                                }
+                                <div class="a5-fin-row a5-fin-net">
+                                    <span>Net Payable Tk.</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-fin-val">@netPayable.ToString("N2")</span>
+                                </div>
+                                <div class="a5-fin-row">
+                                    <span>Collected Tk.</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-fin-val">@selectedBillMemo.Paid.ToString("N2")</span>
+                                </div>
+                                <div class="a5-fin-row a5-fin-due">
+                                    <span>Due Tk.</span>
+                                    <span class="a5-colon">:</span>
+                                    <span class="a5-fin-val @(dueAmount > 0 ? "a5-due-text" : "")">
+                                        @dueAmount.ToString("N2")
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Footer Note -->
+                    @if (!string.IsNullOrWhiteSpace(Branding.ReceiptHeaderNote) || !string.IsNullOrWhiteSpace(Branding.ReceiptFooterNote))
+                    {
+                        <div class="a5-footer-instruction">
+                            @if (!string.IsNullOrWhiteSpace(Branding.ReceiptHeaderNote))
+                            {
+                                <strong>@Branding.ReceiptHeaderNote</strong>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(Branding.ReceiptFooterNote) && !Branding.ReceiptFooterNote.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div class="a5-footer-sub">@Branding.ReceiptFooterNote</div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="diag-modal-footer" style="display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid #e2e8f0; background: #f8fafc;">
+                <button type="button" class="btn btn-secondary tickets-btn" @onclick="CloseBillModal">
+                    @I18n.T("Close")
+                </button>
+                <button type="button" class="btn btn-primary tickets-btn" @onclick="PrintBillAsync" style="background: #0284c7; border-color: #0284c7;">
+                    🖨️ @I18n.T("Print Bill")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
-    private List<ImagingItem> items = [], filteredItems = [];
-    private string statusFilter = "all", search = "", message = "", messageClass = "success";
-    protected override async Task OnInitializedAsync() { I18n.OnLanguageChanged += LanguageChanged; await LoadAsync(); }
+    private List<ImagingItem> items = [];
+    private List<ImagingItem> filteredItems = [];
+    private Dictionary<int, Service> cachedServices = [];
+    private Dictionary<int, ServiceCategory> cachedCategories = [];
+    private string statusFilter = "all";
+    private string search = "";
+    private string message = "";
+    private string messageClass = "success";
+
+    // Tag Modal State
+    private bool showTagModal = false;
+    private ImagingItem? tagItem;
+
+    // Bill Modal State
+    private bool showBillModal = false;
+    private CashMemoDInvestigation? selectedBillMemo;
+    private List<CashMemoSubDInvestigation> selectedBillItems = [];
+    private string? selectedBillDoctorName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += LanguageChanged;
+        await LoadAsync();
+    }
+
     private async Task LoadAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync(); var categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID); var services = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID);
-        var memos = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking().Where(x => x.ModuleID == 2).OrderByDescending(x => x.ID).Take(300).ToListAsync(); var memoIds = memos.Select(x => x.ID).ToArray(); var tracking = await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
-        items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key))).Where(x => services.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsImaging(s, s.CategoryID.HasValue ? categories.GetValueOrDefault(s.CategoryID.Value) : null)).Select(x => { tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t); return new ImagingItem { MemoID = x.Memo.ID, ServiceID = x.ServiceID, PatientID = x.Memo.PatientID, PatientName = x.Memo.PatientName, Age = x.Memo.Age ?? "—", Sex = x.Memo.Sex ?? "—", TestName = services[x.ServiceID].Name ?? $"Study #{x.ServiceID}", OrderedAt = x.Memo.TransDate, Status = t?.Status ?? "Pending", ScheduledAt = t?.ScheduledAt, Workstation = t?.Workstation }; }).Where(x => x.Status != "Cancelled").ToList(); FilterItems();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            cachedCategories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID);
+            cachedServices = await db.Services.AsNoTracking().ToDictionaryAsync(x => x.ID);
+
+            var memos = await db.EmergencyMemos
+                .Include(x => x.Items)
+                .AsNoTracking()
+                .Where(x => x.ModuleID == 2)
+                .OrderByDescending(x => x.ID)
+                .Take(300)
+                .ToListAsync();
+
+            var memoIds = memos.Select(x => x.ID).ToArray();
+            var tracking = await db.LabSampleCollections
+                .AsNoTracking()
+                .Where(x => memoIds.Contains(x.MemoID))
+                .ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
+
+            BuildImagingItems(memos, tracking);
+            FilterItems();
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
     }
-    private void FilterItems() { var q = items.AsEnumerable(); if (statusFilter != "all") q = q.Where(x => x.Status == statusFilter); if (!string.IsNullOrWhiteSpace(search)) { var s = search.Trim(); q = q.Where(x => x.MemoID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) || x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) || (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) || x.TestName.Contains(s, StringComparison.OrdinalIgnoreCase)); } filteredItems = q.ToList(); }
-    private async Task UpdateWorkstationAsync(ImagingItem item, string? value) { await using var db = await DbFactory.CreateDbContextAsync(); var row = await GetOrCreateAsync(db, item); row.Workstation = string.IsNullOrWhiteSpace(value) ? null : value.Trim(); await db.SaveChangesAsync(); item.Workstation = row.Workstation; }
+
+    private void BuildImagingItems(List<CashMemoDInvestigation> memos, Dictionary<(long MemoID, int ServiceID), LabSampleCollection> tracking)
+    {
+        items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key)))
+            .Where(x => cachedServices.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsImaging(s, s.CategoryID.HasValue ? cachedCategories.GetValueOrDefault(s.CategoryID.Value) : null))
+            .Select(x =>
+            {
+                tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t);
+                return new ImagingItem
+                {
+                    MemoID = x.Memo.ID,
+                    ServiceID = x.ServiceID,
+                    PatientID = x.Memo.PatientID,
+                    PatientName = x.Memo.PatientName,
+                    Age = x.Memo.Age ?? "—",
+                    Sex = x.Memo.Sex ?? "—",
+                    Contact = x.Memo.Contact,
+                    TestName = cachedServices[x.ServiceID].Name ?? $"Study #{x.ServiceID}",
+                    OrderedAt = x.Memo.TransDate,
+                    Status = t?.Status ?? "Pending",
+                    ScheduledAt = t?.ScheduledAt,
+                    Workstation = t?.Workstation
+                };
+            })
+            .Where(x => x.Status != "Cancelled")
+            .ToList();
+    }
+
+    private void FilterItems()
+    {
+        var q = items.AsEnumerable();
+        if (statusFilter != "all")
+        {
+            q = q.Where(x => x.Status == statusFilter);
+        }
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var s = search.Trim();
+            q = q.Where(x =>
+                x.MemoID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.Contact?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                x.TestName.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                (x.Workstation?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                $"IMG-{x.MemoID}-{x.ServiceID}".Contains(s, StringComparison.OrdinalIgnoreCase));
+        }
+
+        filteredItems = q.ToList();
+    }
+
+    private async Task SearchOrRefreshAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(search) && filteredItems.Count == 0)
+        {
+            await SearchDatabaseAsync();
+        }
+        else
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SearchOrRefreshAsync();
+        }
+    }
+
+    private void ClearSearch()
+    {
+        search = "";
+        FilterItems();
+    }
+
+    private async Task SearchDatabaseAsync()
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            await LoadAsync();
+            return;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var s = search.Trim();
+
+            var query = db.EmergencyMemos
+                .Include(x => x.Items)
+                .AsNoTracking()
+                .Where(x => x.ModuleID == 2);
+
+            if (long.TryParse(s, out var billId))
+            {
+                query = query.Where(x => x.ID == billId || (x.Contact != null && x.Contact.Contains(s)) || (x.PatientID != null && x.PatientID.Contains(s)));
+            }
+            else
+            {
+                query = query.Where(x =>
+                    (x.PatientID != null && x.PatientID.Contains(s)) ||
+                    (x.Contact != null && x.Contact.Contains(s)) ||
+                    x.PatientName.Contains(s));
+            }
+
+            var memos = await query.OrderByDescending(x => x.ID).Take(100).ToListAsync();
+
+            if (memos.Count == 0)
+            {
+                Fail(I18n.IsBangla ? "ডাটাবেজে কোনো স্টাডি ম্যাচ পাওয়া যায়নি।" : "No matching imaging studies found in database.");
+                return;
+            }
+
+            var memoIds = memos.Select(x => x.ID).ToArray();
+            var tracking = await db.LabSampleCollections
+                .AsNoTracking()
+                .Where(x => memoIds.Contains(x.MemoID))
+                .ToDictionaryAsync(x => (x.MemoID, x.ServiceID));
+
+            BuildImagingItems(memos, tracking);
+            FilterItems();
+            Success(I18n.IsBangla ? $"ডাটাবেজ থেকে {memos.Count} টি বিলের স্টাডি লোড হয়েছে।" : $"Loaded studies from {memos.Count} matching bill(s).");
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+    }
+
+    private async Task UpdateWorkstationAsync(ImagingItem item, string? value)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await GetOrCreateAsync(db, item);
+            row.Workstation = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            await db.SaveChangesAsync();
+            item.Workstation = row.Workstation;
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+    }
+
     private async Task AdvanceAsync(ImagingItem item, string next)
     {
-        try { await using var db = await DbFactory.CreateDbContextAsync(); var row = await GetOrCreateAsync(db, item); if (!DiagnosticWorkflow.CanAdvance(row.Status, next)) throw new InvalidOperationException($"Invalid status transition from {row.Status} to {next}."); var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User; var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null; var now = DateTime.Now; row.Status = next; row.SpecimenType = "Imaging / No Specimen"; if (next == "Scheduled") row.ScheduledAt = now; else if (next == "InProcess") { row.ProcessingStartedAt = now; row.ProcessingStartedBy = userId; } else if (next == "Completed") { row.CompletedAt = now; row.CompletedBy = userId; } await db.SaveChangesAsync(); item.Status = next; item.ScheduledAt = row.ScheduledAt; Success($"{item.TestName} updated to {DisplayStatus(next)}."); FilterItems(); }
-        catch (Exception ex) { Fail(ex.GetBaseException().Message); await LoadAsync(); }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var row = await GetOrCreateAsync(db, item);
+            if (!DiagnosticWorkflow.CanAdvance(row.Status, next))
+            {
+                throw new InvalidOperationException($"Invalid status transition from {row.Status} to {next}.");
+            }
+
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            var userId = int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null;
+            var now = DateTime.Now;
+
+            row.Status = next;
+            row.SpecimenType = "Imaging / No Specimen";
+
+            if (next == "Scheduled") row.ScheduledAt = now;
+            else if (next == "InProcess")
+            {
+                row.ProcessingStartedAt = now;
+                row.ProcessingStartedBy = userId;
+            }
+            else if (next == "Completed")
+            {
+                row.CompletedAt = now;
+                row.CompletedBy = userId;
+            }
+
+            await db.SaveChangesAsync();
+            item.Status = next;
+            item.ScheduledAt = row.ScheduledAt;
+            Success($"{item.TestName} updated to {DisplayStatus(next)}.");
+            FilterItems();
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+            await LoadAsync();
+        }
     }
-    private static async Task<LabSampleCollection> GetOrCreateAsync(HpmDbContext db, ImagingItem item) { var row = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID); if (row is not null) return row; row = new LabSampleCollection { MemoID = item.MemoID, ServiceID = item.ServiceID, SpecimenType = "Imaging / No Specimen", Status = "Pending" }; db.LabSampleCollections.Add(row); return row; }
-    private static string DisplayStatus(string status) => status switch { "Scheduled" => "Scheduled / Called", "InProcess" => "In Progress", _ => status };
-    private void Success(string text) { messageClass = "success"; message = text; } private void Fail(string text) { messageClass = "danger"; message = text; } private void LanguageChanged() => InvokeAsync(StateHasChanged); public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
-    private sealed class ImagingItem { public long MemoID { get; set; } public int ServiceID { get; set; } public string? PatientID { get; set; } public string PatientName { get; set; } = ""; public string Age { get; set; } = ""; public string Sex { get; set; } = ""; public string TestName { get; set; } = ""; public DateTime OrderedAt { get; set; } public string Status { get; set; } = "Pending"; public DateTime? ScheduledAt { get; set; } public string? Workstation { get; set; } }
+
+    private async Task ViewBillAsync(ImagingItem item)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            selectedBillMemo = await db.EmergencyMemos
+                .Include(x => x.Items)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.ID == item.MemoID);
+
+            if (selectedBillMemo != null)
+            {
+                selectedBillItems = selectedBillMemo.Items.OrderBy(x => x.SLNo).ToList();
+
+                if (selectedBillMemo.DoctorID.HasValue)
+                {
+                    var doc = await db.Doctors.AsNoTracking().FirstOrDefaultAsync(x => x.ID == selectedBillMemo.DoctorID.Value);
+                    selectedBillDoctorName = doc != null ? $"{doc.Name}{(string.IsNullOrWhiteSpace(doc.Degree) ? "" : $" ({doc.Degree})")}" : null;
+                }
+                else
+                {
+                    selectedBillDoctorName = null;
+                }
+
+                showBillModal = true;
+            }
+            else
+            {
+                Fail(I18n.IsBangla ? "বিল পাওয়া যায়নি।" : "Bill not found.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+    }
+
+    private void CloseBillModal()
+    {
+        showBillModal = false;
+        selectedBillMemo = null;
+        selectedBillItems = [];
+    }
+
+    private async Task PrintBillAsync()
+    {
+        await JS.InvokeVoidAsync("hpm.printElement", "imaging-sample-bill-print", $"Bill #B{selectedBillMemo?.ID}");
+    }
+
+    private void OpenTagModal(ImagingItem item)
+    {
+        tagItem = item;
+        showTagModal = true;
+    }
+
+    private void CloseTagModal()
+    {
+        showTagModal = false;
+        tagItem = null;
+    }
+
+    private async Task PrintTagAsync()
+    {
+        await JS.InvokeVoidAsync("hpm.printElement", "imaging-tag-print", $"Tag #{tagItem?.MemoID}-{tagItem?.ServiceID}");
+    }
+
+    private static async Task<LabSampleCollection> GetOrCreateAsync(HpmDbContext db, ImagingItem item)
+    {
+        var row = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == item.MemoID && x.ServiceID == item.ServiceID);
+        if (row is not null) return row;
+        row = new LabSampleCollection
+        {
+            MemoID = item.MemoID,
+            ServiceID = item.ServiceID,
+            SpecimenType = "Imaging / No Specimen",
+            Status = "Pending"
+        };
+        db.LabSampleCollections.Add(row);
+        return row;
+    }
+
+    private static string DisplayStatus(string status) => status switch
+    {
+        "Scheduled" => "Scheduled / Called",
+        "InProcess" => "In Progress",
+        _ => status
+    };
+
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private void LanguageChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
+
+    private sealed class ImagingItem
+    {
+        public long MemoID { get; set; }
+        public int ServiceID { get; set; }
+        public string? PatientID { get; set; }
+        public string PatientName { get; set; } = "";
+        public string Age { get; set; } = "";
+        public string Sex { get; set; } = "";
+        public string? Contact { get; set; }
+        public string TestName { get; set; } = "";
+        public DateTime OrderedAt { get; set; }
+        public string Status { get; set; } = "Pending";
+        public DateTime? ScheduledAt { get; set; }
+        public string? Workstation { get; set; }
+    }
 }

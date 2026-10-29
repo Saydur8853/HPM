@@ -592,6 +592,38 @@ window.hpm = {
         }
     },
 
+    downloadLabReportPdf: async function (containerId, fileName) {
+        const source = document.getElementById(containerId);
+        if (!source) return;
+        const sheet = source.querySelector('.delta-report-sheet') || source.querySelector('.clinical-report-sheet') || source;
+        if (!window.html2canvas || !window.jspdf) {
+            this.printElement(containerId, fileName);
+            return;
+        }
+        try {
+            const canvas = await window.html2canvas(sheet, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false
+            });
+            const imgData = canvas.toDataURL('image/png');
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
+            });
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, Math.min(pdfHeight, pdf.internal.pageSize.getHeight()));
+            pdf.save((fileName || 'Lab_Report') + '.pdf');
+        } catch (e) {
+            console.error('Lab report PDF export failed, falling back to print:', e);
+            this.printElement(containerId, fileName);
+        }
+    },
+
     printPatientWristband: function (elementId, title) {
         const source = document.getElementById(elementId);
         if (!source) return;
@@ -899,11 +931,39 @@ window.hpm = {
         frame.style.border = '0';
         document.body.appendChild(frame);
         const printWindow = frame.contentWindow;
-        const isThermal = elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm'));
+        const isTubeLabel = elementId === 'sample-sticker-print' || elementId === 'tube-label-print' || elementId === 'imaging-tag-print' || (source && (source.classList.contains('specimen-tube-label') || source.classList.contains('tube-labels-container') || source.classList.contains('sample-sticker-label') || source.classList.contains('imaging-study-tag')));
+        const isThermal = !isTubeLabel && (elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm')));
+        const isA5 = !isTubeLabel && ((source && (source.classList.contains('a5-memo-sheet') || source.classList.contains('print-a5-sheet'))) || (elementId === 'diagnostic-print' && source && !source.classList.contains('print-a4-sheet')));
         printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title>
         <link rel="stylesheet" href="/app.css">
         <style>
-            ${isThermal ? `
+            ${isTubeLabel ? `
+            @page { size: 40mm 20mm; margin: 0; }
+            * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            html, body {
+                width: 40mm !important;
+                height: 20mm !important;
+                max-width: 40mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+                font-size: 7px !important;
+                background: #ffffff !important;
+                color: #000000 !important;
+            }
+            .sample-sticker-label, .specimen-tube-label {
+                width: 40mm !important;
+                height: 20mm !important;
+                margin: 0 auto !important;
+                padding: 1.2mm 1.5mm !important;
+                border: none !important;
+                display: flex !important;
+                flex-direction: column !important;
+                justify-content: space-between !important;
+                overflow: hidden !important;
+                box-sizing: border-box !important;
+            }
+            ` : isThermal ? `
             @page { size: 80mm auto; margin: 3mm 2mm; }
             * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             html, body {
@@ -924,6 +984,33 @@ window.hpm = {
                 border: none !important;
             }
             .pos-receipt-80mm table { width: 100% !important; font-size: 10.5px !important; }
+            ` : isA5 ? `
+            @page { size: A5 portrait; margin: 4mm 6mm; }
+            * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            html, body {
+                background: #ffffff !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-family: Arial, 'Helvetica Neue', Helvetica, 'Segoe UI', sans-serif !important;
+                font-size: 10px !important;
+                color: #0f172a !important;
+                width: 100% !important;
+                max-width: 136mm !important;
+                margin: 0 auto !important;
+            }
+            body {
+                display: block !important;
+                padding: 2mm 0 !important;
+            }
+            .a5-memo-sheet {
+                width: 100% !important;
+                max-width: 136mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+                border: none !important;
+                min-height: auto !important;
+            }
             ` : `
             @page { size: A4 portrait; margin: 8mm 10mm 10mm 10mm; }
             * { box-sizing: border-box !important; print-color-adjust: exact !important; }
@@ -943,8 +1030,24 @@ window.hpm = {
                 min-height: 100%;
             }
             `}
+            ${!isA5 ? `
             .print-document, .print-sheet, .clinical-report-sheet, .a4-page-sheet { 
                 width: 100% !important; 
+                max-width: 100% !important; 
+                min-height: 260mm !important; 
+                box-shadow: none !important; 
+                border: none !important; 
+                padding: 0 !important; 
+                background: #ffffff !important; 
+                display: flex !important; 
+                flex-direction: column !important; 
+                justify-content: space-between !important; 
+                flex: 1 0 auto !important; 
+                box-sizing: border-box !important; 
+            }
+            ` : ''}
+            /* fallback */
+            .dummy-placeholder { width: 100% !important; 
                 max-width: 100% !important; 
                 min-height: 260mm !important; 
                 box-shadow: none !important; 
@@ -963,7 +1066,7 @@ window.hpm = {
                 padding-top: 24px !important;
             }
             button, .btn, .no-print { display: none !important; }
-        </style></head><body>${source.innerHTML}</body></html>`);
+        </style></head><body>${source.outerHTML}</body></html>`);
         printWindow.document.close();
         
         const cleanup = () => {

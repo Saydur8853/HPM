@@ -202,4 +202,5 @@ public sealed class Service
     public int? SupplierID { get; set; }
     public int? InvestigationModuleID { get; set; }
     public string? DiagnosticType { get; set; }
+    public int? DeliveryHours { get; set; }
 }

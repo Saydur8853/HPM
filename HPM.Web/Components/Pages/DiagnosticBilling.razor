@@ -8,6 +8,7 @@
 @inject IBarcodeQrService BarcodeQr
 @inject NavigationManager NavigationManager
 @inject PatientSelectionState PatientSelection
+@inject ILogger<DiagnosticBilling> Logger
 @implements IDisposable
 @using System.Security.Claims
 @using HPM.Web.Components.Common
@@ -15,27 +16,56 @@
 <PageTitle>@(isIpdMode ? I18n.T("IPD Cash Memo") : I18n.T("OPD Cash Memo")) | @Branding.HospitalName</PageTitle>
 
 <div class="diagnostic-classic-fit">
-    <!-- Compact Top Action & Status Bar -->
+    <!-- Unified Top Action & Status Bar -->
     <div class="diagnostic-classic-topbar">
         <div class="tickets-top-left">
             <h1 class="tickets-page-title">
                 <span>🔬</span>
-                <span>@(isIpdMode ? I18n.T("IPD Investigation Cash Memo") : I18n.T("OPD Investigation Cash Memo"))</span>
+                <span>@(editor.ID == 0 ? (isIpdMode ? I18n.T("IPD Investigation Cash Memo") : I18n.T("OPD Investigation Cash Memo")) : $"{I18n.T("Edit Diagnostic Bill")} #B{editor.ID}")</span>
             </h1>
             @if (!string.IsNullOrWhiteSpace(message))
             {
-                <span class="tickets-inline-alert @messageClass" title="@message">
+                <span class="tickets-inline-alert @messageClass" @onclick="ShowInlineAlertModal" style="cursor: pointer;" title="@message (Click to view full message)">
                     @(messageClass.Contains("danger") ? "⚠" : "✓") @message
                 </span>
             }
         </div>
 
-        <DiagnosticNavTabs />
+        <div class="diagnostic-topbar-center">
+            <div class="diagnostic-billing-type-picker">
+                <span class="diagnostic-billing-type-label">@I18n.T("BILLING TYPE")</span>
+                <div class="diagnostic-mode-toggle" role="group" aria-label="@I18n.T("Billing Type")">
+                    <button type="button"
+                            class="mode-toggle-btn @(!isIpdMode ? "active opd-active" : "")"
+                            aria-pressed="@(!isIpdMode)"
+                            @onclick='() => SetPatientTypeAsync("1")'
+                            title="@I18n.T("Collect payment now as an OPD bill")">
+                        <span class="mode-toggle-icon">🏥</span>
+                        <span class="mode-toggle-text">
+                            <strong>@I18n.T("OPD Billing")</strong>
+                            <small>@I18n.T("Pay now")</small>
+                        </span>
+                    </button>
+                    <button type="button"
+                            class="mode-toggle-btn @(isIpdMode ? "active ipd-active" : "") @(!canAccessIpd ? "disabled-ipd-mode" : "")"
+                            aria-pressed="@(isIpdMode)"
+                            disabled="@(!canAccessIpd)"
+                            @onclick='async () => { if (canAccessIpd) await SetPatientTypeAsync("2"); }'
+                            title="@(canAccessIpd ? I18n.T("Add the charge to the patient's IPD final bill") : (I18n.IsBangla ? "আইপিডি সার্ভিস মডিউল অ্যাক্সেস নিষ্ক্রিয় / নেই" : "IPD Service Module access is disabled"))">
+                        <span class="mode-toggle-icon">🛏️</span>
+                        <span class="mode-toggle-text">
+                            <strong>@I18n.T("IPD Billing")</strong>
+                            <small>@(canAccessIpd ? I18n.T("Pay by Final bill") : (I18n.IsBangla ? "নিষ্ক্রিয়" : "Disabled"))</small>
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
 
         <div class="tickets-top-actions">
-            <button type="button" class="btn btn-secondary tickets-btn btn-recent-bills-modal-btn" @onclick="OpenRecentBillsModal" title="@I18n.T("Open Recent Diagnostic Bills & Doctor Orders Modal")">
-                📋 @I18n.T("Recent Diagnostic Bills")
-                <span class="tickets-count-badge">@recentMemos.Count</span>
+            <button type="button" class="btn btn-secondary tickets-btn btn-recent-bills-modal-btn" @onclick="OpenRecentBillsModal" title="@I18n.T("Open Diagnostic Bills & Doctor Orders Modal")">
+                📋 @I18n.T("Diagnostic Bills")
+                <span class="tickets-count-badge">@totalModalMemosCount</span>
             </button>
             @if (pendingOrders.Count > 0)
             {
@@ -52,52 +82,6 @@
     <!-- Main Full-Width Workspace (Non-scrollable Viewpoint) -->
     <div class="diagnostic-classic-workspace diagnostic-full-workspace">
         <div class="diagnostic-form-card">
-            <div class="diagnostic-card-header">
-                <div class="diagnostic-card-title-wrap">
-                    <h2>@(editor.ID == 0 ? (isIpdMode ? I18n.T("New IPD Investigation Bill") : I18n.T("New OPD Investigation Bill")) : $"{I18n.T("Edit Diagnostic Bill")} #{editor.ID}")</h2>
-                    <span class="diagnostic-badge">
-                        @(editor.ID == 0 ? "🔬 " + I18n.T("DIAGNOSTIC") : $"BILL #B{editor.ID}")
-                    </span>
-                </div>
-                <div class="diagnostic-card-header-actions">
-                    <div class="diagnostic-billing-type-picker">
-                        <span class="diagnostic-billing-type-label">@I18n.T("Billing Type")</span>
-                        <div class="diagnostic-mode-toggle" role="group" aria-label="@I18n.T("Billing Type")">
-                            <button type="button"
-                                    class="mode-toggle-btn @(!isIpdMode ? "active opd-active" : "")"
-                                    aria-pressed="@(!isIpdMode)"
-                                    @onclick='() => SetPatientTypeAsync("1")'
-                                    title="@I18n.T("Collect payment now as an OPD bill")">
-                                <span class="mode-toggle-icon">🏥</span>
-                                <span><strong>@I18n.T("OPD Billing")</strong><small>@I18n.T("Pay now")</small></span>
-                            </button>
-                            <button type="button"
-                                    class="mode-toggle-btn @(isIpdMode ? "active ipd-active" : "")"
-                                    aria-pressed="@(isIpdMode)"
-                                    @onclick='() => SetPatientTypeAsync("2")'
-                                    title="@I18n.T("Add the charge to the patient's IPD final bill")">
-                                <span class="mode-toggle-icon">🛏️</span>
-                                <span><strong>@I18n.T("Charge to IPD")</strong><small>@I18n.T("Final bill")</small></span>
-                            </button>
-                        </div>
-                    </div>
-                    <button type="button" class="btn btn-outline tickets-btn btn-header-modal-trigger" @onclick="OpenRecentBillsModal" title="@I18n.T("Search & view past diagnostic cash memos")">
-                        📋 @I18n.T("Recent Bills & Orders") (@recentMemos.Count)
-                    </button>
-                </div>
-            </div>
-            @if (isIpdMode)
-            {
-                <div class="diagnostic-mode-explainer ipd" role="status">
-                    <div class="diagnostic-mode-explainer-copy">
-                        <span class="diagnostic-mode-explainer-icon">🛏️</span>
-                        <div>
-                            <strong>@I18n.T("Charge to the patient's IPD account")</strong>
-                            <span>@I18n.T("No payment is collected here. The full diagnostic charge will be added to the patient's IPD final bill.")</span>
-                        </div>
-                    </div>
-                </div>
-            }
 
             <EditForm Model="editor" OnSubmit="SaveAsync" class="diagnostic-form-wrapper">
                 <DataAnnotationsValidator />
@@ -109,123 +93,105 @@
                         <div class="diag-section-card">
                             <div class="diag-section-header">
                                 <span class="diag-section-title">👤 @I18n.T("Patient Demographics")</span>
-                                @if (!string.IsNullOrWhiteSpace(editor.PatientID))
+                                @if (isIpdMode && !string.IsNullOrWhiteSpace(editor.RegNo))
+                                {
+                                    <span class="diag-section-sub" style="background:#0f766e; color:#fff; padding:2px 8px; border-radius:10px; font-weight:700;">
+                                        🛏️ IPD Reg: @editor.RegNo @(!string.IsNullOrWhiteSpace(editor.Bed) ? $"• Bed: {editor.Bed}" : "")
+                                    </span>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(editor.PatientID))
                                 {
                                     <span class="diag-section-sub">PID: @editor.PatientID</span>
                                 }
                             </div>
                             <div class="diag-demographics-grid">
-                                @if (isIpdMode)
+                                @if (isIpdMode && !string.IsNullOrWhiteSpace(editor.Bed))
                                 {
-                                    <label class="diag-field-ipd">
-                                        <span>@I18n.T("IPD Reg No")<span class="req">*</span></span>
-                                        <div class="tickets-patient-search-combo">
-                                            <input class="classic-input" @bind="editor.RegNo" @bind:event="oninput" @onkeydown="HandleIpdRegKeyDown" autocomplete="off" placeholder="@I18n.T("IPD Reg No or Patient ID")" />
-                                            <button type="button" class="btn-find icon-only" @onclick="LoadAdmissionAsync" title="@I18n.T("Load Admission (Enter)")" aria-label="@I18n.T("Load Admission")"><SearchIcon /></button>
-                                        </div>
-                                    </label>
+                                    <div style="grid-column: 1 / -1; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 4px 10px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #166534; margin-bottom: 2px;">
+                                        <span>🛏️ <strong>@I18n.T("Admitted In-Patient (IPD)")</strong> — Reg: <strong>@editor.RegNo</strong> • Bed/Cabin: <strong>@editor.Bed</strong></span>
+                                        <span style="font-weight: 700; color: #047857; text-transform: uppercase;">@I18n.T("Charged to IPD Bill")</span>
+                                    </div>
                                 }
-                                else
-                                {
-                                    <label class="diag-field-pid">
-                                        <span>@I18n.T("PATIENT ID")</span>
-                                        <div class="tickets-patient-search-combo">
-                                            <input class="classic-input"
-                                                   value="@editor.PatientID"
-                                                   @oninput="HandlePatientIdInputAsync"
-                                                   @onfocus="ShowPatientIdSuggestionsAsync"
-                                                   @onblur="HidePatientSuggestionsAsync"
-                                                   @onkeydown="HandlePatientIdKeyDown"
-                                                   autocomplete="off"
-                                                   placeholder="@I18n.T("Patient ID or mobile")"
-                                                   title="@I18n.T("Type Patient ID & press Enter or click the search button to load")" />
-                                            <button type="button" class="btn-find icon-only" @onclick="LoadPatientAsync" title="@I18n.T("Load Patient (Enter)")" aria-label="@I18n.T("Load Patient")"><SearchIcon /></button>
-                                        </div>
-                                        @if (showPatientIdSuggestions && patientIdSuggestions.Count > 0)
+
+                                <label class="diag-field-pid">
+                                    <span>
+                                        @I18n.T("PATIENT ID / REG NO", "পেশেন্ট আইডি / রেজি নং")
+                                        @if (isIpdMode && !string.IsNullOrWhiteSpace(editor.RegNo))
                                         {
-                                            <div class="appt-patient-suggestions">
-                                                @foreach (var patient in patientIdSuggestions)
-                                                {
-                                                    <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatientFromSuggestion(patient)">
-                                                        <span class="patient-id">@patient.PatientID</span>
-                                                        <span class="patient-name">@patient.Name</span>
-                                                        <span class="patient-contact">@patient.Contact</span>
-                                                    </button>
-                                                }
-                                            </div>
+                                            <span style="color:#0f766e; font-size:10px; font-weight:bold; margin-left:4px;">(IPD Reg: @editor.RegNo)</span>
                                         }
-                                    </label>
-                                }
+                                    </span>
+                                    <div class="tickets-patient-search-combo">
+                                        <input class="classic-input"
+                                               value="@(!string.IsNullOrWhiteSpace(editor.PatientID) ? editor.PatientID : editor.RegNo)"
+                                               @oninput="HandlePatientIdInputAsync"
+                                               @onfocus="ShowPatientIdSuggestionsAsync"
+                                               @onblur="HidePatientSuggestionsAsync"
+                                               @onkeydown="HandlePatientIdKeyDown"
+                                               autocomplete="off"
+                                               placeholder="@I18n.T("Patient ID, IPD Reg No or mobile", "পেশেন্ট আইডি, আইপিডি রেজি বা মোবাইল...")"
+                                               title="@I18n.T("Type Patient ID, IPD Reg or Mobile & press Enter to auto-detect OPD/IPD", "পেশেন্ট আইডি, আইপিডি রেজি বা মোবাইল লিখে এন্টার দিন")" />
+                                        <button type="button" class="btn-find icon-only" @onclick="LoadPatientAsync" title="@I18n.T("Search & Auto-Detect (Enter)")" aria-label="@I18n.T("Load Patient")"><SearchIcon /></button>
+                                    </div>
+                                    @if (showPatientIdSuggestions && patientIdSuggestions.Count > 0)
+                                    {
+                                        <div class="appt-patient-suggestions" id="diag-patient-suggestions-list">
+                                            @foreach (var patient in patientIdSuggestions)
+                                            {
+                                                <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatientFromSuggestionAsync(patient)">
+                                                    <span class="patient-id">@patient.PatientID</span>
+                                                    <span class="patient-name">@patient.Name</span>
+                                                    <span class="patient-contact">@patient.Contact</span>
+                                                </button>
+                                            }
+                                            @if (hasMorePatientSuggestions)
+                                            {
+                                                <div class="appt-doctor-scroll-hint" @onclick="LoadMorePatientsFromJs" @onmousedown:preventDefault>
+                                                    <span>@I18n.T("Showing") @patientIdSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </label>
 
                                 <label class="diag-field-contact">
                                     <span>@I18n.T("Contact No")</span>
                                     <div class="tickets-patient-search-combo">
                                         <input class="classic-input"
-                                               @bind="editor.Contact"
-                                               @bind:event="oninput"
+                                               value="@editor.Contact"
+                                               @oninput="HandleContactInputAsync"
+                                               @onfocus="ShowContactSuggestionsAsync"
+                                               @onblur="HideContactSuggestionsAsync"
                                                @onkeydown="HandleContactKeyDown"
                                                autocomplete="off"
                                                placeholder="017xxxxxxxx"
-                                               title="@I18n.T("Type mobile & press Enter or click the search button to load patient")" />
+                                               title="@I18n.T("Type mobile & press Enter or click search", "মোবাইল নম্বর লিখে এন্টার বা সার্চ দিন")" />
                                         <button type="button" class="btn-find icon-only" @onclick="LoadPatientByContactAsync" title="@I18n.T("Search by Contact (Enter)")" aria-label="@I18n.T("Search by Contact")"><SearchIcon /></button>
                                     </div>
+                                    @if (showContactSuggestions && contactSuggestions.Count > 0)
+                                    {
+                                        <div class="appt-patient-suggestions" id="diag-contact-suggestions-list">
+                                            @foreach (var patient in contactSuggestions)
+                                            {
+                                                <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatientFromSuggestionAsync(patient)">
+                                                    <span class="patient-id">@patient.PatientID</span>
+                                                    <span class="patient-name">@patient.Name</span>
+                                                    <span class="patient-contact">@patient.Contact</span>
+                                                </button>
+                                            }
+                                            @if (hasMoreContactSuggestions)
+                                            {
+                                                <div class="appt-doctor-scroll-hint" @onclick="LoadMoreContactPatientsFromJs" @onmousedown:preventDefault>
+                                                    <span>@I18n.T("Showing") @contactSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
                                 </label>
 
                                 <label class="diag-field-name">
                                     <span>@I18n.T("Patient Name")<span class="req">*</span></span>
                                     <InputText class="classic-input" @bind-Value="editor.PatientName" placeholder="@I18n.T("Patient Name")" />
-                                </label>
-
-                                <label class="diag-field-sex">
-                                    <span>@I18n.T("SEX")<span class="req">*</span></span>
-                                    <div class="sex-btn-group" role="radiogroup" aria-label="@I18n.T("Sex")">
-                                        @foreach (var sex in sexOptions)
-                                        {
-                                            var isSelected = string.Equals(editor.Sex, sex.Key, StringComparison.OrdinalIgnoreCase);
-                                            var sexClass = sex.Key.ToLowerInvariant();
-                                            <button type="button"
-                                                    class="sex-btn sex-btn-@sexClass @(isSelected ? "is-selected" : "")"
-                                                    tabindex="@(isSelected ? 0 : -1)"
-                                                    @onclick="() => SelectSex(sex.Key)"
-                                                    @onkeydown="e => HandleSexKeyDown(e, sex.Key)"
-                                                    title="@I18n.T(sex.Label)">
-                                                <span class="sex-icon">
-                                                    @if (sex.Key == "Male")
-                                                    {
-                                                        <svg class="sex-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                                            <circle cx="10" cy="14" r="5"></circle>
-                                                            <line x1="19" y1="5" x2="13.6" y2="10.4"></line>
-                                                            <polyline points="15 5 19 5 19 9"></polyline>
-                                                        </svg>
-                                                    }
-                                                    else if (sex.Key == "Female")
-                                                    {
-                                                        <svg class="sex-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                                            <circle cx="12" cy="9" r="5"></circle>
-                                                            <line x1="12" y1="14" x2="12" y2="21"></line>
-                                                            <line x1="9" y1="18" x2="15" y2="18"></line>
-                                                        </svg>
-                                                    }
-                                                    else
-                                                    {
-                                                        <svg class="sex-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                                            <circle cx="12" cy="12" r="4"></circle>
-                                                            <line x1="12" y1="4" x2="12" y2="8"></line>
-                                                            <line x1="10" y1="5" x2="14" y2="5"></line>
-                                                            <line x1="12" y1="16" x2="12" y2="20"></line>
-                                                            <line x1="10" y1="19" x2="14" y2="19"></line>
-                                                        </svg>
-                                                    }
-                                                </span>
-                                                <span class="sex-text">@I18n.T(sex.Label)</span>
-                                            </button>
-                                        }
-                                    </div>
-                                </label>
-
-                                <label class="diag-field-age">
-                                    <span>@I18n.T("Age")<span class="req">*</span></span>
-                                    <InputText class="classic-input" @bind-Value="editor.Age" placeholder="e.g. 35Y" />
                                 </label>
 
                                 <label class="diag-field-ref">
@@ -250,7 +216,7 @@
                                     </div>
                                     @if (showDoctorSuggestions)
                                     {
-                                        <div class="diag-doctor-suggestions" role="listbox">
+                                        <div class="diag-doctor-suggestions" id="diag-doctor-suggestions-list" role="listbox">
                                             <button type="button" class="diag-doctor-option walk-in" @onmousedown:preventDefault @onclick="ClearSelectedDoctor">
                                                 <span class="doctor-option-main">@I18n.T("Walk-in / None")</span>
                                             </button>
@@ -267,6 +233,12 @@
                                                         <span class="doctor-option-meta">@string.Join(" • ", new[] { doctor.Degree, doctor.Contact }.Where(x => !string.IsNullOrWhiteSpace(x)))</span>
                                                     }
                                                 </button>
+                                            }
+                                            @if (hasMoreDoctorSuggestions)
+                                            {
+                                                <div class="appt-doctor-scroll-hint" @onclick="LoadMoreDoctorsFromJs" @onmousedown:preventDefault>
+                                                    <span>@I18n.T("Showing") @FilteredDoctors.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                </div>
                                             }
                                             @if (!FilteredDoctors.Any())
                                             {
@@ -543,26 +515,15 @@
 
                             <!-- Footer Actions within the preview card -->
                             <div class="diag-preview-footer-actions">
-                                <button class="btn btn-secondary diag-submit-btn diag-btn-save" type="button" @onclick="() => SaveBillAsync(false)" disabled="@saving" title="@I18n.T("Save bill into database without printing")">
-                                    💾 @(saving
-                                        ? I18n.T("Saving…")
-                                        : isIpdMode
-                                            ? (editor.ID == 0 ? I18n.T("Post to IPD Bill") : I18n.T("Update IPD Charge"))
-                                            : (editor.ID == 0 ? I18n.T("Save OPD Bill") : I18n.T("Update OPD Bill")))
-                                </button>
-
                                 <button class="btn btn-primary diag-submit-btn diag-btn-print" type="button" @onclick="() => SaveBillAsync(true)" disabled="@saving" title="@I18n.T("Save bill and immediately print invoice")">
                                     🖨 @(saving
                                         ? I18n.T("Saving & Printing…")
-                                        : isIpdMode ? I18n.T("Post & Print Memo") : I18n.T("Save & Print Receipt"))
+                                        : isIpdMode ? (editor.ID == 0 ? I18n.T("Post & Print Memo") : I18n.T("Update & Print Memo")) : (editor.ID == 0 ? I18n.T("Save & Print Receipt") : I18n.T("Update & Print Receipt")))
                                 </button>
 
                                 <div class="diag-sub-actions">
                                     @if (editor.ID > 0)
                                     {
-                                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintTubeLabelsAsync" style="background:#0f766e; border-color:#0f766e; color:#fff;" title="@I18n.T("Print Specimen Labels")">
-                                            🏷 @I18n.T("Stickers")
-                                        </button>
                                         <button class="btn btn-ghost tickets-btn" type="button" @onclick="DeleteAsync" style="color: #dc2626;" title="@I18n.T("Delete Bill")">
                                             🗑 @I18n.T("Delete")
                                         </button>
@@ -581,7 +542,42 @@
 </div>
 
 <!-- ==========================================================================
-     Recent Diagnostic Bills & Doctor Orders Pop-up Modal Dialog
+     Alert & Error Popup Message Box Dialog
+     ========================================================================== -->
+@if (showAlertModal)
+{
+    <div class="diag-modal-backdrop" @onclick="CloseAlertModal" style="z-index: 2000;">
+        <div class="diag-alert-modal-dialog" @onclick:stopPropagation="true">
+            <div class="diag-alert-modal-header @(alertModalType == "danger" ? "header-danger" : alertModalType == "warning" ? "header-warning" : "header-success")">
+                <div class="diag-alert-title-wrap">
+                    <span class="diag-alert-icon">
+                        @(alertModalType == "danger" ? "🚨" : alertModalType == "warning" ? "⚠️" : "✅")
+                    </span>
+                    <h3 class="diag-alert-title">@alertModalTitle</h3>
+                </div>
+                <button type="button" class="diag-alert-close-btn" @onclick="CloseAlertModal" title="Close">✕</button>
+            </div>
+            <div class="diag-alert-modal-body">
+                <p class="diag-alert-message">@alertModalMessage</p>
+                @if (!string.IsNullOrWhiteSpace(alertModalDetails))
+                {
+                    <div class="diag-alert-technical-details">
+                        <div class="diag-alert-tech-head">@I18n.T("Technical Info / ত্রুটির বিবরণ"):</div>
+                        <code>@alertModalDetails</code>
+                    </div>
+                }
+            </div>
+            <div class="diag-alert-modal-footer">
+                <button type="button" class="btn btn-primary diag-alert-action-btn" @onclick="CloseAlertModal">
+                    @(I18n.IsBangla ? "ঠিক আছে" : "OK")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- ==========================================================================
+     Diagnostic Bills & Doctor Orders Pop-up Modal Dialog
      ========================================================================== -->
 @if (showRecentBillsModal)
 {
@@ -591,8 +587,8 @@
                 <div class="diag-modal-title-group">
                     <span class="diag-modal-icon">📋</span>
                     <div>
-                        <h3 class="diag-modal-title">@I18n.T("Recent Diagnostic Bills & Doctor Orders")</h3>
-                        <span class="diag-modal-subtitle">@I18n.T("Search, filter, reprint or load diagnostic cash memos") &bull; @DateTime.Today.ToString("dd MMMM yyyy")</span>
+                        <h3 class="diag-modal-title">@I18n.T("Diagnostic Bills & Doctor Orders")</h3>
+                        <span class="diag-modal-subtitle">@I18n.T("Search, filter previous and recent bills by Bill ID, Patient ID, Date range, or Status")</span>
                     </div>
                 </div>
                 <button type="button" class="diag-modal-close-btn" @onclick="CloseRecentBillsModal" title="@I18n.T("Close")">✕</button>
@@ -603,31 +599,62 @@
                     <span class="search-icon"><SearchIcon /></span>
                     <input type="text"
                            class="classic-input diag-modal-search-input"
-                           placeholder="@I18n.T("Search by Memo #, Patient Name, Patient ID, Mobile or Barcode...")"
-                           @bind="modalSearchQuery"
-                           @bind:event="oninput"
+                           placeholder="@I18n.T("Search by Bill #, Patient Name, Patient ID, Mobile or Reg #...")"
+                           value="@modalSearchQuery"
+                           @oninput="HandleModalSearchInput"
                            @onkeydown="HandleModalScanKeyDown"
                            autofocus />
                     @if (!string.IsNullOrWhiteSpace(modalSearchQuery))
                     {
-                        <button type="button" class="search-clear-btn" @onclick="() => modalSearchQuery = string.Empty">✕</button>
+                        <button type="button" class="search-clear-btn" @onclick="ClearModalSearchAsync">✕</button>
                     }
                 </div>
 
                 <div class="diag-modal-tabs">
-                    <button type="button" class="diag-modal-tab @(modalTab == "all" ? "active" : "")" @onclick='() => modalTab = "all"'>
-                        🔬 @I18n.T("All Bills") (@recentMemos.Count)
+                    <button type="button" class="diag-modal-tab @(modalTab == "all" ? "active" : "")" @onclick='() => OnModalTabChanged("all")'>
+                        🔬 @I18n.T("All Bills")
                     </button>
-                    <button type="button" class="diag-modal-tab @(modalTab == "due" ? "active" : "")" @onclick='() => modalTab = "due"'>
-                        ⚠️ @I18n.T("With Due") (@recentMemos.Count(m => (m.Total - m.Discount) > m.Paid))
+                    <button type="button" class="diag-modal-tab @(modalTab == "due" ? "active" : "")" @onclick='() => OnModalTabChanged("due")'>
+                        ⚠️ @I18n.T("With Due")
+                    </button>
+                    <button type="button" class="diag-modal-tab @(modalTab == "paid" ? "active" : "")" @onclick='() => OnModalTabChanged("paid")'>
+                        ✓ @I18n.T("Paid")
                     </button>
                     @if (pendingOrders.Count > 0)
                     {
-                        <button type="button" class="diag-modal-tab doctor-orders-tab @(modalTab == "orders" ? "active" : "")" @onclick='() => modalTab = "orders"'>
+                        <button type="button" class="diag-modal-tab doctor-orders-tab @(modalTab == "orders" ? "active" : "")" @onclick='() => OnModalTabChanged("orders")'>
                             ⚡ @I18n.T("Doctor Orders") (@pendingOrders.Count)
                         </button>
                     }
                 </div>
+            </div>
+
+            <div class="diag-modal-filter-bar">
+                <div class="diag-modal-date-group">
+                    <span>📅 @I18n.T("From"):</span>
+                    <input type="date" class="classic-input diag-modal-date-input" value="@modalDateFrom?.ToString("yyyy-MM-dd")" @onchange="OnModalDateFromChanged" />
+                    <span>@I18n.T("To"):</span>
+                    <input type="date" class="classic-input diag-modal-date-input" value="@modalDateTo?.ToString("yyyy-MM-dd")" @onchange="OnModalDateToChanged" />
+                </div>
+
+                <div class="diag-modal-presets">
+                    <button type="button" class="diag-date-chip @(IsPresetActive("all") ? "active" : "")" @onclick='() => SetDatePreset("all")'>@I18n.T("All Time")</button>
+                    <button type="button" class="diag-date-chip @(IsPresetActive("today") ? "active" : "")" @onclick='() => SetDatePreset("today")'>@I18n.T("Today")</button>
+                    <button type="button" class="diag-date-chip @(IsPresetActive("last7") ? "active" : "")" @onclick='() => SetDatePreset("last7")'>@I18n.T("Last 7 Days")</button>
+                    <button type="button" class="diag-date-chip @(IsPresetActive("month") ? "active" : "")" @onclick='() => SetDatePreset("month")'>@I18n.T("This Month")</button>
+                </div>
+
+                <div class="diag-modal-type-group">
+                    <select class="classic-select diag-modal-select" value="@modalPatientType" @onchange="OnModalPatientTypeChanged">
+                        <option value="all">@I18n.T("All Types (OPD & IPD)")</option>
+                        <option value="1">@I18n.T("OPD Bills Only")</option>
+                        <option value="2">@I18n.T("IPD Bills Only")</option>
+                    </select>
+                </div>
+
+                <button type="button" class="btn btn-secondary tickets-btn diag-modal-reset-btn" @onclick="ResetModalFiltersAsync" title="@I18n.T("Reset filters")">
+                    🔄 @I18n.T("Reset")
+                </button>
             </div>
 
             <div class="diag-modal-body">
@@ -676,13 +703,19 @@
                 }
                 else
                 {
-                    var filtered = FilteredModalMemos.ToList();
-                    @if (filtered.Count == 0)
+                    @if (isModalLoading && modalMemos.Count == 0)
+                    {
+                        <div class="diag-modal-loading">
+                            <span>⏳</span>
+                            <span>@I18n.T("Loading diagnostic bills...")</span>
+                        </div>
+                    }
+                    else if (modalMemos.Count == 0)
                     {
                         <div class="diag-modal-empty">
                             <span class="empty-icon">🔬</span>
                             <h4>@I18n.T("No matching diagnostic bills found.")</h4>
-                            <p>@I18n.T("Try a different search term or clear the filter.")</p>
+                            <p>@I18n.T("Try a different search term, date range or clear the filters.")</p>
                         </div>
                     }
                     else
@@ -702,7 +735,7 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    @foreach (var m in filtered)
+                                    @foreach (var m in modalMemos)
                                     {
                                         var isSelected = editor.ID == m.ID;
                                         var net = Math.Max(0, m.Total - m.Discount);
@@ -780,12 +813,28 @@
                     }
                     else
                     {
-                        <span>@I18n.T("Showing"): <strong>@FilteredModalMemos.Count()</strong> @I18n.T("diagnostic bills")</span>
+                        <span>@I18n.T("Showing"): <strong>@modalMemos.Count</strong> @I18n.T("of") <strong>@totalModalMemosCount</strong> @I18n.T("diagnostic bills")</span>
                     }
                 </span>
-                <button type="button" class="btn btn-secondary tickets-btn" @onclick="CloseRecentBillsModal">
-                    @I18n.T("Close")
-                </button>
+
+                <div style="display:flex; align-items:center; gap:10px;">
+                    @if (modalTab != "orders" && totalModalMemosCount > modalMemos.Count)
+                    {
+                        <button type="button" class="btn btn-primary tickets-btn" style="height:32px; font-size:12px; padding:3px 14px;" @onclick="LoadMoreModalMemosAsync" disabled="@isModalLoading">
+                            @if (isModalLoading)
+                            {
+                                <span>⏳ @I18n.T("Loading...")</span>
+                            }
+                            else
+                            {
+                                <span>⏬ @I18n.T("Load More Previous Bills") (@Math.Min(30, totalModalMemosCount - modalMemos.Count))</span>
+                            }
+                        </button>
+                    }
+                    <button type="button" class="btn btn-secondary tickets-btn" @onclick="CloseRecentBillsModal">
+                        @I18n.T("Close")
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -793,106 +842,357 @@
 
 @if (editor.ID > 0)
 {
-    <div id="diagnostic-print" class="print-sheet panel print-document">
-        <PrintDocumentHeader Title="Official Diagnostic Invoice & Receipt"
-                             Subtitle="@Branding.LabHeaderDept"
-                             DocNo="@($"B{editor.ID}")"
-                             DocNoLabel="Bill No"
-                             BarcodeCode="@($"LAB-{editor.ID}")"
-                             QrPayload="@BarcodeQr.GenerateLabQrPayload(editor.ID, editor.PatientID ?? "", editor.PatientName, $"SMP-{editor.ID}", NavigationManager.BaseUri)" />
+    <!-- Print Layout Switcher & Action Toolbar -->
+    <div class="diag-print-toolbar no-print">
+        <div class="diag-print-layout-toggle">
+            <span class="toggle-lbl">🖨️ @I18n.T("Print Size"):</span>
+            <button type="button" class="btn btn-sm @(printLayout == "A5" ? "btn-primary active" : "btn-secondary")" @onclick='() => printLayout = "A5"' title="@I18n.T("Delta Hospital style compact Half-A4 / A5 receipt")">
+                📄 A5 Half Page (Delta Style)
+            </button>
+            <button type="button" class="btn btn-sm @(printLayout == "A4" ? "btn-primary active" : "btn-secondary")" @onclick='() => printLayout = "A4"' title="@I18n.T("Full page A4 invoice")">
+                📑 A4 Full Page
+            </button>
+        </div>
+        <div class="diag-print-actions">
+            <button type="button" class="btn btn-primary" @onclick="PrintAsync" title="@I18n.T("Print or Download PDF")">
+                🖨️ @I18n.T("Print / Download Bill")
+            </button>
+        </div>
+    </div>
 
-        <div class="print-grid">
-            <div><span>@I18n.T("Patient Name")</span><b>@editor.PatientName</b></div>
-            <div><span>@I18n.T("Patient ID (PID)")</span>@(string.IsNullOrWhiteSpace(editor.PatientID) ? I18n.T("Walk-in") : editor.PatientID)</div>
-            <div><span>@I18n.T("Age / Sex")</span>@editor.Age / @editor.Sex</div>
-            <div><span>@I18n.T("Contact No")</span>@(editor.Contact ?? "—")</div>
-            <div><span>@I18n.T("Referred by")</span>@DoctorName(editor.DoctorID)</div>
-            <div><span>@I18n.T("Invoice Date")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
-            <div><span>@I18n.T("Specimen Tube ID")</span><b>SMP-@editor.ID</b></div>
-            <div><span>@I18n.T("Patient Type")</span>@(editor.PatientType == "2" ? I18n.T("In-Patient (IPD)") : I18n.T("Out-Patient (OPD)"))</div>
-            @if (editor.PatientType == "2")
+    @if (printLayout == "A5")
+    {
+        <!-- Delta Hospital Style Compact A5 (Half-A4) Cash Memo -->
+        <div id="diagnostic-print" class="a5-memo-sheet panel print-document">
+            <!-- Header -->
+            <div class="a5-header">
+                <div class="a5-brand-block">
+                    @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                    {
+                        <img src="@Branding.LogoData" alt="Logo" class="a5-brand-logo" />
+                    }
+                    else
+                    {
+                        <div class="a5-logo-placeholder">🏥</div>
+                    }
+                    <div class="a5-brand-text">
+                        <h2 class="a5-hosp-name">@Branding.HospitalName</h2>
+                        <div class="a5-hosp-address">
+                            @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}")
+                            @if (!string.IsNullOrWhiteSpace(Branding.Hotline) || !string.IsNullOrWhiteSpace(Branding.Phone))
+                            {
+                                <span> Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+                
+            </div>
+
+            <!-- Bill No & Barcode Row -->
+            <div class="a5-bill-meta-row">
+                <div class="a5-bill-no-date">
+                    <span class="a5-meta-label">Bill No. :</span>
+                    <strong class="a5-meta-val">B@(editor.ID.ToString("D8"))</strong>
+                    <span class="a5-meta-sep">&nbsp;&bull;&nbsp;</span>
+                    <span class="a5-meta-label">Date :</span>
+                    <span class="a5-meta-val">@editor.TransDate.ToString("dd/MM/yy hh:mm tt")</span>
+                </div>
+                <div class="a5-bill-barcode">
+                    <BarcodeQrView Code="@(!string.IsNullOrWhiteSpace(editor.PatientID) ? editor.PatientID : $"P{editor.ID}")" ShowBarcode="true" ShowQr="false" Layout="barcode-only" BarHeight="26" IncludeBarcodeText="false" />
+                </div>
+            </div>
+
+            <!-- Patient Information Grid -->
+            <div class="a5-patient-info-box">
+                <div class="a5-patient-info-left">
+                    <div class="a5-pinfo-row">
+                        <div class="a5-pinfo-col a5-col-full">
+                            <span class="a5-lbl">Name</span>
+                            <span class="a5-colon">:</span>
+                            <strong class="a5-val a5-patient-name">@editor.PatientName.ToUpper()</strong>
+                        </div>
+                    </div>
+                    <div class="a5-pinfo-row">
+                        <div class="a5-pinfo-col" style="flex: 1.2;">
+                            <span class="a5-lbl">Age</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Age) ? "—" : editor.Age)</span>
+                        </div>
+                        <div class="a5-pinfo-col" style="flex: 1.2;">
+                            <span class="a5-lbl">Gender</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Sex) ? "—" : editor.Sex)</span>
+                        </div>
+                        <div class="a5-pinfo-col" style="flex: 1.8;">
+                            <span class="a5-lbl">Contact No</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Contact) ? "—" : editor.Contact)</span>
+                        </div>
+                    </div>
+                    <div class="a5-pinfo-row">
+                        <div class="a5-pinfo-col a5-col-full">
+                            <span class="a5-lbl">Ref By</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-val">@DoctorFormatted(editor.DoctorID)</span>
+                        </div>
+                    </div>
+                    <div class="a5-pinfo-row">
+                        <div class="a5-pinfo-col a5-col-full">
+                            <span class="a5-lbl">Hos/Clinic</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-val">@(editor.PatientType == "2" ? $"In-Patient (IPD) • Reg: {editor.RegNo} • Bed: {editor.Bed}" : "Out-Patient (OPD) / Self")</span>
+                        </div>
+                    </div>
+                    <div class="a5-pinfo-row">
+                        <div class="a5-pinfo-col a5-col-full">
+                            <span class="a5-lbl">Patient ID</span>
+                            <span class="a5-colon">:</span>
+                            <strong class="a5-val">@(string.IsNullOrWhiteSpace(editor.PatientID) ? "Walk-in" : editor.PatientID)</strong>
+                        </div>
+                    </div>
+                </div>
+                <div class="a5-patient-info-right-qr">
+                    <BarcodeQrView Code="@($"LAB-{editor.ID}")"
+                                   QrPayload="@BarcodeQr.GenerateLabQrPayload(editor.ID, editor.PatientID ?? "", editor.PatientName, $"SMP-{editor.ID}", NavigationManager.BaseUri)"
+                                   ShowBarcode="false"
+                                   ShowQr="true"
+                                   Layout="qr-only"
+                                   QrPixelsPerModule="3" />
+                </div>
+            </div>
+
+            <!-- Investigation Items Table -->
+            <table class="a5-items-table">
+                <thead>
+                    <tr>
+                        <th style="width: 12%;">Code</th>
+                        <th style="width: 44%;">Test Name</th>
+                        <th style="width: 26%;">Expected Delivery Date</th>
+                        <th style="width: 6%; text-align: center;">Qty</th>
+                        <th style="width: 12%; text-align: right;">Price (Tk.)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in editor.Items)
+                    {
+                        <tr>
+                            <td class="a5-cell-code">H@(item.TestID.ToString("D4"))</td>
+                            <td class="a5-cell-name">@ServiceName(item.TestID)</td>
+                            <td class="a5-cell-delivery">@GetExpectedDelivery(editor.TransDate, item.TestID)</td>
+                            <td class="a5-cell-qty" style="text-align: center;">@item.Quantity</td>
+                            <td class="a5-cell-price" style="text-align: right;">@((item.Rate * item.Quantity).ToString("N2"))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <!-- Remarks & Test ID Row -->
+            <div class="a5-remarks-test-id-row">
+                <div class="a5-remarks-line">
+                    <span class="a5-lbl">Remarks :</span>
+                    <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Remarks) ? "N/A" : editor.Remarks)</span>
+                </div>
+                <div class="a5-testid-line">
+                    <span class="a5-lbl">Test ID :</span>
+                    <span class="a5-val a5-test-codes">
+                        @string.Join(" ", editor.Items.Select(x => $"{editor.TransDate:yy}-{editor.ID:D4}-{x.SLNo}"))
+                    </span>
+                </div>
+            </div>
+
+            <!-- Financial Summary & Payment Breakdown Split -->
+            <div class="a5-financial-split">
+                <!-- Left: Stamp, In Words, Mini Payment Table, Prepared By -->
+                <div class="a5-fin-left">
+                    <div class="a5-stamp-box">
+                        @if (netPayable - editor.Paid <= 0)
+                        {
+                            <div class="a5-stamp a5-stamp-paid">PAID</div>
+                        }
+                        else
+                        {
+                            <div class="a5-stamp a5-stamp-due">DUE: @I18n.FormatCurrency(netPayable - editor.Paid)</div>
+                        }
+                    </div>
+
+                    <div class="a5-in-word">
+                        In Word: @CurrencyWordsHelper.ToTakaWords(editor.Paid > 0 ? editor.Paid : netPayable)
+                    </div>
+
+                    <table class="a5-mini-pay-table">
+                        <thead>
+                            <tr>
+                                <th>Payment Type</th>
+                                <th>Coll. By</th>
+                                <th>Auth. By</th>
+                                <th>Date</th>
+                                <th>Mode</th>
+                                <th style="text-align: right;">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (editor.Discount > 0)
+                            {
+                                <tr>
+                                    <td>Initial Discount</td>
+                                    <td>@GetCashierName()</td>
+                                    <td>@(string.IsNullOrWhiteSpace(editor.DiscountBy) ? "—" : editor.DiscountBy)</td>
+                                    <td>@editor.TransDate.ToString("dd/MM/yy")</td>
+                                    <td>Discount</td>
+                                    <td style="text-align: right;">@editor.Discount.ToString("N2")</td>
+                                </tr>
+                            }
+                            <tr>
+                                <td>Initial Collection</td>
+                                <td>@GetCashierName()</td>
+                                <td>—</td>
+                                <td>@editor.TransDate.ToString("dd/MM/yy")</td>
+                                <td>Cash</td>
+                                <td style="text-align: right;">@editor.Paid.ToString("N2")</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="a5-prepared-by">
+                        Prepared By : <strong>@GetCashierName()</strong>
+                    </div>
+                </div>
+
+                <!-- Right: Financial Totals Box -->
+                <div class="a5-fin-right">
+                    <div class="a5-financial-summary">
+                        <div class="a5-fin-row">
+                            <span>Item Total Tk.</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-fin-val">@grossTotal.ToString("N2")</span>
+                        </div>
+                        @if (editor.Discount > 0)
+                        {
+                            <div class="a5-fin-row">
+                                <span>(-)Discount Tk.</span>
+                                <span class="a5-colon">:</span>
+                                <span class="a5-fin-val">@editor.Discount.ToString("N2")</span>
+                            </div>
+                        }
+                        <div class="a5-fin-row a5-fin-net">
+                            <span>Net Payable Tk.</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-fin-val">@netPayable.ToString("N2")</span>
+                        </div>
+                        <div class="a5-fin-row">
+                            <span>Collected Tk.</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-fin-val">@editor.Paid.ToString("N2")</span>
+                        </div>
+                        <div class="a5-fin-row a5-fin-due">
+                            <span>Due Tk.</span>
+                            <span class="a5-colon">:</span>
+                            <span class="a5-fin-val @(netPayable - editor.Paid > 0 ? "a5-due-text" : "")">
+                                @Math.Max(0, netPayable - editor.Paid).ToString("N2")
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Location Instruction -->
+            @if (!string.IsNullOrWhiteSpace(Branding.ReceiptHeaderNote) || (!string.IsNullOrWhiteSpace(Branding.ReceiptFooterNote) && !Branding.ReceiptFooterNote.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase)))
             {
-                <div><span>@I18n.T("IPD Reg No")</span><b>@editor.RegNo</b></div>
-                <div><span>@I18n.T("Bed")</span><b>@editor.Bed</b></div>
+                <div class="a5-footer-instruction">
+                    @if (!string.IsNullOrWhiteSpace(Branding.ReceiptHeaderNote))
+                    {
+                        <strong>@Branding.ReceiptHeaderNote</strong>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(Branding.ReceiptFooterNote) && !Branding.ReceiptFooterNote.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div class="a5-footer-sub">@Branding.ReceiptFooterNote</div>
+                    }
+                </div>
             }
         </div>
+    }
+    else
+    {
+        <!-- Standard Full A4 Page Invoice -->
+        <div id="diagnostic-print" class="print-sheet panel print-document print-a4-sheet">
+            <PrintDocumentHeader Title="Official Diagnostic Invoice & Receipt"
+                                 Subtitle="@Branding.LabHeaderDept"
+                                 DocNo="@($"B{editor.ID}")"
+                                 DocNoLabel="Bill No"
+                                 BarcodeCode="@(!string.IsNullOrWhiteSpace(editor.PatientID) ? editor.PatientID : $"P{editor.ID}")"
+                                 QrPayload="@BarcodeQr.GenerateLabQrPayload(editor.ID, editor.PatientID ?? "", editor.PatientName, $"SMP-{editor.ID}", NavigationManager.BaseUri)" />
 
-        <table class="data-table" style="margin-top: 14px;">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>@I18n.T("Investigation / Test Description")</th>
-                    <th class="num">@I18n.T("Rate")</th>
-                    <th class="num">@I18n.T("Qty")</th>
-                    <th class="num">@I18n.T("Amount")</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var item in editor.Items)
+            <div class="print-grid">
+                <div><span>@I18n.T("Patient Name")</span><b>@editor.PatientName</b></div>
+                <div><span>@I18n.T("Patient ID (PID)")</span>@(string.IsNullOrWhiteSpace(editor.PatientID) ? I18n.T("Walk-in") : editor.PatientID)</div>
+                <div><span>@I18n.T("Age / Sex")</span>@editor.Age / @editor.Sex</div>
+                <div><span>@I18n.T("Contact No")</span>@(editor.Contact ?? "—")</div>
+                <div><span>@I18n.T("Referred by")</span>@DoctorFormatted(editor.DoctorID)</div>
+                <div><span>@I18n.T("Invoice Date")</span>@editor.TransDate.ToString("dd MMM yyyy hh:mm tt")</div>
+                <div><span>@I18n.T("Specimen Tube ID")</span><b>SMP-@editor.ID</b></div>
+                <div><span>@I18n.T("Patient Type")</span>@(editor.PatientType == "2" ? I18n.T("In-Patient (IPD)") : I18n.T("Out-Patient (OPD)"))</div>
+                @if (editor.PatientType == "2")
                 {
-                    <tr>
-                        <td>@item.SLNo</td>
-                        <td><b>@ServiceName(item.TestID)</b></td>
-                        <td class="num">@I18n.FormatCurrency(item.Rate)</td>
-                        <td class="num">@item.Quantity</td>
-                        <td class="num">@I18n.FormatCurrency(item.Rate * item.Quantity)</td>
-                    </tr>
+                    <div><span>@I18n.T("IPD Reg No")</span><b>@editor.RegNo</b></div>
+                    <div><span>@I18n.T("Bed")</span><b>@editor.Bed</b></div>
                 }
-            </tbody>
-        </table>
+            </div>
 
-        <div class="print-total">
-            <div><span>@I18n.T("Gross Subtotal"):</span> <strong>@I18n.FormatCurrency(grossTotal)</strong></div>
-            @if (editor.Discount > 0)
-            {
-                <div><span>@I18n.T("Discount"):</span> <b>- @I18n.FormatCurrency(editor.Discount)</b></div>
-            }
-            @if (editor.PatientType == "2")
-            {
-                <div class="grand"><span>@I18n.T("Charged to IPD Account"):</span> <b>@I18n.FormatCurrency(netPayable)</b></div>
-            }
-            else
-            {
-                <div class="grand"><span>@I18n.T("Paid Amount"):</span> <b>@I18n.FormatCurrency(editor.Paid)</b></div>
-                @if (netPayable - editor.Paid > 0)
-                {
-                    <div style="color:#dc2626;"><span>@I18n.T("Due Amount"):</span> <b>@I18n.FormatCurrency(netPayable - editor.Paid)</b></div>
-                    @if (authorizeReleaseWithDue || (editor.Remarks != null && editor.Remarks.Contains("[AUTH_RELEASE]")))
+            <table class="data-table" style="margin-top: 14px;">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>@I18n.T("Investigation / Test Description")</th>
+                        <th class="num">@I18n.T("Rate")</th>
+                        <th class="num">@I18n.T("Qty")</th>
+                        <th class="num">@I18n.T("Amount")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in editor.Items)
                     {
-                        <div style="color:#15803d; font-size:11px; font-weight:800; margin-top:2px;">🛡️ @I18n.T("REPORT RELEASE AUTHORIZED BY MANAGEMENT", "REPORT RELEASE AUTHORIZED")</div>
+                        <tr>
+                            <td>@item.SLNo</td>
+                            <td><b>@ServiceName(item.TestID)</b></td>
+                            <td class="num">@I18n.FormatCurrency(item.Rate)</td>
+                            <td class="num">@item.Quantity</td>
+                            <td class="num">@I18n.FormatCurrency(item.Rate * item.Quantity)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <div class="print-total">
+                <div><span>@I18n.T("Gross Subtotal"):</span> <strong>@I18n.FormatCurrency(grossTotal)</strong></div>
+                @if (editor.Discount > 0)
+                {
+                    <div><span>@I18n.T("Discount"):</span> <b>- @I18n.FormatCurrency(editor.Discount)</b></div>
+                }
+                @if (editor.PatientType == "2")
+                {
+                    <div class="grand"><span>@I18n.T("Charged to IPD Account"):</span> <b>@I18n.FormatCurrency(netPayable)</b></div>
+                }
+                else
+                {
+                    <div class="grand"><span>@I18n.T("Paid Amount"):</span> <b>@I18n.FormatCurrency(editor.Paid)</b></div>
+                    @if (netPayable - editor.Paid > 0)
+                    {
+                        <div style="color:#dc2626;"><span>@I18n.T("Due Amount"):</span> <b>@I18n.FormatCurrency(netPayable - editor.Paid)</b></div>
+                        @if (authorizeReleaseWithDue || (editor.Remarks != null && editor.Remarks.Contains("[AUTH_RELEASE]")))
+                        {
+                            <div style="color:#15803d; font-size:11px; font-weight:800; margin-top:2px;">🛡️ @I18n.T("REPORT RELEASE AUTHORIZED BY MANAGEMENT", "REPORT RELEASE AUTHORIZED")</div>
+                        }
                     }
                 }
-            }
-        </div>
-
-        <PrintDocumentFooter SignTitle1="Patient / Attendant"
-                             SignTitle2="Medical Technologist / Lab"
-                             SignTitle3="Cashier"
-                             PageNumberText="Page 1 of 1" />
-    </div>
-
-    <div id="tube-label-print" class="print-document tube-labels-container">
-        @foreach (var item in editor.Items)
-        {
-            var sampleCode = $"SMP-{editor.ID}-{item.SLNo}";
-            <div class="tube-sticker-label">
-                <div class="tube-header">
-                    <strong>@editor.PatientName</strong>
-                    <span>@editor.Age / @editor.Sex</span>
-                </div>
-                <div class="tube-body">
-                    <div class="tube-test-name">@ServiceName(item.TestID)</div>
-                    <small>PID: @(editor.PatientID ?? "Walk-in") &bull; #@editor.ID &bull; @editor.TransDate.ToString("dd/MM HH:mm")</small>
-                </div>
-                <BarcodeQrView Code="@sampleCode"
-                               QrPayload="@BarcodeQr.GenerateLabTubeQrPayload(sampleCode, editor.ID, editor.PatientName, ServiceName(item.TestID))"
-                               Layout="side-by-side"
-                               BarHeight="22"
-                               QrPixelsPerModule="2"
-                               Compact="true" />
             </div>
-        }
-    </div>
+
+            <PrintDocumentFooter SignTitle1="Patient / Attendant"
+                                 SignTitle2="Medical Technologist / Lab"
+                                 SignTitle3="Cashier"
+                                 PageNumberText="Page 1 of 1" />
+        </div>
+    }
 }
 
 @code {
@@ -902,7 +1202,10 @@
     public long? QueryOrderId { get; set; }
     [SupplyParameterFromQuery(Name = "patientType")]
     public string? QueryPatientType { get; set; }
+    [SupplyParameterFromQuery(Name = "hasIpd")]
+    public bool? QueryHasIpd { get; set; }
 
+    private bool canAccessIpd = true;
     private string currentPatientType = "1";
     private bool isIpdMode => currentPatientType == "2";
     private CashMemoDInvestigation editor = new() { TransDate = DateTime.Now, ModuleID = 2, PatientType = "1" };
@@ -927,29 +1230,15 @@
     private bool showRecentBillsModal = false;
     private string modalSearchQuery = "";
     private string modalTab = "all";
+    private DateTime? modalDateFrom;
+    private DateTime? modalDateTo;
+    private string modalPatientType = "all";
+    private int modalPageSize = 30;
+    private int totalModalMemosCount = 0;
+    private bool isModalLoading = false;
+    private List<CashMemoDInvestigation> modalMemos = [];
     private decimal discountPercent = 0;
     private decimal fixedDiscountAmount = 0;
-
-    private IEnumerable<CashMemoDInvestigation> FilteredModalMemos
-    {
-        get
-        {
-            var q = recentMemos.AsEnumerable();
-            if (modalTab == "due")
-            {
-                q = q.Where(m => (m.Total - m.Discount) > m.Paid);
-            }
-            if (!string.IsNullOrWhiteSpace(modalSearchQuery))
-            {
-                var term = modalSearchQuery.Trim();
-                q = q.Where(m => m.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase) || ("B" + m.ID).Contains(term, StringComparison.OrdinalIgnoreCase)
-                              || (m.PatientName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                              || (m.PatientID?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                              || (m.Contact?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
-            }
-            return q;
-        }
-    }
 
     private IEnumerable<DiagnosticOrder> FilteredModalOrders
     {
@@ -963,28 +1252,30 @@
         }
     }
 
-    private IEnumerable<DoctorsProfile> FilteredDoctors
-    {
-        get
-        {
-            var query = doctors.AsEnumerable();
-            var term = doctorSearchQuery.Trim();
-            if (!string.IsNullOrWhiteSpace(term) && !IsCurrentDoctorDisplayText(term))
-            {
-                query = query.Where(d => d.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
-                                      || (d.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                                      || (d.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                                      || (d.Degree?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                                      || (d.Contact?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
-            }
+    private const int DoctorBatchSize = 15;
+    private int visibleDoctorCount = DoctorBatchSize;
 
-            return query
-                .OrderBy(d => editor.DoctorID == d.ID ? 0 : 1)
-                .ThenBy(d => d.Priority ?? int.MaxValue)
-                .ThenBy(d => d.Name)
-                .Take(10);
+    private IEnumerable<DoctorsProfile> GetFilteredDoctorsQuery()
+    {
+        var query = doctors.AsEnumerable();
+        var term = doctorSearchQuery.Trim();
+        if (!string.IsNullOrWhiteSpace(term) && !IsCurrentDoctorDisplayText(term))
+        {
+            query = query.Where(d => d.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
+                                  || (d.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || (d.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || (d.Degree?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                                  || (d.Contact?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
         }
+
+        return query
+            .OrderBy(d => editor.DoctorID == d.ID ? 0 : 1)
+            .ThenBy(d => d.Priority ?? int.MaxValue)
+            .ThenBy(d => d.Name);
     }
+
+    private List<DoctorsProfile> FilteredDoctors => GetFilteredDoctorsQuery().Take(visibleDoctorCount).ToList();
+    private bool hasMoreDoctorSuggestions => GetFilteredDoctorsQuery().Count() > visibleDoctorCount;
 
     private static readonly (string Key, string Label, string Icon)[] sexOptions = [("Male", "Male", "♂"), ("Female", "Female", "♀"), ("Other", "Other", "⚥")];
     private int selectedTestId = 0;
@@ -1000,16 +1291,28 @@
     private bool paidManuallyEdited;
     private bool authorizeReleaseWithDue = false;
 
-    private bool showPatientIdSuggestions;
-    private List<Registration> patientIdSuggestions = [];
-
     private string message = "";
     private string messageClass = "success";
 
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        currentPatientType = NormalizePatientType(QueryPatientType);
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userPrincipal = auth.User;
+            if (userPrincipal.Identity?.IsAuthenticated == true)
+            {
+                var appUser = await UserManager.GetUserAsync(userPrincipal);
+                currentUserDisplayName = !string.IsNullOrWhiteSpace(appUser?.DisplayName)
+                    ? appUser.DisplayName
+                    : (!string.IsNullOrWhiteSpace(userPrincipal.Identity.Name) ? userPrincipal.Identity.Name : "User");
+            }
+            var hasIpdRole = userPrincipal.IsInRole(RoleNames.Administrator) || userPrincipal.IsInRole(RoleNames.IPDOperator);
+            canAccessIpd = QueryHasIpd ?? hasIpdRole;
+        }
+        catch { }
+        currentPatientType = canAccessIpd ? NormalizePatientType(QueryPatientType) : "1";
         editor.PatientType = currentPatientType;
         await LoadAsync();
     }
@@ -1018,7 +1321,7 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        var requestedType = NormalizePatientType(QueryPatientType);
+        var requestedType = canAccessIpd ? NormalizePatientType(QueryPatientType) : "1";
         if (requestedType != currentPatientType)
         {
             currentPatientType = requestedType;
@@ -1049,6 +1352,20 @@
     private async Task LoadAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = auth.User;
+            var hasIpdRole = user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.IPDOperator);
+            canAccessIpd = QueryHasIpd ?? hasIpdRole;
+            if (!canAccessIpd && currentPatientType == "2")
+            {
+                currentPatientType = "1";
+                editor.PatientType = "1";
+            }
+        }
+        catch { }
+
         doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
         var roleAuthorizers = await UserManager.GetUsersInRoleAsync(RoleNames.Authorizer);
         authorizers = roleAuthorizers
@@ -1083,6 +1400,7 @@
             .OrderByDescending(x => x.ID)
             .Take(30)
             .ToListAsync();
+        totalModalMemosCount = await db.EmergencyMemos.AsNoTracking().CountAsync(x => x.ModuleID == 2);
         pendingOrders = isIpdMode
             ? []
             : await db.DiagnosticOrders.AsNoTracking().Include(x => x.Items)
@@ -1090,23 +1408,189 @@
         SyncDoctorSearchFromSelection();
     }
 
-    private void OpenRecentBillsModal()
+    private async Task LoadModalMemosAsync()
+    {
+        isModalLoading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = db.EmergencyMemos.AsNoTracking().Where(x => x.ModuleID == 2);
+
+            if (modalPatientType == "1") q = q.Where(x => x.PatientType == "1");
+            else if (modalPatientType == "2") q = q.Where(x => x.PatientType == "2");
+
+            if (modalDateFrom.HasValue)
+            {
+                var f = modalDateFrom.Value.Date;
+                q = q.Where(x => x.TransDate >= f);
+            }
+            if (modalDateTo.HasValue)
+            {
+                var t = modalDateTo.Value.Date.AddDays(1);
+                q = q.Where(x => x.TransDate < t);
+            }
+
+            if (!string.IsNullOrWhiteSpace(modalSearchQuery))
+            {
+                var term = modalSearchQuery.Trim();
+                var clean = term.TrimStart('#').TrimStart('B', 'b').TrimStart('0');
+                if (long.TryParse(clean, out var numId) && numId > 0)
+                {
+                    q = q.Where(x => x.ID == numId 
+                                  || (x.PatientID != null && x.PatientID.Contains(term)) 
+                                  || (x.PatientName != null && x.PatientName.Contains(term)) 
+                                  || (x.Contact != null && x.Contact.Contains(term)));
+                }
+                else
+                {
+                    q = q.Where(x => (x.PatientID != null && x.PatientID.Contains(term))
+                                  || (x.PatientName != null && x.PatientName.Contains(term))
+                                  || (x.Contact != null && x.Contact.Contains(term))
+                                  || (x.RegNo != null && x.RegNo.Contains(term)));
+                }
+            }
+
+            if (modalTab == "due")
+            {
+                q = q.Where(x => (x.Total - x.Discount) > x.Paid);
+            }
+            else if (modalTab == "paid")
+            {
+                q = q.Where(x => (x.Total - x.Discount) <= x.Paid);
+            }
+
+            totalModalMemosCount = await q.CountAsync();
+            modalMemos = await q.OrderByDescending(x => x.ID).Take(modalPageSize).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load diagnostic modal bills.");
+        }
+        finally
+        {
+            isModalLoading = false;
+        }
+    }
+
+    private async Task OpenRecentBillsModal()
     {
         showRecentBillsModal = true;
         modalTab = "all";
         modalSearchQuery = "";
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
     }
 
-    private void OpenDoctorOrdersModal()
+    private async Task OpenDoctorOrdersModal()
     {
         showRecentBillsModal = true;
         modalTab = "orders";
         modalSearchQuery = "";
+        await LoadModalMemosAsync();
     }
 
     private void CloseRecentBillsModal()
     {
         showRecentBillsModal = false;
+    }
+
+    private async Task OnModalTabChanged(string tab)
+    {
+        modalTab = tab;
+        modalPageSize = 30;
+        if (modalTab != "orders")
+        {
+            await LoadModalMemosAsync();
+        }
+    }
+
+    private async Task HandleModalSearchInput(ChangeEventArgs e)
+    {
+        modalSearchQuery = e.Value?.ToString() ?? string.Empty;
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task ClearModalSearchAsync()
+    {
+        modalSearchQuery = string.Empty;
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task OnModalDateFromChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d)) modalDateFrom = d;
+        else modalDateFrom = null;
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task OnModalDateToChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d)) modalDateTo = d;
+        else modalDateTo = null;
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task OnModalPatientTypeChanged(ChangeEventArgs e)
+    {
+        modalPatientType = e.Value?.ToString() ?? "all";
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task SetDatePreset(string preset)
+    {
+        if (preset == "today")
+        {
+            modalDateFrom = DateTime.Today;
+            modalDateTo = DateTime.Today;
+        }
+        else if (preset == "last7")
+        {
+            modalDateFrom = DateTime.Today.AddDays(-6);
+            modalDateTo = DateTime.Today;
+        }
+        else if (preset == "month")
+        {
+            modalDateFrom = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+            modalDateTo = DateTime.Today;
+        }
+        else if (preset == "all")
+        {
+            modalDateFrom = null;
+            modalDateTo = null;
+        }
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private bool IsPresetActive(string preset)
+    {
+        if (preset == "all") return !modalDateFrom.HasValue && !modalDateTo.HasValue;
+        if (preset == "today") return modalDateFrom.HasValue && modalDateTo.HasValue && modalDateFrom.Value.Date == DateTime.Today && modalDateTo.Value.Date == DateTime.Today;
+        if (preset == "last7") return modalDateFrom.HasValue && modalDateTo.HasValue && modalDateFrom.Value.Date == DateTime.Today.AddDays(-6) && modalDateTo.Value.Date == DateTime.Today;
+        if (preset == "month") return modalDateFrom.HasValue && modalDateTo.HasValue && modalDateFrom.Value.Date == new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1) && modalDateTo.Value.Date == DateTime.Today;
+        return false;
+    }
+
+    private async Task ResetModalFiltersAsync()
+    {
+        modalSearchQuery = "";
+        modalDateFrom = null;
+        modalDateTo = null;
+        modalPatientType = "all";
+        modalTab = "all";
+        modalPageSize = 30;
+        await LoadModalMemosAsync();
+    }
+
+    private async Task LoadMoreModalMemosAsync()
+    {
+        modalPageSize += 30;
+        await LoadModalMemosAsync();
     }
 
     private async Task SelectFromModalAsync(CashMemoDInvestigation m)
@@ -1125,6 +1609,7 @@
     {
         await SelectAsync(m);
         await DeleteAsync();
+        await LoadModalMemosAsync();
     }
 
     private async Task HandleModalScanKeyDown(KeyboardEventArgs e)
@@ -1171,15 +1656,182 @@
         Success(I18n.IsBangla ? $"ডাক্তারি অর্ডার #{order.ID} বিলিংয়ের জন্য লোড হয়েছে।" : $"Doctor order #{order.ID} loaded for billing.");
     }
 
-    private async Task HandlePatientIdInputAsync(ChangeEventArgs e)
+    private const int PatientBatchSize = 10;
+    private List<Registration> patientIdSuggestions = [];
+    private bool showPatientIdSuggestions = false;
+    private bool hasMorePatientSuggestions = false;
+
+    private List<Registration> contactSuggestions = [];
+    private bool showContactSuggestions = false;
+    private bool hasMoreContactSuggestions = false;
+
+    private DotNetObjectReference<DiagnosticBilling>? dotNetRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        editor.PatientID = e.Value?.ToString();
-        await FilterPatientIdSuggestionsAsync();
+        if (firstRender)
+        {
+            dotNetRef ??= DotNetObjectReference.Create(this);
+        }
+        if (showPatientIdSuggestions)
+        {
+            await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "diag-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
+        }
+        if (showContactSuggestions)
+        {
+            await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "diag-contact-suggestions-list", dotNetRef, nameof(LoadMoreContactPatientsFromJs));
+        }
+        if (showDoctorSuggestions)
+        {
+            await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "diag-doctor-suggestions-list", dotNetRef, nameof(LoadMoreDoctorsFromJs));
+        }
     }
 
     private async Task ShowPatientIdSuggestionsAsync()
     {
-        await FilterPatientIdSuggestionsAsync();
+        await LoadPatientIdSuggestionsAsync();
+    }
+
+    private async Task HandlePatientIdInputAsync(ChangeEventArgs e)
+    {
+        var val = e.Value?.ToString();
+        editor.PatientID = val;
+        if (isIpdMode) editor.RegNo = val;
+        await LoadPatientIdSuggestionsAsync();
+    }
+
+    private async Task LoadPatientIdSuggestionsAsync()
+    {
+        var term = (editor.PatientID ?? editor.RegNo ?? "").Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        IQueryable<Registration> q = db.Registrations.AsNoTracking();
+        if (!string.IsNullOrEmpty(term))
+        {
+            q = q.Where(x => (x.PatientID != null && x.PatientID.Contains(term))
+                          || (x.Contact != null && x.Contact.Contains(term))
+                          || (x.Name != null && x.Name.Contains(term)));
+        }
+        patientIdSuggestions = await q.OrderByDescending(x => x.ID).Take(PatientBatchSize).ToListAsync();
+
+        if (!string.IsNullOrEmpty(term))
+        {
+            var admissions = await db.PatientAdmissions.AsNoTracking()
+                .Where(x => (x.RegNo.Contains(term) || (x.PatientID != null && x.PatientID.Contains(term))) && x.IsAdmitted == true)
+                .OrderByDescending(x => x.AdmissionDate)
+                .Take(5)
+                .ToListAsync();
+
+            if (admissions.Count > 0)
+            {
+                var pids = admissions.Where(a => !string.IsNullOrWhiteSpace(a.PatientID)).Select(a => a.PatientID!).ToHashSet();
+                var regs = await db.Registrations.AsNoTracking()
+                    .Where(x => x.PatientID != null && pids.Contains(x.PatientID))
+                    .ToListAsync();
+
+                foreach (var adm in admissions)
+                {
+                    if (patientIdSuggestions.All(s => s.PatientID != (adm.PatientID ?? adm.RegNo)))
+                    {
+                        var r = regs.FirstOrDefault(x => x.PatientID == adm.PatientID);
+                        patientIdSuggestions.Insert(0, new Registration
+                        {
+                            PatientID = adm.PatientID ?? adm.RegNo,
+                            Name = r?.Name ?? $"IPD Patient ({adm.RegNo})",
+                            Contact = r?.Contact ?? adm.RegNo,
+                            Sex = r?.Sex ?? "Male"
+                        });
+                    }
+                }
+            }
+        }
+
+        hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
+        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+    }
+
+    [JSInvokable]
+    public async Task LoadMorePatientsFromJs()
+    {
+        if (!hasMorePatientSuggestions) return;
+        var term = (editor.PatientID ?? editor.RegNo ?? "").Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        IQueryable<Registration> q = db.Registrations.AsNoTracking();
+        if (!string.IsNullOrEmpty(term))
+        {
+            q = q.Where(x => (x.PatientID != null && x.PatientID.Contains(term))
+                          || (x.Contact != null && x.Contact.Contains(term))
+                          || (x.Name != null && x.Name.Contains(term)));
+        }
+        List<Registration> more = await q.OrderByDescending(x => x.ID)
+            .Skip(patientIdSuggestions.Count)
+            .Take(PatientBatchSize)
+            .ToListAsync();
+
+        if (more.Count > 0)
+        {
+            patientIdSuggestions.AddRange(more);
+            hasMorePatientSuggestions = more.Count >= PatientBatchSize;
+            await InvokeAsync(StateHasChanged);
+        }
+        else
+        {
+            hasMorePatientSuggestions = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ShowContactSuggestionsAsync()
+    {
+        await LoadContactSuggestionsAsync();
+    }
+
+    private async Task HandleContactInputAsync(ChangeEventArgs e)
+    {
+        editor.Contact = e.Value?.ToString();
+        await LoadContactSuggestionsAsync();
+    }
+
+    private async Task LoadContactSuggestionsAsync()
+    {
+        var term = (editor.Contact ?? "").Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        IQueryable<Registration> q = db.Registrations.AsNoTracking();
+        if (!string.IsNullOrEmpty(term))
+        {
+            q = q.Where(x => x.Contact != null && x.Contact.Contains(term));
+        }
+        contactSuggestions = await q.OrderByDescending(x => x.ID).Take(PatientBatchSize).ToListAsync();
+        hasMoreContactSuggestions = contactSuggestions.Count >= PatientBatchSize;
+        showContactSuggestions = contactSuggestions.Count > 0;
+    }
+
+    [JSInvokable]
+    public async Task LoadMoreContactPatientsFromJs()
+    {
+        if (!hasMoreContactSuggestions) return;
+        var term = (editor.Contact ?? "").Trim();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        IQueryable<Registration> q = db.Registrations.AsNoTracking();
+        if (!string.IsNullOrEmpty(term))
+        {
+            q = q.Where(x => x.Contact != null && x.Contact.Contains(term));
+        }
+        List<Registration> more = await q.OrderByDescending(x => x.ID)
+            .Skip(contactSuggestions.Count)
+            .Take(PatientBatchSize)
+            .ToListAsync();
+
+        if (more.Count > 0)
+        {
+            contactSuggestions.AddRange(more);
+            hasMoreContactSuggestions = more.Count >= PatientBatchSize;
+            await InvokeAsync(StateHasChanged);
+        }
+        else
+        {
+            hasMoreContactSuggestions = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private async Task HidePatientSuggestionsAsync()
@@ -1188,54 +1840,33 @@
         showPatientIdSuggestions = false;
     }
 
-    private async Task FilterPatientIdSuggestionsAsync()
+    private async Task HideContactSuggestionsAsync()
     {
-        if (string.IsNullOrWhiteSpace(editor.PatientID) || editor.PatientID.Trim().Length < 2)
-        {
-            patientIdSuggestions.Clear();
-            showPatientIdSuggestions = false;
-            return;
-        }
-
-        var term = editor.PatientID.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        patientIdSuggestions = await db.Registrations.AsNoTracking()
-            .Where(x => (x.PatientID != null && x.PatientID.Contains(term)) || (x.Contact != null && x.Contact.Contains(term)) || (x.Name != null && x.Name.Contains(term)))
-            .OrderByDescending(x => x.ID)
-            .Take(8)
-            .ToListAsync();
-
-        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+        await Task.Delay(200);
+        showContactSuggestions = false;
     }
 
-    private void SelectPatientFromSuggestion(Registration patient)
+    [JSInvokable]
+    public async Task LoadMoreDoctorsFromJs()
     {
-        editor.PatientID = patient.PatientID;
-        editor.PatientName = patient.Name;
-        editor.Sex = patient.Sex;
-        editor.Contact = patient.Contact;
-        PatientSelection.Select(patient.PatientID);
-        if (patient.DateOfBirth.HasValue)
-        {
-            var years = DateTime.Today.Year - patient.DateOfBirth.Value.Year;
-            editor.Age = $"{Math.Max(0, years)}Y";
-        }
-        else
-        {
-            editor.Age = string.Empty;
-        }
-        showPatientIdSuggestions = false;
-        message = "";
+        if (!hasMoreDoctorSuggestions) return;
+        visibleDoctorCount += DoctorBatchSize;
+        await InvokeAsync(StateHasChanged);
     }
 
     private void HandleDoctorSearchInput(ChangeEventArgs e)
     {
         doctorSearchQuery = e.Value?.ToString() ?? string.Empty;
         editor.DoctorID = null;
+        visibleDoctorCount = DoctorBatchSize;
         showDoctorSuggestions = true;
     }
 
-    private void ShowDoctorSuggestions() => showDoctorSuggestions = true;
+    private void ShowDoctorSuggestions()
+    {
+        visibleDoctorCount = DoctorBatchSize;
+        showDoctorSuggestions = true;
+    }
 
     private async Task HideDoctorSuggestionsAsync()
     {
@@ -1254,6 +1885,7 @@
     {
         editor.DoctorID = null;
         doctorSearchQuery = string.Empty;
+        visibleDoctorCount = DoctorBatchSize;
         showDoctorSuggestions = false;
     }
 
@@ -1286,30 +1918,25 @@
         }
     }
 
+    private async Task SelectPatientFromSuggestionAsync(Registration patient)
+    {
+        showPatientIdSuggestions = false;
+        await SmartSearchPatientAsync(patient.PatientID);
+    }
+
+    private void SelectPatientFromSuggestion(Registration patient)
+    {
+        _ = SelectPatientFromSuggestionAsync(patient);
+    }
+
     private async Task LoadPatientAsync()
     {
-        if (isIpdMode)
-        {
-            await LoadAdmissionAsync();
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
-        var lookup = editor.PatientID.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup || x.Contact == lookup);
-        if (p is null && lookup.StartsWith("0") && lookup.Length >= 10)
-        {
-            var withoutZero = lookup[1..];
-            p = await db.Registrations.AsNoTracking().Where(x => x.Contact != null && x.Contact.EndsWith(withoutZero)).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
-        }
-        if (p != null)
-        {
-            SelectPatientFromSuggestion(p);
-        }
-        else
-        {
-            Fail(I18n.IsBangla ? "পেশেন্ট আইডি পাওয়া যায়নি।" : "Registered patient ID not found. Enter walk-in details.");
-        }
+        var lookup = !string.IsNullOrWhiteSpace(editor.PatientID)
+            ? editor.PatientID.Trim()
+            : (!string.IsNullOrWhiteSpace(editor.RegNo) ? editor.RegNo.Trim() : "");
+
+        if (string.IsNullOrWhiteSpace(lookup)) return;
+        await SmartSearchPatientAsync(lookup);
     }
 
     private async Task HandleContactKeyDown(KeyboardEventArgs e)
@@ -1323,23 +1950,7 @@
     private async Task LoadPatientByContactAsync()
     {
         if (string.IsNullOrWhiteSpace(editor.Contact)) return;
-        var lookup = editor.Contact.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.Contact == lookup);
-        if (p is null && lookup.StartsWith("0") && lookup.Length >= 10)
-        {
-            var withoutZero = lookup[1..];
-            p = await db.Registrations.AsNoTracking().Where(x => x.Contact != null && x.Contact.EndsWith(withoutZero)).OrderByDescending(x => x.ID).FirstOrDefaultAsync();
-        }
-        if (p != null)
-        {
-            SelectPatientFromSuggestion(p);
-            Success(I18n.IsBangla ? $"মোবাইল নম্বর অনুযায়ী রোগী {p.Name} লোড হয়েছে।" : $"Patient {p.Name} loaded by contact.");
-        }
-        else
-        {
-            Fail(I18n.IsBangla ? "এই মোবাইল নম্বরে কোনো নিবন্ধিত রোগী পাওয়া যায়নি।" : "No registered patient found with this contact number.");
-        }
+        await SmartSearchPatientAsync(editor.Contact.Trim());
     }
 
     private async Task HandleIpdRegKeyDown(KeyboardEventArgs e)
@@ -1349,38 +1960,181 @@
 
     private async Task LoadAdmissionAsync()
     {
-        if (string.IsNullOrWhiteSpace(editor.RegNo)) return;
-        var lookup = editor.RegNo.Trim();
+        var lookup = !string.IsNullOrWhiteSpace(editor.RegNo)
+            ? editor.RegNo.Trim()
+            : (!string.IsNullOrWhiteSpace(editor.PatientID) ? editor.PatientID.Trim() : "");
+
+        if (string.IsNullOrWhiteSpace(lookup)) return;
+        await SmartSearchPatientAsync(lookup);
+    }
+
+    private async Task SmartSearchPatientAsync(string lookup)
+    {
+        if (string.IsNullOrWhiteSpace(lookup)) return;
+        lookup = lookup.Trim();
+
         await using var db = await DbFactory.CreateDbContextAsync();
-        var admission = await db.PatientAdmissions.AsNoTracking()
+
+        // 1. First check if there is an ACTIVE IPD admission by PatientID or RegNo
+        var activeAdmission = await db.PatientAdmissions.AsNoTracking()
             .OrderByDescending(x => x.AdmissionDate)
-            .FirstOrDefaultAsync(x => x.RegNo == lookup || x.PatientID == lookup);
-        if (admission is null)
+            .FirstOrDefaultAsync(x => x.PatientID == lookup && x.IsAdmitted == true);
+
+        if (activeAdmission == null)
         {
-            Fail(I18n.IsBangla ? "সক্রিয় আইপিডি ভর্তি পাওয়া যায়নি।" : "IPD admission was not found.");
-            return;
+            activeAdmission = await db.PatientAdmissions.AsNoTracking()
+                .OrderByDescending(x => x.AdmissionDate)
+                .FirstOrDefaultAsync(x => x.RegNo == lookup && x.IsAdmitted == true);
         }
-        if (admission.IsAdmitted != true)
+
+        Registration? p = null;
+
+        if (activeAdmission != null)
         {
-            Fail(I18n.IsBangla ? "এই রোগী বর্তমানে ভর্তি নেই।" : "This patient is not currently admitted.");
+            if (!string.IsNullOrWhiteSpace(activeAdmission.PatientID))
+            {
+                p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == activeAdmission.PatientID);
+            }
+        }
+        else
+        {
+            // Search Registration by PatientID first (direct seek), then by Contact
+            p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup);
+            if (p == null)
+            {
+                p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.Contact == lookup);
+            }
+
+            if (p is null && lookup.StartsWith("0") && lookup.Length >= 10)
+            {
+                var withoutZero = lookup[1..];
+                p = await db.Registrations.AsNoTracking()
+                    .Where(x => x.Contact != null && x.Contact.EndsWith(withoutZero))
+                    .OrderByDescending(x => x.ID)
+                    .FirstOrDefaultAsync();
+            }
+
+            // If patient was found, check if this patient has an active admission in IPD!
+            if (p != null && !string.IsNullOrWhiteSpace(p.PatientID))
+            {
+                activeAdmission = await db.PatientAdmissions.AsNoTracking()
+                    .OrderByDescending(x => x.AdmissionDate)
+                    .FirstOrDefaultAsync(x => x.PatientID == p.PatientID && x.IsAdmitted == true);
+            }
+        }
+
+        // === CASE A: PATIENT IS CURRENTLY ADMITTED IN IPD! ===
+        if (activeAdmission != null)
+        {
+            if (canAccessIpd)
+            {
+                currentPatientType = "2";
+                editor.PatientType = "2";
+                editor.RegNo = activeAdmission.RegNo;
+                editor.PatientID = activeAdmission.PatientID ?? p?.PatientID ?? lookup;
+                editor.PatientName = p?.Name ?? editor.PatientName;
+                editor.Sex = p?.Sex ?? editor.Sex;
+                editor.Contact = p?.Contact ?? editor.Contact;
+
+                if (p?.DateOfBirth.HasValue == true)
+                {
+                    var years = DateTime.Today.Year - p.DateOfBirth.Value.Year;
+                    editor.Age = $"{Math.Max(0, years)}Y";
+                }
+                else if (!string.IsNullOrWhiteSpace(activeAdmission.Age))
+                {
+                    editor.Age = activeAdmission.Age;
+                }
+
+                var bed = activeAdmission.BedCabinID.HasValue
+                    ? await db.BedCabins.AsNoTracking().FirstOrDefaultAsync(x => x.ID == activeAdmission.BedCabinID.Value)
+                    : null;
+                editor.Bed = bed?.Name;
+                editor.DoctorID = activeAdmission.Consultant ?? activeAdmission.ReferredBy ?? editor.DoctorID;
+                SyncDoctorSearchFromSelection();
+
+                PatientSelection.Select(editor.PatientID);
+                RecalculateTotals();
+                showPatientIdSuggestions = false;
+
+                Success(I18n.IsBangla
+                    ? $"🛏️ রোগী বর্তমানে আইপিডি-তে ভর্তি রয়েছেন (রেজি: {activeAdmission.RegNo}, কেবিন/বেড: {editor.Bed ?? "N/A"})"
+                    : $"🛏️ Patient is currently admitted in IPD (Reg: {activeAdmission.RegNo}, Bed: {editor.Bed ?? "N/A"})");
+                return;
+            }
+            else
+            {
+                // Patient has admission record, but current user / counter has NO IPD access -> Stay in OPD mode!
+                currentPatientType = "1";
+                editor.PatientType = "1";
+                editor.RegNo = null;
+                editor.Bed = null;
+                editor.PatientID = activeAdmission.PatientID ?? p?.PatientID ?? lookup;
+                editor.PatientName = p?.Name ?? editor.PatientName;
+                editor.Sex = p?.Sex ?? editor.Sex;
+                editor.Contact = p?.Contact ?? editor.Contact;
+
+                if (p?.DateOfBirth.HasValue == true)
+                {
+                    var years = DateTime.Today.Year - p.DateOfBirth.Value.Year;
+                    editor.Age = $"{Math.Max(0, years)}Y";
+                }
+                else if (!string.IsNullOrWhiteSpace(activeAdmission.Age))
+                {
+                    editor.Age = activeAdmission.Age;
+                }
+
+                editor.DoctorID = activeAdmission.Consultant ?? activeAdmission.ReferredBy ?? editor.DoctorID;
+                SyncDoctorSearchFromSelection();
+
+                PatientSelection.Select(editor.PatientID);
+                RecalculateTotals();
+                showPatientIdSuggestions = false;
+
+                Success(I18n.IsBangla
+                    ? $"ℹ️ রোগী আইপিডি-তে ভর্তি (রেজি: {activeAdmission.RegNo}), তবে আইপিডি মডিউল অ্যাক্সেস না থাকায় ওপিডি মোডে লোড হয়েছে।"
+                    : $"ℹ️ Patient is in IPD (Reg: {activeAdmission.RegNo}), loaded as OPD since IPD module access is disabled.");
+                return;
+            }
+        }
+
+        // === CASE B: PATIENT IS OPD (NOT ADMITTED) ===
+        if (p != null)
+        {
+            currentPatientType = "1";
+            editor.PatientType = "1";
+            editor.RegNo = null;
+            editor.Bed = null;
+
+            editor.PatientID = p.PatientID;
+            editor.PatientName = p.Name;
+            editor.Sex = p.Sex;
+            editor.Contact = p.Contact;
+
+            if (p.DateOfBirth.HasValue)
+            {
+                var years = DateTime.Today.Year - p.DateOfBirth.Value.Year;
+                editor.Age = $"{Math.Max(0, years)}Y";
+            }
+            else
+            {
+                editor.Age = string.Empty;
+            }
+
+            PatientSelection.Select(p.PatientID);
+            RecalculateTotals();
+            showPatientIdSuggestions = false;
+
+            Success(I18n.IsBangla
+                ? $"🏥 বহির্বিভাগ (OPD) রোগী {p.Name} লোড হয়েছে — ওপিডি বিলিং সক্রিয়।"
+                : $"🏥 OPD Patient {p.Name} loaded — OPD billing active.");
             return;
         }
 
-        var patient = string.IsNullOrWhiteSpace(admission.PatientID) ? null :
-            await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == admission.PatientID);
-        var bed = admission.BedCabinID.HasValue ? await db.BedCabins.AsNoTracking().FirstOrDefaultAsync(x => x.ID == admission.BedCabinID.Value) : null;
-        editor.RegNo = admission.RegNo;
-        editor.PatientID = admission.PatientID;
-        editor.PatientName = patient?.Name ?? editor.PatientName;
-        editor.Age = admission.Age ?? editor.Age;
-        editor.Sex = patient?.Sex ?? editor.Sex;
-        editor.Contact = patient?.Contact;
-        editor.Bed = bed?.Name;
-        editor.DoctorID = admission.Consultant ?? admission.ReferredBy;
-        SyncDoctorSearchFromSelection();
-        editor.PatientType = "2";
-        PatientSelection.Select(admission.PatientID);
-        Success(I18n.IsBangla ? $"আইপিডি ভর্তি {admission.RegNo} লোড হয়েছে।" : $"IPD admission {admission.RegNo} loaded.");
+        // === CASE C: NOT FOUND ===
+        Fail(I18n.IsBangla
+            ? "কোনো নিবন্ধিত রোগী বা সক্রিয় আইপিডি ভর্তি রেকর্ড পাওয়া যায়নি।"
+            : "No registered patient or active IPD admission record found.");
     }
 
     private void SelectSex(string sex)
@@ -1737,8 +2491,14 @@
                     db.EmergencyMemoItems.RemoveRange(existing.Items);
                     foreach (var item in editor.Items)
                     {
-                        item.MemoID = existing.ID;
-                        db.EmergencyMemoItems.Add(item);
+                        db.EmergencyMemoItems.Add(new CashMemoSubDInvestigation
+                        {
+                            MemoID = existing.ID,
+                            SLNo = item.SLNo,
+                            TestID = item.TestID,
+                            Rate = item.Rate,
+                            Quantity = item.Quantity
+                        });
                     }
 
                     var orderedServiceIds = editor.Items.Select(x => x.TestID).Distinct().ToHashSet();
@@ -1806,7 +2566,11 @@
         }
         catch (Exception ex)
         {
-            Fail(I18n.IsBangla ? $"মেমো সংরক্ষণ করা যায়নি: {ex.GetBaseException().Message}" : $"Could not save memo: {ex.GetBaseException().Message}");
+            var baseMsg = ex.GetBaseException().Message;
+            var friendlyMsg = I18n.IsBangla
+                ? "বিল সংরক্ষণ বা আপডেট করার সময় সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।"
+                : "Could not save or update diagnostic bill. Please check details and try again.";
+            Fail(friendlyMsg, baseMsg, I18n.IsBangla ? "বিল সংরক্ষণ ত্রুটি" : "Bill Save Error");
             return false;
         }
         finally
@@ -1937,8 +2701,6 @@
 
     private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "diagnostic-print");
 
-    private async Task PrintTubeLabelsAsync() => await JS.InvokeVoidAsync("hpm.printElement", "tube-label-print");
-
     private async Task HandleDiagScanKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter")
@@ -2052,6 +2814,7 @@
         highlightedTestIndex = 0;
         doctorSearchQuery = string.Empty;
         showDoctorSuggestions = false;
+        visibleDoctorCount = DoctorBatchSize;
         itemRate = 0;
         itemQty = 1;
         discountPercent = 0;
@@ -2074,19 +2837,16 @@
 
     private async Task SetPatientTypeAsync(string type)
     {
-        if (currentPatientType == type) return;
-        if (HasModeSwitchData())
+        if (type == "2" && !canAccessIpd)
         {
-            var destination = type == "2" ? I18n.T("Charge to IPD") : I18n.T("OPD Billing");
-            var confirmMessage = I18n.IsBangla
-                ? $"বিলিং টাইপ {destination}-এ বদলালে বর্তমান ফর্মের রোগী, টেস্ট ও অসংরক্ষিত তথ্য মুছে যাবে। চালিয়ে যাবেন?"
-                : $"Switching to {destination} will clear the current patient, tests, and unsaved form data. Continue?";
-            if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMessage)) return;
+            Fail(I18n.IsBangla ? "আইপিডি সার্ভিস মডিউলের অ্যাক্সেস নেই।" : "IPD service module access is not granted.");
+            return;
         }
+        if (currentPatientType == type) return;
         currentPatientType = type;
-        NavigationManager.NavigateTo($"/diagnostic/billing?patientType={(type == "2" ? "IPD" : "OPD")}", replace: false);
-        Reset();
-        await LoadAsync();
+        editor.PatientType = type;
+        RecalculateTotals();
+        StateHasChanged();
     }
 
     private bool HasModeSwitchData() =>
@@ -2104,17 +2864,109 @@
         var s = availableServices.FirstOrDefault(x => x.ID == id);
         return !string.IsNullOrWhiteSpace(s?.Name) ? s.Name : $"Test #{id}";
     }
+    private string printLayout = "A5";
+
+    private string DoctorFormatted(int? id)
+    {
+        var d = doctors.FirstOrDefault(x => x.ID == id);
+        if (d == null) return I18n.IsBangla ? "সেলফ / সাধারণ ডাক্তার" : "Self / OPD Doctor";
+        var code = $"(D{d.ID:D4})";
+        var degree = !string.IsNullOrWhiteSpace(d.Degree) ? $", {d.Degree}" : "";
+        var titleName = string.Join(" ", new[] { d.Title, d.Name }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        return $"{code} {titleName}{degree}";
+    }
+
+    private string currentUserDisplayName = "";
+
+    private string GetCashierName()
+    {
+        if (editor.ID > 0 && editor.EnteredBy > 0)
+        {
+            var u = authorizers.FirstOrDefault(x => x.Id == editor.EnteredBy);
+            if (u != null && !string.IsNullOrWhiteSpace(u.DisplayName)) return u.DisplayName;
+            if (u != null && !string.IsNullOrWhiteSpace(u.UserName)) return u.UserName;
+        }
+        return !string.IsNullOrWhiteSpace(currentUserDisplayName) ? currentUserDisplayName : "System User";
+    }
+
+    private string GetExpectedDelivery(DateTime transDate, int testId = 0)
+    {
+        var s = availableServices.FirstOrDefault(x => x.ID == testId);
+        if (s?.DeliveryHours is > 0)
+        {
+            var target = transDate.AddHours(s.DeliveryHours.Value);
+            return target.ToString("dd/MM/yy hh:mm tt");
+        }
+
+        var defaultDelivery = transDate.Hour < 14
+            ? transDate.Date.AddHours(19)
+            : transDate.Date.AddDays(1).AddHours(19);
+        return defaultDelivery.ToString("dd/MM/yy hh:mm tt");
+    }
+
     private string DoctorName(int? id)
     {
         var d = doctors.FirstOrDefault(x => x.ID == id);
         return d == null ? (I18n.IsBangla ? "সাধারণ / ডিউটি ডাক্তার" : "Self / OPD Doctor") : $"{d.Title} {d.Name}";
     }
 
-    private void Success(string text) { messageClass = "success"; message = text; }
-    private void Fail(string text) { messageClass = "danger"; message = text; }
+    private void Success(string text)
+    {
+        messageClass = "success";
+        message = text;
+        alertModalMessage = text;
+        alertModalType = "success";
+        alertModalTitle = I18n.IsBangla ? "বিজ্ঞপ্তি / সফল বার্তা" : "Notice / Success";
+    }
+
+    private bool showAlertModal;
+    private string alertModalTitle = "বিজ্ঞপ্তি / সফল বার্তা";
+    private string alertModalMessage = "";
+    private string? alertModalDetails;
+    private string alertModalType = "success";
+
+    private void ShowInlineAlertModal()
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        alertModalMessage = message;
+        if (messageClass.Contains("danger"))
+        {
+            alertModalType = "danger";
+            alertModalTitle = I18n.IsBangla ? "সতর্কতা / ত্রুটি" : "System Alert / Error";
+        }
+        else if (messageClass.Contains("warning"))
+        {
+            alertModalType = "warning";
+            alertModalTitle = I18n.IsBangla ? "সতর্কবার্তা" : "Warning";
+        }
+        else
+        {
+            alertModalType = "success";
+            alertModalTitle = I18n.IsBangla ? "বিজ্ঞপ্তি / সফল বার্তা" : "Notice / Success";
+        }
+        showAlertModal = true;
+    }
+
+    private void Fail(string text, string? details = null, string? title = null)
+    {
+        messageClass = "danger";
+        message = text;
+        alertModalTitle = title ?? (I18n.IsBangla ? "সতর্কতা / ত্রুটি" : "System Alert / Error");
+        alertModalMessage = text;
+        alertModalDetails = details;
+        alertModalType = "danger";
+        showAlertModal = true;
+    }
+
+    private void CloseAlertModal()
+    {
+        showAlertModal = false;
+        alertModalDetails = null;
+    }
 
     public void Dispose()
     {
+        dotNetRef?.Dispose();
         I18n.OnLanguageChanged -= HandleLanguageChanged;
     }
 }

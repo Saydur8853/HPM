@@ -154,6 +154,10 @@ await using (var scope = app.Services.CreateAsyncScope())
             BEGIN
                 ALTER TABLE [Doctors_Profile] ADD [Off_Day] nvarchar(100) NULL;
             END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'Delivery_Hours')
+            BEGIN
+                ALTER TABLE [Service] ADD [Delivery_Hours] int NULL;
+            END
         """;
         await db.Database.ExecuteSqlRawAsync(patientColSql);
 

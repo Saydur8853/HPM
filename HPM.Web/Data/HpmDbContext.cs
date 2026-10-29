@@ -621,6 +621,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.SupplierID).HasColumnName("Supplier_ID");
         service.Property(x => x.InvestigationModuleID).HasColumnName("Investigation_Module_ID");
         service.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(20);
+        service.Property(x => x.DeliveryHours).HasColumnName("Delivery_Hours");
 
         department.HasData(
             new Department { ID = 1, Name = "Emergency" },
