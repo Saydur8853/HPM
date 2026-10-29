@@ -7,7 +7,7 @@ public sealed class Registration
     public long ID { get; set; }
     [Required, StringLength(11)] public string PatientID { get; set; } = string.Empty;
     [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
-    public DateTime DateOfBirth { get; set; } = DateTime.Today;
+    public DateTime? DateOfBirth { get; set; }
     [Required, StringLength(10)] public string Sex { get; set; } = string.Empty;
     [StringLength(10)] public string? BloodGroup { get; set; }
     [StringLength(20)] public string? Weight { get; set; }
@@ -156,6 +156,8 @@ public sealed class DoctorsProfile
     public int? ReferralCategoryID { get; set; }
     public bool IsActive { get; set; } = true;
     public int? Priority { get; set; }
+    [StringLength(100)] public string? ConsultationTime { get; set; }
+    [StringLength(100)] public string? OffDay { get; set; } = "Friday";
 }
 
 public sealed class Department
@@ -200,4 +202,5 @@ public sealed class Service
     public int? SupplierID { get; set; }
     public int? InvestigationModuleID { get; set; }
     public string? DiagnosticType { get; set; }
+    public int? DeliveryHours { get; set; }
 }

@@ -45,7 +45,7 @@ public sealed class HospitalProfile
     public string? ReceiptHeaderNote { get; set; } = "";
 
     [StringLength(500)]
-    public string? ReceiptFooterNote { get; set; } = "Computer generated clinical document. Valid without physical signature.";
+    public string? ReceiptFooterNote { get; set; } = "";
 
     public bool IsSetupComplete { get; set; }
     public DateTime? SetupCompletedAt { get; set; }

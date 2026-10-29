@@ -37,6 +37,7 @@ public static class ModuleAccess
     public static readonly string[] OpdGroup = Union(PatientRegistration, Appointments, OpdTickets, EmergencyServices, OtCashMemos);
     public static readonly string[] IpdGroup = Union(IpdAdmissions, IpdOccupancy, IpdMoneyReceipts, IpdPatientServices, IpdBilling, IpdMedicalDischarge);
     public static readonly string[] DiagnosticGroup = Union(DiagnosticBilling, DiagnosticWorklist, DiagnosticResults);
+    public static readonly string[] DoctorGroup = Union(DoctorQueue, PharmacyPrescriptions, AdministratorOnly);
     public static readonly string[] MedicalGroup = Union(DoctorQueue, PharmacyPrescriptions, DiagnosticBilling, OtCashMemos);
     public static readonly string[] PharmacyGroup = Union(PharmacyPos, PharmacyPurchases, PharmacyReturns, PharmacyPrescriptions, PharmacyStock);
 

@@ -16,6 +16,35 @@ public sealed class MigrationVerificationTests
     }
 
     [Fact]
+    public async Task Find_P2610280001_Bill()
+    {
+        var connStr = "Server=np:\\\\.\\pipe\\MSSQL$HPMDB\\sql\\query;Database=HPM_Web;Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connect Timeout=30";
+        using var conn = new Microsoft.Data.SqlClient.SqlConnection(connStr);
+        await conn.OpenAsync();
+        using var cmd = conn.CreateCommand();
+
+        // 1. Check all tables with count of rows
+        cmd.CommandText = "SELECT COUNT(*) FROM Cash_Memo_DInvestigation";
+        var dInvCount = await cmd.ExecuteScalarAsync();
+        _output.WriteLine($"Cash_Memo_DInvestigation count: {dInvCount}");
+
+        cmd.CommandText = "SELECT COUNT(*) FROM Cash_Memo_Sub_DInvestigation";
+        var dInvSubCount = await cmd.ExecuteScalarAsync();
+        _output.WriteLine($"Cash_Memo_Sub_DInvestigation count: {dInvSubCount}");
+
+        cmd.CommandText = "SELECT COUNT(*) FROM Lab_Sample_Collection";
+        var sampleCount = await cmd.ExecuteScalarAsync();
+        _output.WriteLine($"Lab_Sample_Collection count: {sampleCount}");
+
+        cmd.CommandText = "SELECT Memo_ID, Service_ID, Status FROM Lab_Sample_Collection";
+        using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            _output.WriteLine($"Sample: Memo_ID={r[0]}, Service_ID={r[1]}, Status={r[2]}");
+        }
+    }
+
+    [Fact]
     public async Task Verify_All_Migrated_Data_Integrity()
     {
         var connStr = "Server=np:\\\\.\\pipe\\MSSQL$HPMDB\\sql\\query;Database=HPM_Web;Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False;Connect Timeout=60";

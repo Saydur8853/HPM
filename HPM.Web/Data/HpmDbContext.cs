@@ -343,7 +343,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.PatientID).HasColumnName("Patient_ID").HasMaxLength(11);
         e.HasIndex(x => x.PatientID).IsUnique();
         e.Property(x => x.Name).HasMaxLength(100);
-        e.Property(x => x.DateOfBirth).HasColumnName("Date_Of_Birth").HasColumnType("datetime");
+        e.Property(x => x.DateOfBirth).HasColumnName("Date_Of_Birth").HasColumnType("datetime").IsRequired(false);
         e.Property(x => x.Sex).HasMaxLength(10);
         e.Property(x => x.BloodGroup).HasColumnName("Blood_Group").HasMaxLength(10);
         e.Property(x => x.Weight).HasColumnName("Weight").HasMaxLength(20);
@@ -579,6 +579,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         doctor.Property(x => x.ReferralCategoryID).HasColumnName("Referral_Category_ID");
         doctor.Property(x => x.IsActive).HasColumnName("Is_Active").HasDefaultValue(true);
         doctor.Property(x => x.Priority).HasColumnName("Priority");
+        doctor.Property(x => x.ConsultationTime).HasColumnName("Consultation_Time").HasMaxLength(100);
+        doctor.Property(x => x.OffDay).HasColumnName("Off_Day").HasMaxLength(100);
 
         var department = b.Entity<Department>();
         department.ToTable("Department");
@@ -622,6 +624,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.SupplierID).HasColumnName("Supplier_ID");
         service.Property(x => x.InvestigationModuleID).HasColumnName("Investigation_Module_ID");
         service.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(20);
+        service.Property(x => x.DeliveryHours).HasColumnName("Delivery_Hours");
 
         department.HasData(
             new Department { ID = 1, Name = "Emergency" },

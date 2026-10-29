@@ -592,6 +592,38 @@ window.hpm = {
         }
     },
 
+    downloadLabReportPdf: async function (containerId, fileName) {
+        const source = document.getElementById(containerId);
+        if (!source) return;
+        const sheet = source.querySelector('.delta-report-sheet') || source.querySelector('.clinical-report-sheet') || source;
+        if (!window.html2canvas || !window.jspdf) {
+            this.printElement(containerId, fileName);
+            return;
+        }
+        try {
+            const canvas = await window.html2canvas(sheet, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false
+            });
+            const imgData = canvas.toDataURL('image/png');
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF({
+                orientation: 'portrait',
+                unit: 'mm',
+                format: 'a4'
+            });
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, Math.min(pdfHeight, pdf.internal.pageSize.getHeight()));
+            pdf.save((fileName || 'Lab_Report') + '.pdf');
+        } catch (e) {
+            console.error('Lab report PDF export failed, falling back to print:', e);
+            this.printElement(containerId, fileName);
+        }
+    },
+
     printPatientWristband: function (elementId, title) {
         const source = document.getElementById(elementId);
         if (!source) return;
@@ -899,11 +931,39 @@ window.hpm = {
         frame.style.border = '0';
         document.body.appendChild(frame);
         const printWindow = frame.contentWindow;
-        const isThermal = elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm'));
+        const isTubeLabel = elementId === 'sample-sticker-print' || elementId === 'tube-label-print' || elementId === 'imaging-tag-print' || (source && (source.classList.contains('specimen-tube-label') || source.classList.contains('tube-labels-container') || source.classList.contains('sample-sticker-label') || source.classList.contains('imaging-study-tag')));
+        const isThermal = !isTubeLabel && (elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm')));
+        const isA5 = !isTubeLabel && ((source && (source.classList.contains('a5-memo-sheet') || source.classList.contains('print-a5-sheet'))) || (elementId === 'diagnostic-print' && source && !source.classList.contains('print-a4-sheet')));
         printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title>
         <link rel="stylesheet" href="/app.css">
         <style>
-            ${isThermal ? `
+            ${isTubeLabel ? `
+            @page { size: 40mm 20mm; margin: 0; }
+            * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            html, body {
+                width: 40mm !important;
+                height: 20mm !important;
+                max-width: 40mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-family: Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+                font-size: 7px !important;
+                background: #ffffff !important;
+                color: #000000 !important;
+            }
+            .sample-sticker-label, .specimen-tube-label {
+                width: 40mm !important;
+                height: 20mm !important;
+                margin: 0 auto !important;
+                padding: 1.2mm 1.5mm !important;
+                border: none !important;
+                display: flex !important;
+                flex-direction: column !important;
+                justify-content: space-between !important;
+                overflow: hidden !important;
+                box-sizing: border-box !important;
+            }
+            ` : isThermal ? `
             @page { size: 80mm auto; margin: 3mm 2mm; }
             * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             html, body {
@@ -924,6 +984,33 @@ window.hpm = {
                 border: none !important;
             }
             .pos-receipt-80mm table { width: 100% !important; font-size: 10.5px !important; }
+            ` : isA5 ? `
+            @page { size: A5 portrait; margin: 4mm 6mm; }
+            * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            html, body {
+                background: #ffffff !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-family: Arial, 'Helvetica Neue', Helvetica, 'Segoe UI', sans-serif !important;
+                font-size: 10px !important;
+                color: #0f172a !important;
+                width: 100% !important;
+                max-width: 136mm !important;
+                margin: 0 auto !important;
+            }
+            body {
+                display: block !important;
+                padding: 2mm 0 !important;
+            }
+            .a5-memo-sheet {
+                width: 100% !important;
+                max-width: 136mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                box-shadow: none !important;
+                border: none !important;
+                min-height: auto !important;
+            }
             ` : `
             @page { size: A4 portrait; margin: 8mm 10mm 10mm 10mm; }
             * { box-sizing: border-box !important; print-color-adjust: exact !important; }
@@ -943,8 +1030,24 @@ window.hpm = {
                 min-height: 100%;
             }
             `}
+            ${!isA5 ? `
             .print-document, .print-sheet, .clinical-report-sheet, .a4-page-sheet { 
                 width: 100% !important; 
+                max-width: 100% !important; 
+                min-height: 260mm !important; 
+                box-shadow: none !important; 
+                border: none !important; 
+                padding: 0 !important; 
+                background: #ffffff !important; 
+                display: flex !important; 
+                flex-direction: column !important; 
+                justify-content: space-between !important; 
+                flex: 1 0 auto !important; 
+                box-sizing: border-box !important; 
+            }
+            ` : ''}
+            /* fallback */
+            .dummy-placeholder { width: 100% !important; 
                 max-width: 100% !important; 
                 min-height: 260mm !important; 
                 box-shadow: none !important; 
@@ -963,7 +1066,7 @@ window.hpm = {
                 padding-top: 24px !important;
             }
             button, .btn, .no-print { display: none !important; }
-        </style></head><body>${source.innerHTML}</body></html>`);
+        </style></head><body>${source.outerHTML}</body></html>`);
         printWindow.document.close();
         
         const cleanup = () => {
@@ -1131,6 +1234,159 @@ window.hpm = {
             printWindow.print();
             setTimeout(cleanup, 60000);
         }, 350);
+    },
+
+    initDoctorInfiniteScroll: function (containerId, listId, dotNetRef) {
+        this._doctorScrollDotNetRef = dotNetRef;
+        this._doctorSearchContainerId = containerId;
+        this._doctorSuggestionsListId = listId;
+
+        if (!this._doctorOutsideClickHandler) {
+            this._doctorOutsideClickHandler = (event) => {
+                const container = document.getElementById(this._doctorSearchContainerId);
+                const list = document.getElementById(this._doctorSuggestionsListId);
+                if (!container || !list) return;
+                const target = event.target instanceof Element ? event.target : (event.target ? event.target.parentElement : null);
+                if (target && container.contains(target)) {
+                    return;
+                }
+                if (this._doctorScrollDotNetRef) {
+                    this._doctorScrollDotNetRef.invokeMethodAsync('CloseDoctorSuggestionsFromJs').catch(() => {});
+                }
+            };
+            document.addEventListener('pointerdown', this._doctorOutsideClickHandler, true);
+        }
+
+        const listEl = document.getElementById(listId);
+        if (listEl && !listEl._hpmScrollAttached) {
+            listEl._hpmScrollAttached = true;
+            listEl.addEventListener('scroll', () => {
+                if (listEl._hpmLoadingMore) return;
+                const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+                if (remaining <= 70) {
+                    listEl._hpmLoadingMore = true;
+                    if (this._doctorScrollDotNetRef) {
+                        this._doctorScrollDotNetRef.invokeMethodAsync('LoadMoreDoctorsFromJs')
+                            .catch(() => {})
+                            .finally(() => {
+                                listEl._hpmLoadingMore = false;
+                            });
+                    } else {
+                        listEl._hpmLoadingMore = false;
+                    }
+                }
+            }, { passive: true });
+        }
+    },
+
+    resetDoctorScrollTop: function (listId) {
+        const listEl = document.getElementById(listId);
+        if (listEl) {
+            listEl.scrollTop = 0;
+            listEl._hpmLoadingMore = false;
+        }
+    },
+
+    disposeDoctorInfiniteScroll: function () {
+        if (this._doctorOutsideClickHandler) {
+            document.removeEventListener('pointerdown', this._doctorOutsideClickHandler, true);
+            this._doctorOutsideClickHandler = null;
+        }
+        this._doctorScrollDotNetRef = null;
+    },
+
+    initPatientIdScroll: function (listId, dotNetRef, methodName) {
+        const listEl = document.getElementById(listId);
+        if (!listEl) return;
+        if (listEl._hpmPatientScrollAttached) return;
+        listEl._hpmPatientScrollAttached = true;
+        listEl.addEventListener('scroll', () => {
+            if (listEl._hpmPatientLoadingMore) return;
+            const remaining = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight;
+            if (remaining <= 80) {
+                listEl._hpmPatientLoadingMore = true;
+                if (dotNetRef) {
+                    dotNetRef.invokeMethodAsync(methodName || 'LoadMorePatientsFromJs')
+                        .catch(() => {})
+                        .finally(() => {
+                            setTimeout(() => {
+                                listEl._hpmPatientLoadingMore = false;
+                            }, 150);
+                        });
+                } else {
+                    listEl._hpmPatientLoadingMore = false;
+                }
+            }
+        }, { passive: true });
+    },
+
+    resetPatientIdScrollTop: function (listId) {
+        const listEl = document.getElementById(listId);
+        if (listEl) {
+            listEl.scrollTop = 0;
+            listEl._hpmPatientLoadingMore = false;
+        }
+    },
+
+    initTableAutoScroll: function (elementId, dotNetRef, methodName) {
+        var attach = function () {
+            var el = document.getElementById(elementId);
+            if (!el) {
+                setTimeout(function () {
+                    var retryEl = document.getElementById(elementId);
+                    if (retryEl && dotNetRef) {
+                        window.hpm.initTableAutoScroll(elementId, dotNetRef, methodName);
+                    }
+                }, 150);
+                return;
+            }
+
+            if (el._hpmTableScrollHandler) {
+                el.removeEventListener('scroll', el._hpmTableScrollHandler);
+            }
+
+            el._hpmTableScrollLoading = false;
+            el._hpmTableScrollHandler = function () {
+                if (el._hpmTableScrollLoading) return;
+                var remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+                if (remaining <= 120) {
+                    el._hpmTableScrollLoading = true;
+                    dotNetRef.invokeMethodAsync(methodName || 'LoadNextPageFromScroll')
+                        .then(function () {
+                            setTimeout(function () {
+                                el._hpmTableScrollLoading = false;
+                            }, 250);
+                        })
+                        .catch(function () {
+                            el._hpmTableScrollLoading = false;
+                        });
+                }
+            };
+
+            el.addEventListener('scroll', el._hpmTableScrollHandler, { passive: true });
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', attach, { once: true });
+        } else {
+            attach();
+        }
+    },
+
+    disposeTableAutoScroll: function (elementId) {
+        var el = document.getElementById(elementId);
+        if (el && el._hpmTableScrollHandler) {
+            el.removeEventListener('scroll', el._hpmTableScrollHandler);
+            el._hpmTableScrollHandler = null;
+            el._hpmTableScrollLoading = false;
+        }
+    },
+
+    scrollElementToTop: function (elementId) {
+        var el = document.getElementById(elementId);
+        if (el) {
+            el.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     }
 };
 

@@ -26,7 +26,7 @@ public sealed class HospitalSetupService(
     public string LogoData { get; private set; } = "";
     public string LabHeaderDept { get; private set; } = "Department of Pathology, Diagnostic & Laboratory Medicine";
     public string ReceiptHeaderNote { get; private set; } = "";
-    public string ReceiptFooterNote { get; private set; } = "Computer generated clinical document. Valid without physical signature.";
+    public string ReceiptFooterNote { get; private set; } = "";
     public bool IsSetupComplete { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
     public string? UpdatedBy { get; private set; }
@@ -106,7 +106,7 @@ public sealed class HospitalSetupService(
         LogoData = profile?.LogoData ?? "";
         LabHeaderDept = string.IsNullOrWhiteSpace(profile?.LabHeaderDept) ? "Department of Pathology, Diagnostic & Laboratory Medicine" : profile.LabHeaderDept;
         ReceiptHeaderNote = profile?.ReceiptHeaderNote ?? "";
-        ReceiptFooterNote = string.IsNullOrWhiteSpace(profile?.ReceiptFooterNote) ? "Computer generated clinical document. Valid without physical signature." : profile.ReceiptFooterNote;
+        ReceiptFooterNote = CleanReceiptNote(profile?.ReceiptFooterNote);
         IsSetupComplete = profile?.IsSetupComplete == true;
         UpdatedAt = profile?.UpdatedAt ?? profile?.SetupCompletedAt;
         UpdatedBy = profile?.UpdatedBy ?? profile?.SetupBy;
@@ -190,7 +190,7 @@ public sealed class HospitalSetupService(
                     savedProfile.LogoData = input.LogoData?.Trim() ?? "";
                     savedProfile.LabHeaderDept = input.LabHeaderDept?.Trim() ?? "Department of Pathology, Diagnostic & Laboratory Medicine";
                     savedProfile.ReceiptHeaderNote = input.ReceiptHeaderNote?.Trim() ?? "";
-                    savedProfile.ReceiptFooterNote = input.ReceiptFooterNote?.Trim() ?? "Computer generated clinical document. Valid without physical signature.";
+                    savedProfile.ReceiptFooterNote = CleanReceiptNote(input.ReceiptFooterNote);
                     savedProfile.UpdatedAt = DateTime.UtcNow;
                     savedProfile.UpdatedBy = updatedBy;
 
@@ -380,6 +380,15 @@ public sealed class HospitalSetupService(
 
         var svg = BuildAvatarSvg(GetAvatarInitials());
         return (System.Text.Encoding.UTF8.GetBytes(svg), "image/svg+xml");
+    }
+
+    private static string CleanReceiptNote(string? note)
+    {
+        if (string.IsNullOrWhiteSpace(note)) return "";
+        var trimmed = note.Trim();
+        if (trimmed.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase))
+            return "";
+        return trimmed;
     }
 }
 

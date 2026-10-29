@@ -1,0 +1,516 @@
+@page "/doctor/my-earnings"
+@page "/doctor/earnings"
+@attribute [Authorize(Roles = RoleNames.Doctor + "," + RoleNames.Administrator)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using HPM.Web.Localization
+@using Microsoft.EntityFrameworkCore
+@using System.Data.Common
+
+<PageTitle>@I18n.T("My Commission & Earnings") | @Branding.HospitalName</PageTitle>
+
+<div class="page-heading" style="margin-bottom: 20px;">
+    <div>
+        <span class="eyebrow" style="color: #0284c7; font-weight: 700;">@I18n.T("Doctor Desk & Financial Summary")</span>
+        <h1 style="font-size: 24px; font-weight: 800; color: var(--ink); margin: 0; letter-spacing: -0.5px; display: flex; align-items: center; gap: 10px;">
+            <span>💰 @I18n.T("My Commission & Referral Earnings")</span>
+            @if (activeDoctor != null)
+            {
+                <span class="pill" style="background: #e0f2fe; color: #0369a1; font-size: 12px; font-weight: 700;">
+                    @activeDoctor.Name (@(string.IsNullOrWhiteSpace(activeDoctor.Degree) ? "MBBS" : activeDoctor.Degree))
+                </span>
+            }
+        </h1>
+        <p style="margin: 4px 0 0; font-size: 13px; color: var(--muted, #64748b);">
+            @(I18n.IsBangla ? "আপনার রেফারকৃত ডায়াগনস্টিক পরীক্ষা ও কনসালটেশনের কমিশন এবং আয়ের ব্যক্তিগত বিবরণী" : "Personal earnings statement and referral commissions for your diagnostic orders and consultations.")
+        </p>
+    </div>
+
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <button type="button" class="btn btn-secondary" style="font-size: 12px; font-weight: 700;" @onclick="PrintStatementAsync">
+            🖨️ @(I18n.IsBangla ? "স্টেটমেন্ট প্রিন্ট" : "Print Statement")
+        </button>
+        <button type="button" class="btn btn-primary" style="font-size: 12px; font-weight: 700;" @onclick="LoadEarningsAsync">
+            🔄 @(I18n.IsBangla ? "রিফ্রেশ" : "Refresh")
+        </button>
+    </div>
+</div>
+
+<!-- Filter Bar -->
+<div class="panel" style="padding: 14px 18px; margin-bottom: 20px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div class="dash-preset-pills">
+                <button type="button" class="dash-pill-btn @(datePreset == "today" ? "active" : "")" @onclick='() => SetDatePreset("today")'>
+                    @(I18n.IsBangla ? "আজ" : "Today")
+                </button>
+                <button type="button" class="dash-pill-btn @(datePreset == "7d" ? "active" : "")" @onclick='() => SetDatePreset("7d")'>
+                    @(I18n.IsBangla ? "৭ দিন" : "7 Days")
+                </button>
+                <button type="button" class="dash-pill-btn @(datePreset == "this-month" ? "active" : "")" @onclick='() => SetDatePreset("this-month")'>
+                    @(I18n.IsBangla ? "চলতি মাস" : "This Month")
+                </button>
+                <button type="button" class="dash-pill-btn @(datePreset == "last-month" ? "active" : "")" @onclick='() => SetDatePreset("last-month")'>
+                    @(I18n.IsBangla ? "বিগত মাস" : "Last Month")
+                </button>
+                <button type="button" class="dash-pill-btn @(datePreset == "custom" ? "active" : "")" @onclick='() => SetDatePreset("custom")'>
+                    @(I18n.IsBangla ? "কাস্টম" : "Custom")
+                </button>
+            </div>
+
+            @if (datePreset == "custom")
+            {
+                <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px;">
+                    <span>From:</span>
+                    <input type="date" class="form-control form-control-sm" style="width: 130px; font-size: 12px;" @bind="fromDate" />
+                    <span>To:</span>
+                    <input type="date" class="form-control form-control-sm" style="width: 130px; font-size: 12px;" @bind="toDate" />
+                    <button type="button" class="btn btn-sm btn-primary" style="font-size: 11px;" @onclick="LoadEarningsAsync">Apply</button>
+                </div>
+            }
+        </div>
+
+        @if (isAdmin && allDoctors.Count > 1)
+        {
+            <!-- Administrator testing switcher -->
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 12px; font-weight: 700; color: #475569;">@(I18n.IsBangla ? "ডাক্তার নির্বাচন (অ্যাডমিন ভিউ):" : "Doctor (Admin View):")</span>
+                <select class="form-select form-select-sm" style="min-width: 200px; font-size: 12px;" @bind="selectedDoctorId" @bind:after="OnDoctorChanged">
+                    @foreach (var doc in allDoctors)
+                    {
+                        <option value="@doc.ID">#D@doc.ID - @doc.Name</option>
+                    }
+                </select>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Key Performance Metrics (KPI Cards) -->
+<div class="dash-kpi-grid-6" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-bottom: 22px;">
+    <!-- Card 1: Total Earned Commission -->
+    <div class="metric-card accent-emerald">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@(I18n.IsBangla ? "মোট অর্জিত কমিশন" : "Total Earned Commission")</span>
+            <span style="font-size: 18px;">💰</span>
+        </div>
+        <strong style="color: #059669;">@(I18n.FormatCurrency(totalCommissionEarned))</strong>
+        <small>@(I18n.IsBangla ? "নির্বাচিত সময়ের মোট প্রদেয়" : "Payable commission earned")</small>
+    </div>
+
+    <!-- Card 2: Referred Billing Volume -->
+    <div class="metric-card accent-blue">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@(I18n.IsBangla ? "রেফার্ড টেস্ট বিল ভলিউম" : "Referred Billing Volume")</span>
+            <span style="font-size: 18px;">🧾</span>
+        </div>
+        <strong>@(I18n.FormatCurrency(totalReferredBillAmount))</strong>
+        <small>@totalReferredTests @(I18n.IsBangla ? "টি ডায়াগনস্টিক পরীক্ষা" : "diagnostic tests ordered")</small>
+    </div>
+
+    <!-- Card 3: Total Referred Invoices -->
+    <div class="metric-card accent-violet">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@(I18n.IsBangla ? "রেফার্ড রোগীর ইনভয়েস" : "Referred Patient Memos")</span>
+            <span style="font-size: 18px;">👤</span>
+        </div>
+        <strong>@uniqueMemosCount</strong>
+        <small>@uniquePatientsCount @(I18n.IsBangla ? "জন অনন্য রোগী" : "unique patients served")</small>
+    </div>
+
+    <!-- Card 4: Effective Commission Rate -->
+    <div class="metric-card accent-amber">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>@(I18n.IsBangla ? "গড় কমিশন রেট" : "Avg Commission Rate")</span>
+            <span style="font-size: 18px;">📊</span>
+        </div>
+        <strong style="color: #d97706;">@(effectiveRate.ToString("0.0"))%</strong>
+        <small>@(I18n.IsBangla ? "হাসপাতাল ক্যাটাগরি পলিসি অনুসারে" : "Based on diagnostic categories")</small>
+    </div>
+</div>
+
+<!-- Itemized Earnings Table & Print View -->
+<div id="doctor-earnings-sheet" class="panel" style="padding: 22px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+    <!-- Printable Header (visible on print) -->
+    <div class="earnings-print-header" style="display: none; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+                <h2 style="font-size: 20px; font-weight: 800; margin: 0; color: #0f172a;">@Branding.HospitalName</h2>
+                <div style="font-size: 11.5px; color: #475569;">@Branding.Address, @Branding.CityDistrict &bull; Phone: @Branding.Phone</div>
+                <div style="font-size: 13px; font-weight: 750; color: #0284c7; margin-top: 6px;">
+                    @(I18n.IsBangla ? "ডাক্তার রেফারাল কমিশন স্টেটমেন্ট" : "Doctor Referral Commission Statement")
+                </div>
+            </div>
+            <div style="text-align: right; font-size: 12px;">
+                <div><b>@(I18n.IsBangla ? "ডাক্তার:" : "Doctor:")</b> @(activeDoctor?.Name ?? "Doctor")</div>
+                <div><b>@(I18n.IsBangla ? "সময়কাল:" : "Period:")</b> @fromDate.ToString("dd/MM/yyyy") - @toDate.ToString("dd/MM/yyyy")</div>
+                <div><b>@(I18n.IsBangla ? "প্রিন্ট তারিখ:" : "Print Date:")</b> @DateTime.Now.ToString("dd/MM/yyyy hh:mm tt")</div>
+            </div>
+        </div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
+        <div>
+            <h3 style="font-size: 15px; font-weight: 800; color: #0f172a; margin: 0;">
+                📋 @(I18n.IsBangla ? "আইটেমভিত্তিক রেফারাল ও কমিশন বিবরণী" : "Itemized Referral & Commission Statement")
+            </h3>
+            <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
+                @(I18n.IsBangla
+                    ? $"মোট {earningItems.Count} টি আইটেমের রেফারাল কমিশন তালিকাভুক্ত"
+                    : $"{earningItems.Count} referral items listed in selected date range")
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+            <span class="pill" style="background: #f1f5f9; color: #475569; font-weight: 700; font-size: 11px;">
+                @fromDate.ToString("dd MMM yyyy") &mdash; @toDate.ToString("dd MMM yyyy")
+            </span>
+        </div>
+    </div>
+
+    @if (loading)
+    {
+        <div style="text-align: center; padding: 40px; color: #64748b;">
+            <span style="font-size: 20px;">⏳</span>
+            <div>@(I18n.IsBangla ? "কমিশন ডেটা লোড হচ্ছে..." : "Loading earnings data...")</div>
+        </div>
+    }
+    else if (earningItems.Count == 0)
+    {
+        <div style="text-align: center; padding: 40px; color: #94a3b8; background: #f8fafc; border-radius: 8px;">
+            <span style="font-size: 24px;">📭</span>
+            <div style="font-weight: 700; margin-top: 8px;">@(I18n.IsBangla ? "নির্বাচিত সময়ে কোনো রেফারাল কমিশন পাওয়া যায়নি।" : "No referral commission records found for this period.")</div>
+            <small>@(I18n.IsBangla ? "অন্য তারিখ নির্বাচন করে আবার চেষ্টা করুন।" : "Try adjusting the date filter above.")</small>
+        </div>
+    }
+    else
+    {
+        <div style="overflow-x: auto;">
+            <table class="dash-table" style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr>
+                        <th style="width: 110px;">@(I18n.IsBangla ? "তারিখ ও সময়" : "Date & Time")</th>
+                        <th style="width: 100px;">@(I18n.IsBangla ? "মেমো / বিল নং" : "Memo / Bill #")</th>
+                        <th>@(I18n.IsBangla ? "রোগীর নাম ও আইডি" : "Patient Name & PID")</th>
+                        <th>@(I18n.IsBangla ? "পরীক্ষার নাম (Investigation)" : "Test / Investigation")</th>
+                        <th>@(I18n.IsBangla ? "ক্যাটাগরি" : "Category")</th>
+                        <th style="text-align: right; width: 110px;">@(I18n.IsBangla ? "বিল রেট" : "Billed Fee")</th>
+                        <th style="text-align: center; width: 90px;">@(I18n.IsBangla ? "কমিশন %" : "Rate %")</th>
+                        <th style="text-align: right; width: 120px;">@(I18n.IsBangla ? "অর্জিত কমিশন" : "Earned (BDT)")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in earningItems)
+                    {
+                        <tr>
+                            <td>
+                                <strong style="font-size: 12px; color: #0f172a;">@item.Date.ToString("dd MMM yyyy")</strong>
+                                <div style="font-size: 10.5px; color: #64748b;">@item.Date.ToString("hh:mm tt")</div>
+                            </td>
+                            <td>
+                                <strong style="color: #0284c7; font-size: 12px;">#@item.MemoNo</strong>
+                            </td>
+                            <td>
+                                <strong style="color: #0f172a; font-size: 12px;">@item.PatientName</strong>
+                                <div style="font-size: 10.5px; color: #64748b;">@(item.PatientId ?? "Walk-in")</div>
+                            </td>
+                            <td>
+                                <span style="font-weight: 700; color: #1e293b;">@item.TestName</span>
+                            </td>
+                            <td>
+                                <span class="disease-tag" style="font-size: 10.5px;">@item.CategoryName</span>
+                            </td>
+                            <td style="text-align: right;">
+                                @(I18n.FormatCurrency(item.Rate))
+                            </td>
+                            <td style="text-align: center;">
+                                <span class="pill" style="font-size: 10.5px; background: #e0f2fe; color: #0369a1; font-weight: 750;">
+                                    @item.CommissionPercent.ToString("0.#")%
+                                </span>
+                            </td>
+                            <td style="text-align: right;">
+                                <strong style="color: #059669; font-size: 13px;">@(I18n.FormatCurrency(item.CommissionAmount))</strong>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr style="background: #f8fafc; font-weight: 800; border-top: 2px solid #cbd5e1;">
+                        <td colspan="5" style="text-align: right; padding: 12px;">
+                            @(I18n.IsBangla ? "সর্বমোট (Total Summary):" : "Total Summary:")
+                        </td>
+                        <td style="text-align: right; padding: 12px; color: #0f172a;">
+                            @(I18n.FormatCurrency(totalReferredBillAmount))
+                        </td>
+                        <td style="text-align: center; padding: 12px; color: #d97706;">
+                            @(effectiveRate.ToString("0.0"))%
+                        </td>
+                        <td style="text-align: right; padding: 12px; color: #059669; font-size: 14px;">
+                            @(I18n.FormatCurrency(totalCommissionEarned))
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    }
+</div>
+
+<style>
+    @@media print {
+        body * {
+            visibility: hidden;
+        }
+        #doctor-earnings-sheet, #doctor-earnings-sheet * {
+            visibility: visible;
+        }
+        #doctor-earnings-sheet {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+        }
+        .earnings-print-header {
+            display: block !important;
+        }
+    }
+</style>
+
+@code {
+    public sealed class DoctorEarningLine
+    {
+        public long MemoNo { get; set; }
+        public DateTime Date { get; set; }
+        public string PatientName { get; set; } = string.Empty;
+        public string? PatientId { get; set; }
+        public string TestName { get; set; } = string.Empty;
+        public string CategoryName { get; set; } = string.Empty;
+        public decimal Rate { get; set; }
+        public decimal CommissionPercent { get; set; }
+        public decimal CommissionAmount { get; set; }
+    }
+
+    private string datePreset = "this-month"; // "today", "7d", "this-month", "last-month", "custom"
+    private DateTime fromDate = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime toDate = DateTime.Today;
+
+    private bool loading;
+    private bool isAdmin;
+    private int selectedDoctorId;
+    private DoctorsProfile? activeDoctor;
+    private List<DoctorsProfile> allDoctors = [];
+    private List<DoctorEarningLine> earningItems = [];
+
+    // KPI Metrics
+    private decimal totalCommissionEarned;
+    private decimal totalReferredBillAmount;
+    private int totalReferredTests;
+    private int uniqueMemosCount;
+    private int uniquePatientsCount;
+    private decimal effectiveRate;
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        isAdmin = user.IsInRole(RoleNames.Administrator);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        allDoctors = await db.Doctors.AsNoTracking().OrderBy(d => d.Name).ToListAsync();
+
+        // 1. Resolve logged in doctor's profile ID
+        if (int.TryParse(user.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedDocId) && mappedDocId > 0)
+        {
+            selectedDoctorId = mappedDocId;
+        }
+        else if (allDoctors.Count > 0)
+        {
+            selectedDoctorId = allDoctors[0].ID;
+        }
+
+        activeDoctor = allDoctors.FirstOrDefault(d => d.ID == selectedDoctorId);
+        await LoadEarningsAsync();
+    }
+
+    private void SetDatePreset(string preset)
+    {
+        datePreset = preset;
+        var today = DateTime.Today;
+        switch (preset)
+        {
+            case "today":
+                fromDate = today;
+                toDate = today;
+                break;
+            case "7d":
+                fromDate = today.AddDays(-6);
+                toDate = today;
+                break;
+            case "this-month":
+                fromDate = new DateTime(today.Year, today.Month, 1);
+                toDate = today;
+                break;
+            case "last-month":
+                var lastMonth = today.AddMonths(-1);
+                fromDate = new DateTime(lastMonth.Year, lastMonth.Month, 1);
+                toDate = new DateTime(today.Year, today.Month, 1).AddDays(-1);
+                break;
+            case "custom":
+                break;
+        }
+
+        if (preset != "custom")
+        {
+            _ = LoadEarningsAsync();
+        }
+    }
+
+    private async Task OnDoctorChanged()
+    {
+        activeDoctor = allDoctors.FirstOrDefault(d => d.ID == selectedDoctorId);
+        await LoadEarningsAsync();
+    }
+
+    private async Task LoadEarningsAsync()
+    {
+        if (selectedDoctorId <= 0) return;
+
+        try
+        {
+            loading = true;
+            earningItems.Clear();
+            StateHasChanged();
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var start = fromDate.Date;
+            var end = toDate.Date.AddDays(1).AddTicks(-1);
+
+            // Fetch commission rate settings from database
+            var ratesDict = new Dictionary<int, decimal>(); // CategoryID -> CommissionPercent
+            decimal defaultGlobalRate = 20m; // standard fallback 20%
+            try
+            {
+                var conn = db.Database.GetDbConnection();
+                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT CategoryID, CommissionPercent FROM Doctor_Commission_Settings WHERE DoctorID = @docId OR DoctorID = 0 ORDER BY DoctorID ASC";
+                var p = cmd.CreateParameter();
+                p.ParameterName = "@docId";
+                p.Value = selectedDoctorId;
+                cmd.Parameters.Add(p);
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var catId = reader.GetInt32(0);
+                    var pct = reader.GetDecimal(1);
+                    ratesDict[catId] = pct;
+                }
+            }
+            catch
+            {
+                // Fallback to standard rates if table not present
+            }
+
+            // Services & Categories
+            var services = await db.Services.AsNoTracking().ToListAsync();
+            var categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(c => c.ID);
+            var serviceMap = services.ToDictionary(s => s.ID);
+
+            // Fetch diagnostic memos where this doctor is the referring doctor
+            var memos = await db.EmergencyMemos
+                .AsNoTracking()
+                .Where(m => m.ModuleID == 2 && m.DoctorID == selectedDoctorId && m.TransDate >= start && m.TransDate <= end)
+                .Include(m => m.Items)
+                .OrderByDescending(m => m.TransDate)
+                .ToListAsync();
+
+            totalCommissionEarned = 0;
+            totalReferredBillAmount = 0;
+            totalReferredTests = 0;
+
+            foreach (var memo in memos)
+            {
+                foreach (var item in memo.Items)
+                {
+                    totalReferredTests += item.Quantity;
+                    var testFee = item.Rate * item.Quantity;
+                    totalReferredBillAmount += testFee;
+
+                    int catId = 0;
+                    string catName = "Pathology / Diagnostic";
+                    string testName = $"Investigation #{item.TestID}";
+
+                    if (serviceMap.TryGetValue(item.TestID, out var s))
+                    {
+                        testName = s.Name ?? testName;
+                        catId = s.CategoryID ?? 0;
+                        if (categories.TryGetValue(catId, out var cat))
+                        {
+                            catName = cat.Name;
+                        }
+                    }
+
+                    // Calculate effective rate
+                    decimal commRate = ratesDict.TryGetValue(catId, out var rVal) ? rVal : defaultGlobalRate;
+                    decimal commEarned = testFee * (commRate / 100m);
+                    totalCommissionEarned += commEarned;
+
+                    earningItems.Add(new DoctorEarningLine
+                    {
+                        MemoNo = memo.ID,
+                        Date = memo.TransDate,
+                        PatientName = memo.PatientName,
+                        PatientId = memo.PatientID,
+                        TestName = testName,
+                        CategoryName = catName,
+                        Rate = testFee,
+                        CommissionPercent = commRate,
+                        CommissionAmount = commEarned
+                    });
+                }
+            }
+
+            uniqueMemosCount = memos.Count;
+            uniquePatientsCount = memos.Select(m => m.PatientID ?? m.PatientName).Distinct().Count();
+            effectiveRate = totalReferredBillAmount > 0 ? (totalCommissionEarned / totalReferredBillAmount) * 100m : 0;
+        }
+        catch
+        {
+            // Fallback gracefully
+        }
+        finally
+        {
+            loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PrintStatementAsync()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private void HandleLanguageChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

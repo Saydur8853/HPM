@@ -14,7 +14,7 @@
 
 <PageTitle>@I18n.T("Doctor Appointments") | @Branding.HospitalName</PageTitle>
 
-<div class="appointments-classic-fit">
+<div class="appointments-classic-fit" tabindex="0" @onkeydown="HandlePageKeyDown">
     <!-- Compact Top Action & Filter Bar -->
     <div class="appt-classic-topbar">
         <div class="appt-top-left">
@@ -59,176 +59,400 @@
         <!-- Left Panel: Appointment Booking Form Card -->
         <div class="appt-form-card">
             <div class="appt-card-header">
-                <h2>@(editor.ID == 0 ? I18n.T("Book Doctor Appointment") : $"{I18n.T("Edit Appointment")} #{editor.ID}")</h2>
-                <span class="appt-serial-badge @(editor.ID == 0 ? "emerald" : "violet")">
-                    @(editor.ID == 0 ? $"{I18n.T("NEXT SERIAL #")}{NextAvailableSerial:00}" : $"{I18n.T("SERIAL #")}{editor.ApptSLNO:00}")
-                </span>
+                <div class="appt-card-header-title-wrap" style="display: flex; align-items: center; gap: 10px;">
+                    <h2>@(editor.ID == 0 ? I18n.T("Book Doctor Appointment") : $"{I18n.T("Edit Appointment")} #{editor.ID}")</h2>
+                    <span class="appt-serial-badge @(editor.ID == 0 ? "emerald" : "violet")">
+                        @(editor.ID == 0 ? $"{I18n.T("NEXT SERIAL #")}{NextAvailableSerial:00}" : $"{I18n.T("SERIAL #")}{editor.ApptSLNO:00}")
+                    </span>
+                </div>
+                <button type="button" 
+                        class="appt-schedule-trigger-btn @(showScheduleDrawer ? "active" : "")" 
+                        @onclick="ToggleScheduleDrawer" 
+                        title="@I18n.T("View Daily Schedule & Patient Queue (F2 / Ctrl+Q)")">
+                    <span>📋</span>
+                    <span>@I18n.T("Daily Schedule & Queue")</span>
+                    <span class="trigger-pill">@appointments.Count</span>
+                    @if (appointments.Any(x => x.Status == "CheckedIn"))
+                    {
+                        <span class="trigger-pill checked" title="@I18n.T("Checked-in Patients")">
+                            ✓ @appointments.Count(x => x.Status == "CheckedIn")
+                        </span>
+                    }
+                </button>
             </div>
 
-            <EditForm Model="editor" OnValidSubmit="SaveAsync" @onkeydown="HandleFormKeyDown" style="display:flex; flex-direction:column; height:calc(100% - 37px); min-height:0;">
+            <EditForm Model="editor" OnValidSubmit="SaveAsync" @onkeydown="HandleFormKeyDown" style="display:flex; flex-direction:column; min-height:0;">
                 <DataAnnotationsValidator />
 
-                <div class="appt-form-body">
-                    <!-- Consultant Doctor -->
-                    <div class="appt-field-group">
-                        <span class="appt-field-label">
-                            <span>@I18n.T("Consultant Doctor")<span class="req">*</span></span>
-                        </span>
-                        <div class="appt-doctor-search">
-                            <input class="classic-input"
-                                   value="@doctorSearchText"
-                                   @oninput="HandleDoctorSearchInput"
-                                   @onfocus="ShowDoctorSuggestions"
-                                   @onblur="HideDoctorSuggestionsAsync"
-                                   @onkeydown="HandleDoctorSearchKeyDown"
-                                   autocomplete="off"
-                                   placeholder="@I18n.T("Search doctor ID, name, or specialty...")"
-                                   title="@I18n.T("Search doctor")" />
-                            @if (showDoctorSuggestions)
-                            {
-                                <div class="appt-doctor-suggestions">
-                                    @if (FilteredDoctors.Any())
-                                    {
-                                        @foreach (var doctor in FilteredDoctors.Take(6))
+                <div class="appt-form-body appt-form-twocol">
+                    <!-- Left Column: Doctor Selection & Chamber Schedule -->
+                    <div class="appt-col-left">
+                        <!-- Consultant Doctor -->
+                        <div class="appt-field-group">
+                            <span class="appt-field-label">
+                                <span>@I18n.T("Consultant Doctor")<span class="req">*</span></span>
+                            </span>
+                            <div class="appt-doctor-search-combo-wrap" id="appt-doctor-search-box" style="position: relative; width: 100%;">
+                                <div style="display: flex; gap: 6px; align-items: center;">
+                                    <select class="classic-input appt-dept-filter-select"
+                                            value="@selectedDepartmentId"
+                                            @onchange="HandleDepartmentFilterChanged"
+                                            style="flex: 0 0 145px; max-width: 155px; height: 28px; font-size: 11px; font-weight: 650; cursor: pointer; background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px;"
+                                            title="@I18n.T("Filter by Department")">
+                                        <option value="0">📂 @I18n.T("All Depts")</option>
+                                        @foreach (var dept in departments.OrderBy(d => d.Value))
                                         {
-                                            <button type="button"
-                                                    class="appt-doctor-option @(editor.DoctorID == doctor.ID ? "selected" : "")"
-                                                    @onmousedown:preventDefault
-                                                    @onclick="() => SelectDoctor(doctor)">
-                                                <div class="appt-doctor-option-main">
-                                                    <span class="appt-doctor-option-name">
-                                                        @if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
-                                                        {
-                                                            <span class="appt-priority-pill" title="Priority #@doctor.Priority">⭐ #@doctor.Priority</span>
-                                                        }
-                                                        @DoctorDisplayName(doctor)
-                                                    </span>
-                                                    <span class="appt-doctor-option-id">ID: @doctor.ID</span>
-                                                </div>
-                                                <div class="appt-doctor-option-sub">
-                                                    @CleanDoctorDegree(doctor)@if (doctor.Department.HasValue && departments.TryGetValue(doctor.Department.Value, out var dName)){<text> &bull; @dName</text>}@if(!string.IsNullOrWhiteSpace(CleanDoctorRoom(doctor.Room))){<text> &bull; Room @CleanDoctorRoom(doctor.Room)</text>}
-                                                </div>
-                                            </button>
+                                            <option value="@dept.Key">@dept.Value</option>
                                         }
-                                    }
-                                    else
-                                    {
-                                        @if (!doctors.Any())
+                                    </select>
+                                    <div class="appt-doctor-search" style="flex: 1; min-width: 0; position: relative;">
+                                        <input class="classic-input"
+                                               id="appt-doctor-search-input"
+                                               value="@doctorSearchText"
+                                               @oninput="HandleDoctorSearchInputAsync"
+                                               @onfocus="ShowDoctorSuggestions"
+                                               @onkeydown="HandleDoctorSearchKeyDown"
+                                               autocomplete="off"
+                                               placeholder="@I18n.T("Search doctor ID, name, or specialty...")"
+                                               title="@I18n.T("Search doctor")" />
+                                    </div>
+                                </div>
+                                @if (showDoctorSuggestions)
+                                {
+                                    <div class="appt-doctor-suggestions" id="appt-doctor-suggestions-list" style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 120;">
+                                        @if (filteredDoctorItems.Count > 0)
                                         {
-                                            <div class="appt-doctor-empty">@I18n.T("Loading doctors...")</div>
+                                            @foreach (var item in VisibleDoctorItems)
+                                            {
+                                                var doctor = item.Doctor;
+                                                <button type="button"
+                                                        @key="doctor.ID"
+                                                        class="appt-doctor-option @(editor.DoctorID == doctor.ID ? "selected" : "")"
+                                                        @onmousedown:preventDefault
+                                                        @onclick="() => SelectDoctor(doctor)">
+                                                    <div class="appt-doctor-option-main">
+                                                        <span class="appt-doctor-option-name">
+                                                            @if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
+                                                            {
+                                                                <span class="appt-priority-pill" title="Priority #@doctor.Priority">⭐ #@doctor.Priority</span>
+                                                            }
+                                                            @item.DisplayName
+                                                        </span>
+                                                        <span class="appt-doctor-option-id">ID: D@(doctor.ID)</span>
+                                                    </div>
+                                                    <div class="appt-doctor-option-sub">
+                                                        @item.Degree@if (!string.IsNullOrWhiteSpace(item.DepartmentName)){<text> &bull; @item.DepartmentName</text>}@if(!string.IsNullOrWhiteSpace(item.Room)){<text> &bull; Room @item.Room</text>}
+                                                    </div>
+                                                </button>
+                                            }
+                                            @if (VisibleDoctorsCount < filteredDoctorItems.Count)
+                                            {
+                                                <div class="appt-doctor-scroll-hint"
+                                                     @onmousedown:preventDefault
+                                                     @onclick="LoadMoreDoctorsFromJs">
+                                                    @I18n.T("Showing") @VisibleDoctorsCount / @filteredDoctorItems.Count &bull; @I18n.T("Scroll for more...")
+                                                </div>
+                                            }
                                         }
                                         else
                                         {
-                                            <div class="appt-doctor-empty">@I18n.T("No doctor found")</div>
+                                            @if (!doctors.Any())
+                                            {
+                                                <div class="appt-doctor-empty">@I18n.T("Loading doctors...")</div>
+                                            }
+                                            else
+                                            {
+                                                <div class="appt-doctor-empty">
+                                                    @I18n.T("No doctor found")
+                                                    @if (selectedDepartmentId > 0)
+                                                    {
+                                                        <text> in this department </text>
+                                                        <button type="button" class="btn btn-link btn-sm p-0 ms-1" style="font-size: 11px; vertical-align: baseline;" @onmousedown:preventDefault @onclick="ResetDeptFilter">(@I18n.T("Show All"))</button>
+                                                    }
+                                                </div>
+                                            }
                                         }
-                                    }
-                                </div>
-                            }
-                        </div>
-                    </div>
-
-                    <!-- Patient Intake Section -->
-                    <div class="appt-field-group">
-                        <div class="appt-patient-header-row">
-                            <span class="appt-field-label">
-                                <span>@I18n.T("Patient Information")<span class="req">*</span></span>
-                            </span>
-                            <div class="appt-mode-toggle">
-                                <button type="button" class="appt-mode-btn @(!isWalkInMode ? "active" : "")" @onclick="() => SetPatientMode(false)">
-                                    <SearchIcon /> @I18n.T("Registered")
-                                </button>
-                                <button type="button" class="appt-mode-btn @(isWalkInMode ? "active" : "")" @onclick="() => SetPatientMode(true)">
-                                    👤 @I18n.T("Walk-in")
-                                </button>
+                                    </div>
+                                }
                             </div>
                         </div>
 
-                        @if (!isWalkInMode)
-                        {
-                            @if (!string.IsNullOrWhiteSpace(editor.PatientID) && !string.IsNullOrWhiteSpace(editor.Name))
-                            {
-                                <div class="appt-patient-verified">
-                                    <div class="appt-patient-verified-info">
-                                        <strong>#@editor.PatientID</strong> &bull; @editor.Name
-                                        @if (!string.IsNullOrWhiteSpace(SelectedPatientSex))
-                                        {
-                                            <text> &bull; </text>
-                                            <span class="meta-tag sex-tag-@SelectedPatientSex.ToLowerInvariant()">
-                                                @(SelectedPatientSex == "Male" ? "♂ Male" : SelectedPatientSex == "Female" ? "♀ Female" : SelectedPatientSex)
-                                            </span>
+                        <!-- Appointment Schedule: Date & Time (Separated) -->
+                        <div style="display: flex; gap: 8px; margin-bottom: 2px;">
+                            <!-- Date -->
+                            <div class="appt-field-group" style="flex: 1.3; min-width: 0;">
+                                <div class="appt-date-header-row">
+                                    <span class="appt-field-label">
+                                        <span>@I18n.T("Appointment Date")<span class="req">*</span></span>
+                                    </span>
+                                    <div class="appt-date-chips">
+                                        @{
+                                            var isTodayOff = SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, DateTime.Today);
+                                            var isTomorrowOff = SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, DateTime.Today.AddDays(1));
                                         }
-                                        @if (!string.IsNullOrWhiteSpace(editor.Age)) { <text> &bull; @editor.Age</text> }
-                                        @if (!string.IsNullOrWhiteSpace(editor.Weight)) { <text> &bull; ⚖️ @editor.Weight kg</text> }
-                                        @if (!string.IsNullOrWhiteSpace(editor.ContactNo)) { <text> &bull; 📞 @editor.ContactNo</text> }
+                                        <button type="button" 
+                                                class="appt-chip @(apptDatePart.Date == DateTime.Today ? "active" : "") @(isTodayOff ? "offday-chip" : "")" 
+                                                @onclick="SetApptDateToday"
+                                                title="@(isTodayOff ? $"{DoctorDisplayName(SelectedDoctor)} {I18n.T("is OFF Today")}" : I18n.T("Today"))">
+                                            @I18n.T("Today")@(isTodayOff ? " (Off)" : "")
+                                        </button>
+                                        <button type="button" 
+                                                class="appt-chip @(apptDatePart.Date == DateTime.Today.AddDays(1) ? "active" : "") @(isTomorrowOff ? "offday-chip" : "")" 
+                                                @onclick="SetApptDateTomorrow"
+                                                title="@(isTomorrowOff ? $"{DoctorDisplayName(SelectedDoctor)} {I18n.T("is OFF Tomorrow")}" : I18n.T("Tomorrow"))">
+                                            @I18n.T("Tomorrow")@(isTomorrowOff ? " (Off)" : "")
+                                        </button>
                                     </div>
-                                    <button type="button" class="appt-clear-link" @onclick="ClearSelectedPatient" title="Search different patient">
-                                        @I18n.T("Change")
-                                    </button>
+                                </div>
+                                <InputDate class="@(SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, apptDatePart) ? "classic-input input-offday-warn" : "classic-input")" 
+                                           Type="InputDateType.Date" 
+                                           @bind-Value="apptDatePart" 
+                                           @bind-Value:after="OnApptDateChanged" />
+                            </div>
+
+                            <!-- Time -->
+                            <div class="appt-field-group" style="flex: 1; min-width: 0;">
+                                <span class="appt-field-label">
+                                    <span>@I18n.T("Appointment Time")<span class="req">*</span></span>
+                                </span>
+                                <input type="time" class="classic-input appt-time-input" value="@apptTimePart" @onchange="OnApptTimeInputChanged" />
+                            </div>
+                        </div>
+
+                        <!-- Available Consultation Schedule & Booking Slots for Selected Doctor -->
+                        @if (SelectedDoctor != null && editor.DoctorID > 0)
+                        {
+                            var isOffDay = IsDoctorOffDay(SelectedDoctor, apptDatePart);
+                            @if (isOffDay)
+                            {
+                                <div class="appt-doctor-offday-banner">
+                                    <div class="appt-doc-offday-top">
+                                        <span class="appt-doc-offday-badge">🚫 @I18n.T("DOCTOR'S WEEKLY OFF DAY")</span>
+                                        <span class="appt-doc-offday-date">📅 @apptDatePart.ToString("dddd, dd MMM yyyy")</span>
+                                    </div>
+                                    <div class="appt-doc-offday-body">
+                                        <div class="appt-doc-offday-title">
+                                            <strong>@DoctorDisplayName(SelectedDoctor)</strong> @I18n.T("is not available for consultation on") <span class="highlight-day">@apptDatePart.ToString("dddd")</span>.
+                                        </div>
+                                        <div class="appt-doc-offday-meta">
+                                            @I18n.T("Regular Off Day(s)"): <strong style="color: #b91c1c;">@GetDoctorOffDaysDisplay(SelectedDoctor)</strong> &bull; @I18n.T("Appointments cannot be booked on off days.")
+                                        </div>
+                                    </div>
+                                    @{
+                                        var nextWorking = GetNextAvailableDoctorDate(SelectedDoctor, apptDatePart);
+                                    }
+                                    @if (nextWorking.HasValue)
+                                    {
+                                        <div class="appt-doc-offday-switch-row">
+                                            <span style="font-size:11px; font-weight:700; color:#475569;">@I18n.T("Suggested next working day"):</span>
+                                            <button type="button" class="appt-switch-date-btn" @onclick="() => SwitchToAvailableDate(nextWorking.Value)">
+                                                📅 @nextWorking.Value.ToString("ddd, dd MMM yyyy") &bull; @I18n.T("Switch Date") &rarr;
+                                            </button>
+                                        </div>
+                                    }
                                 </div>
                             }
                             else
                             {
-                                <div class="appt-patient-search-field">
-                                    <div class="appt-patient-search-combo">
-                                        <input class="classic-input"
-                                               value="@patientSearchQuery"
-                                               @oninput="HandlePatientSearchInputAsync"
-                                               @onfocus="ShowPatientIdSuggestionsAsync"
-                                               @onblur="HidePatientSuggestionsAsync"
-                                               @onkeydown="HandlePatientSearchKeyDown"
-                                               autocomplete="off"
-                                               placeholder="@I18n.T("Search by Patient ID, Mobile or Name...")"
-                                               title="@I18n.T("Search patient")" />
-                                        <button type="button" class="btn-find" @onclick="() => FindPatientAsync(patientSearchQuery)" title="@I18n.T("Search Patient")">
-                                            <SearchIcon /> @I18n.T("Search")
-                                        </button>
+                                <div class="appt-doctor-schedule-box">
+                                    <div class="appt-doc-sched-top">
+                                        <div class="appt-doc-sched-title-wrap">
+                                            <span class="appt-doc-sched-icon">⏰</span>
+                                            <div>
+                                                <div class="appt-doc-sched-time">
+                                                    <strong>@I18n.T("Consultation Schedule"):</strong>
+                                                    <span>@GetDoctorConsultationHours(SelectedDoctor)</span>
+                                                </div>
+                                                <div class="appt-doc-sched-meta">
+                                                    @if (!string.IsNullOrWhiteSpace(CleanDoctorRoom(SelectedDoctor.Room)))
+                                                    {
+                                                        <span>🚪 Room @CleanDoctorRoom(SelectedDoctor.Room)</span>
+                                                    }
+                                                    @if (SelectedDoctor.Department.HasValue && departments.TryGetValue(SelectedDoctor.Department.Value, out var deptName))
+                                                    {
+                                                        <span>&bull; 🩺 @deptName</span>
+                                                    }
+                                                    <span>&bull; 📅 @apptDatePart.ToString("ddd, dd MMM yyyy")</span>
+                                                    @if (!string.IsNullOrWhiteSpace(GetDoctorOffDaysDisplay(SelectedDoctor)))
+                                                    {
+                                                        <span>&bull; 🚫 Off: @GetDoctorOffDaysDisplay(SelectedDoctor)</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span class="appt-doc-sched-badge">
+                                            ✓ @I18n.T("Click Slot to Set Time")
+                                        </span>
                                     </div>
-                                    @if (showPatientIdSuggestions)
-                                    {
-                                        <div class="appt-patient-suggestions">
-                                            @foreach (var patient in patientIdSuggestions.Take(5))
+
+                                    <div class="appt-slot-chips-wrap">
+                                        <span class="appt-slot-chips-label">@I18n.T("Available Slots (Click to set time)"):</span>
+                                        <div class="appt-slot-chips">
+                                            @foreach (var slot in GetDoctorAvailableSlots(SelectedDoctor, apptDatePart))
                                             {
-                                                <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatient(patient)">
-                                                    <span class="patient-id">@patient.PatientID</span>
-                                                    <span class="patient-name">@patient.Name</span>
-                                                    @if (!string.IsNullOrWhiteSpace(patient.Sex))
+                                                var isSelectedSlot = IsSlotSelected(slot.Time);
+                                                <button type="button"
+                                                        class="appt-slot-btn @(isSelectedSlot ? "active" : "")"
+                                                        @onclick="() => SetAppointmentTimeSlot(slot.Time)"
+                                                        title="@slot.Label">
+                                                    <span class="slot-dot">●</span>
+                                                    <span class="slot-time-text">@slot.Label</span>
+                                                    @if (slot.BookedCount > 0)
                                                     {
-                                                        <span class="meta-tag sex-tag-@patient.Sex.ToLowerInvariant()">
-                                                            @(patient.Sex == "Male" ? "♂ Male" : patient.Sex == "Female" ? "♀ Female" : patient.Sex)
-                                                        </span>
+                                                        <span class="slot-booked-tag">(@slot.BookedCount)</span>
                                                     }
-                                                    @if (!string.IsNullOrWhiteSpace(patient.Weight))
-                                                    {
-                                                        <span class="patient-weight-pill">⚖️ @patient.Weight kg</span>
-                                                    }
-                                                    <span class="patient-contact">@patient.Contact</span>
+                                                </button>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="appt-doctor-hint-box">
+                                <span style="font-size: 20px;">🩺</span>
+                                <div style="flex:1; min-width:0;">
+                                    <strong>@I18n.T("Consultation Schedule & Available Slots")</strong>
+                                    <div style="font-size: 11px; color: #64748b; margin-top: 1px;">@I18n.T("Select a consultant doctor to view chamber hours and click time slots.")</div>
+                                    @if (doctors.Any())
+                                    {
+                                        <div class="appt-quick-doctors-wrap">
+                                            <span class="appt-quick-doc-label">@I18n.T("Quick Pick"):</span>
+                                            @foreach (var qDoc in doctors.Take(4))
+                                            {
+                                                <button type="button" class="appt-quick-doc-chip" @onclick="() => SelectDoctor(qDoc)" title="@DoctorDisplayName(qDoc)">
+                                                    🩺 @DoctorDisplayName(qDoc)
                                                 </button>
                                             }
                                         </div>
                                     }
                                 </div>
-                            }
+                            </div>
                         }
                     </div>
 
-                    <!-- Patient Name & Mobile No -->
-                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                        <div class="appt-field-group" style="flex: 1.5; min-width: 0;">
-                            <span class="appt-field-label">
-                                <span>@I18n.T("Patient Name")<span class="req">*</span></span>
-                            </span>
-                            <InputText class="classic-input" @bind-Value="editor.Name" placeholder="@I18n.T("Full name of patient")" />
+                    <!-- Right Column: Patient Intake & Demographics -->
+                    <div class="appt-col-right">
+                        <!-- Patient Intake Section -->
+                        <div class="appt-field-group">
+                            <div class="appt-patient-header-row">
+                                <span class="appt-field-label">
+                                    <span>@I18n.T("Patient Information")<span class="req">*</span></span>
+                                </span>
+                                <div class="appt-mode-toggle">
+                                    <button type="button" class="appt-mode-btn @(isWalkInMode ? "active" : "")" @onclick="() => SetPatientMode(true)">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                            <circle cx="12" cy="7" r="4"></circle>
+                                        </svg>
+                                        <span>@I18n.T("Walk-in")</span>
+                                    </button>
+                                    <button type="button" class="appt-mode-btn @(!isWalkInMode ? "active" : "")" @onclick="() => SetPatientMode(false)">
+                                        <SearchIcon />
+                                        <span>@I18n.T("Registered")</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            @if (!isWalkInMode)
+                            {
+                                @if (!string.IsNullOrWhiteSpace(editor.PatientID) && !string.IsNullOrWhiteSpace(editor.Name))
+                                {
+                                    <div class="appt-patient-verified">
+                                        <div class="appt-patient-verified-info">
+                                            <strong>#@editor.PatientID</strong> &bull; @editor.Name
+                                            @if (!string.IsNullOrWhiteSpace(SelectedPatientSex))
+                                            {
+                                                <text> &bull; </text>
+                                                <span class="meta-tag sex-tag-@SelectedPatientSex.ToLowerInvariant()">
+                                                    @(SelectedPatientSex == "Male" ? "♂ Male" : SelectedPatientSex == "Female" ? "♀ Female" : SelectedPatientSex)
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(editor.Age)) { <text> &bull; @editor.Age</text> }
+                                            @if (!string.IsNullOrWhiteSpace(editor.Weight)) { <text> &bull; ⚖️ @editor.Weight kg</text> }
+                                            @if (!string.IsNullOrWhiteSpace(editor.ContactNo)) { <text> &bull; 📞 @editor.ContactNo</text> }
+                                        </div>
+                                        <button type="button" class="appt-clear-link" @onclick="ClearSelectedPatient" title="Search different patient">
+                                            @I18n.T("Change")
+                                        </button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="appt-patient-search-field">
+                                        <div class="appt-patient-search-combo">
+                                            <input class="classic-input"
+                                                   value="@patientSearchQuery"
+                                                   @oninput="HandlePatientSearchInputAsync"
+                                                   @onfocus="ShowPatientIdSuggestionsAsync"
+                                                   @onblur="HidePatientSuggestionsAsync"
+                                                   @onkeydown="HandlePatientSearchKeyDown"
+                                                   autocomplete="off"
+                                                   placeholder="@I18n.T("Search by Patient ID, Mobile or Name...")"
+                                                   title="@I18n.T("Search patient")" />
+                                            <button type="button" class="btn-find" @onclick="() => FindPatientAsync(patientSearchQuery)" title="@I18n.T("Search Patient")">
+                                                <SearchIcon /> @I18n.T("Search")
+                                            </button>
+                                        </div>
+                                        @if (showPatientIdSuggestions)
+                                        {
+                                            <div class="appt-patient-suggestions" id="appt-patient-suggestions-list">
+                                                @foreach (var patient in patientIdSuggestions)
+                                                {
+                                                    <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatient(patient)">
+                                                        <span class="patient-id">@patient.PatientID</span>
+                                                        <span class="patient-name">@patient.Name</span>
+                                                        @if (!string.IsNullOrWhiteSpace(patient.Sex))
+                                                        {
+                                                            <span class="meta-tag sex-tag-@patient.Sex.ToLowerInvariant()">
+                                                                @(patient.Sex == "Male" ? "♂ Male" : patient.Sex == "Female" ? "♀ Female" : patient.Sex)
+                                                            </span>
+                                                        }
+                                                        @if (!string.IsNullOrWhiteSpace(patient.Weight))
+                                                        {
+                                                            <span class="patient-weight-pill">⚖️ @patient.Weight kg</span>
+                                                        }
+                                                        <span class="patient-contact">@patient.Contact</span>
+                                                    </button>
+                                                }
+                                                @if (hasMorePatientSuggestions)
+                                                {
+                                                    <div class="appt-doctor-scroll-hint" @onclick="LoadMorePatientsFromJs" @onmousedown:preventDefault>
+                                                        @if (isLoadingMorePatients)
+                                                        {
+                                                            <span>@I18n.T("Loading more...")</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@I18n.T("Showing") @patientIdSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            }
                         </div>
 
-                        <div class="appt-field-group" style="flex: 1; min-width: 0;">
-                            <span class="appt-field-label">@I18n.T("Mobile No")</span>
-                            <InputText class="classic-input" @bind-Value="editor.ContactNo" placeholder="017xxxxxxxx" />
-                        </div>
-                    </div>
+                        <!-- Patient Name & Mobile No -->
+                        <div style="display: flex; gap: 8px; margin-bottom: 2px;">
+                            <div class="appt-field-group" style="flex: 1.4; min-width: 0;">
+                                <span class="appt-field-label">
+                                    <span>@I18n.T("Patient Name")<span class="req">*</span></span>
+                                </span>
+                                <InputText class="classic-input" @bind-Value="editor.Name" placeholder="@I18n.T("Full name of patient")" />
+                            </div>
 
-                    <!-- Sex, Age & Weight in 1 Row -->
-                    <div style="display: flex; gap: 8px; align-items: flex-end;">
-                        <div class="appt-field-group" style="flex: 1.6; min-width: 170px;">
+                            <div class="appt-field-group" style="flex: 1; min-width: 0;">
+                                <span class="appt-field-label">@I18n.T("Mobile No")</span>
+                                <InputText class="classic-input" @bind-Value="editor.ContactNo" placeholder="017xxxxxxxx" />
+                            </div>
+                        </div>
+
+                        <!-- Sex -->
+                        <div class="appt-field-group appt-field-sex">
                             <span class="appt-field-label">@I18n.T("Sex")</span>
                             <div class="sex-btn-group" role="radiogroup" aria-label="@I18n.T("Sex")">
                                 @foreach (var sex in sexOptions)
@@ -239,250 +463,319 @@
                                             class="sex-btn sex-btn-@sexClass @(isSelected ? "is-selected" : "")"
                                             tabindex="@(isSelected ? 0 : -1)"
                                             @onclick="() => SelectSex(sex.Key)"
-                                            title="@sex.Label">
-                                        <span class="sex-icon">@sex.Icon</span>
-                                        <span class="sex-text">@sex.Label</span>
+                                            title="@I18n.T(sex.Label)">
+                                        <span class="sex-icon">
+                                            @if (sex.Key == "Male")
+                                            {
+                                                <svg class="sex-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="10" cy="14" r="5"></circle>
+                                                    <line x1="19" y1="5" x2="13.6" y2="10.4"></line>
+                                                    <polyline points="15 5 19 5 19 9"></polyline>
+                                                </svg>
+                                            }
+                                            else if (sex.Key == "Female")
+                                            {
+                                                <svg class="sex-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="9" r="5"></circle>
+                                                    <line x1="12" y1="14" x2="12" y2="21"></line>
+                                                    <line x1="9" y1="18" x2="15" y2="18"></line>
+                                                </svg>
+                                            }
+                                            else
+                                            {
+                                                <svg class="sex-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                                    <circle cx="12" cy="12" r="4"></circle>
+                                                    <line x1="12" y1="4" x2="12" y2="8"></line>
+                                                    <line x1="10" y1="5" x2="14" y2="5"></line>
+                                                    <line x1="12" y1="16" x2="12" y2="20"></line>
+                                                    <line x1="10" y1="19" x2="14" y2="19"></line>
+                                                </svg>
+                                            }
+                                        </span>
+                                        <span class="sex-text">@I18n.T(sex.Label)</span>
                                     </button>
                                 }
                             </div>
                         </div>
 
-                        <div class="appt-field-group" style="flex: 0 0 85px;">
-                            <span class="appt-field-label">@I18n.T("Age")</span>
-                            <InputText class="classic-input" @bind-Value="editor.Age" placeholder="@I18n.T("Age")" />
-                        </div>
+                        <!-- Age & Weight (Compact & Proportioned below Sex) -->
+                        <div class="appt-vitals-compact-stack">
+                            <!-- Age -->
+                            <div class="appt-field-group appt-field-age">
+                                <span class="appt-field-label">@I18n.T("Age")</span>
+                                <div class="appt-unit-input-box">
+                                    <InputText class="classic-input appt-unit-input" @bind-Value="editor.Age" placeholder="e.g. 28" />
+                                    <span class="appt-unit-addon">Yrs</span>
+                                </div>
+                            </div>
 
-                        <div class="appt-field-group" style="flex: 0 0 100px;">
-                            <span class="appt-field-label">⚖️ @I18n.T("Weight")</span>
-                            <div class="appt-weight-box">
-                                <InputText class="classic-input appt-weight-val" @bind-Value="editor.Weight" placeholder="e.g. 65" />
-                                <span class="appt-weight-unit">kg</span>
+                            <!-- Weight -->
+                            <div class="appt-field-group appt-field-weight">
+                                <span class="appt-field-label">@I18n.T("Weight")</span>
+                                <div class="appt-unit-input-box">
+                                    <InputText class="classic-input appt-unit-input" @bind-Value="editor.Weight" placeholder="e.g. 65" />
+                                    <span class="appt-unit-addon">kg</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Appointment Date & Time -->
-                    <div class="appt-field-group">
-                        <div class="appt-date-header-row">
-                            <span class="appt-field-label">
-                                <span>@I18n.T("Appointment Date & Time")<span class="req">*</span></span>
-                            </span>
-                            <div class="appt-date-chips">
-                                <button type="button" class="appt-chip" @onclick="SetApptDateToday">@I18n.T("Today")</button>
-                                <button type="button" class="appt-chip" @onclick="SetApptDateTomorrow">@I18n.T("Tomorrow")</button>
-                            </div>
-                        </div>
-                        <InputDate class="classic-input" Type="InputDateType.DateTimeLocal" @bind-Value="editor.ApptDate" />
                     </div>
                 </div>
 
                 <div class="appt-form-footer">
-                    <div class="appt-footer-primary-group">
-                        <button class="btn btn-primary appt-btn" type="button" @onclick="SaveAndPrintAsync" disabled="@saving" title="@I18n.T("Save and Print Token Slip (Ctrl+Enter)")">
-                            🖨️ @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Book & Print") : I18n.T("Update & Print"))
-                        </button>
-                        <button class="btn btn-secondary appt-btn" type="submit" disabled="@saving" title="@I18n.T("Save without printing")">
-                            💾 @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Only") : I18n.T("Update Only"))
-                        </button>
-                    </div>
-
-                    <div style="display:flex; align-items:center; gap:6px;">
+                    @{
+                        var isDateOffDay = SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, apptDatePart);
+                    }
+                    <div class="appt-footer-left-info">
                         @if (editor.ID > 0)
                         {
-                            <button class="btn btn-secondary appt-btn" type="button" @onclick="PrintAppointmentAsync" title="@I18n.T("Print Slip")">
-                                @I18n.T("Print Slip")
-                            </button>
                             <button class="btn btn-ghost appt-btn" type="button" @onclick="DeleteSelectedAsync" style="color: #dc2626;" title="@I18n.T("Delete Appointment")">
                                 @I18n.T("Delete")
                             </button>
                         }
+                    </div>
+
+                    <div class="appt-footer-right-actions">
                         <button class="btn btn-ghost appt-btn" type="button" @onclick="Reset" title="@I18n.T("Clear Form")">
                             @I18n.T("Clear")
+                        </button>
+                        <button class="btn btn-primary appt-btn appt-book-btn" type="submit" 
+                                disabled="@(saving || isDateOffDay)" 
+                                title="@(isDateOffDay ? $"{DoctorDisplayName(SelectedDoctor)} {I18n.T("is OFF on")} {apptDatePart:dddd}. {I18n.T("Cannot book appointment.")}" : I18n.T("Book Appointment (Ctrl+Enter)"))">
+                            ✓ @(saving ? I18n.T("Booking...") : editor.ID == 0 ? I18n.T("Book Appointment") : I18n.T("Update Appointment"))
                         </button>
                     </div>
                 </div>
             </EditForm>
         </div>
+    </div>
 
-        <!-- Right Panel: Doctor's Daily Schedule & Queue Card -->
-        <div class="appt-queue-card">
-            <div class="appt-queue-top">
-                <div class="appt-queue-title-wrap">
-                    <h2>@I18n.T("Daily Schedule")</h2>
-                    <span class="appt-date-sub">(@filterDate.ToString("dd MMM yyyy"))</span>
-                </div>
-
-                <!-- Scope Switcher: Selected Doctor vs All Doctors -->
-                <div class="appt-scope-tabs">
-                    @if (SelectedDoctor != null && editor.DoctorID > 0)
-                    {
-                        <button type="button"
-                                class="appt-scope-tab @(filterByCurrentDoctor ? "active" : "")"
-                                @onclick="() => SetDoctorScope(true)"
-                                title="@I18n.T("Show queue for selected doctor")">
-                            🩺 @DoctorDisplayName(SelectedDoctor)
-                            <span class="count-pill">@DoctorTodayCount</span>
-                        </button>
-                    }
-                    <button type="button"
-                            class="appt-scope-tab @(!filterByCurrentDoctor || editor.DoctorID <= 0 ? "active" : "")"
-                            @onclick="() => SetDoctorScope(false)"
-                            title="@I18n.T("Show all doctors")">
-                        👥 @I18n.T("All Doctors")
-                        <span class="count-pill">@appointments.Count</span>
-                    </button>
-                </div>
+    <!-- Actionable Daily Schedule Slide-Over Drawer -->
+    <div class="appt-drawer-backdrop @(showScheduleDrawer ? "show" : "")" @onclick="CloseScheduleDrawer"></div>
+    <aside class="appt-drawer-panel @(showScheduleDrawer ? "show" : "")" aria-label="@I18n.T("Daily Schedule & Queue")">
+        <div class="appt-drawer-header">
+            <div class="appt-drawer-title-wrap">
+                <span style="font-size:16px;">📋</span>
+                <h3 class="appt-drawer-title">
+                    @I18n.T("Daily Schedule & Queue")
+                </h3>
             </div>
-
-            <!-- Status Filter Bar -->
-            <div class="appt-queue-filter-strip">
-                <div class="appt-status-chips">
-                    <button type="button" class="status-chip @(statusFilter == "All" ? "active" : "")" @onclick='() => SetStatusFilter("All")'>
-                        @I18n.T("All") (@ScopedAppointments.Count())
-                    </button>
-                    <button type="button" class="status-chip booked @(statusFilter == "Booked" ? "active" : "")" @onclick='() => SetStatusFilter("Booked")'>
-                        @I18n.T("Booked") (@ScopedAppointments.Count(x => x.Status == "Booked"))
-                    </button>
-                    <button type="button" class="status-chip checkedin @(statusFilter == "CheckedIn" ? "active" : "")" @onclick='() => SetStatusFilter("CheckedIn")'>
-                        @I18n.T("Checked In") (@ScopedAppointments.Count(x => x.Status == "CheckedIn"))
-                    </button>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <div class="appt-date-filter-wrap" style="background:#ffffff; border:1px solid #cbd5e1; border-radius:6px; padding:2px 6px;">
+                    <label style="font-size:11px; font-weight:700; color:#475569;">📅 @I18n.T("Date"):</label>
+                    <InputDate class="appt-date-filter-input"
+                               @bind-Value="filterDate"
+                               @bind-Value:after="LoadAppointmentsAsync"
+                               title="@I18n.T("Filter schedule by appointment date")" />
                 </div>
-
-                <span style="font-size:11px; font-weight:700; color:#64748b;">
-                    @FilteredAppointments.Count() @I18n.T("Listed")
-                </span>
+                <button type="button" class="appt-drawer-close" @onclick="CloseScheduleDrawer" title="@I18n.T("Close Drawer (Esc)")" aria-label="@I18n.T("Close")">
+                    ✕
+                </button>
             </div>
+        </div>
 
-            <!-- Barcode & QR Scanner Bar -->
-            <div class="appt-scanner-bar">
-                <div class="appt-scanner-input-wrap">
-                    <span class="appt-scanner-icon"><SearchIcon /></span>
-                    <input type="text"
-                           class="classic-input appt-scanner-input"
-                           placeholder="@I18n.T("Scan barcode/QR or search serial, patient, mobile...")"
-                           @bind="apptScanQuery"
-                           @bind:event="oninput"
-                           @bind:after="ResetQueuePage"
-                           @onkeydown="HandleApptScanKeyDown" />
-                    @if (!string.IsNullOrWhiteSpace(apptScanQuery))
-                    {
-                        <button type="button" class="appt-scanner-clear" @onclick="ClearApptScan" title="Clear">✕</button>
-                    }
-                </div>
-            </div>
+        <div class="appt-drawer-body">
+            <!-- Doctor's Daily Schedule & Queue Card -->
+            <div class="appt-queue-card" style="border:none; border-radius:0; box-shadow:none; height:100%;">
+                <div class="appt-queue-top">
+                    <div class="appt-queue-title-wrap">
+                        <h2>@I18n.T("Daily Schedule")</h2>
+                        <span class="appt-date-sub">(@filterDate.ToString("dd MMM yyyy"))</span>
+                    </div>
 
-            <!-- Queue List with Internal Vertical Scroll -->
-            <div class="appt-queue-list">
-                @if (!FilteredAppointments.Any())
-                {
-                    <div class="appt-empty-state">
-                        <div class="appt-empty-state-icon">📋</div>
-                        <div class="appt-empty-state-title">@I18n.T("No appointments matching current filters")</div>
-                        <div class="appt-empty-state-desc">
-                            @if (filterByCurrentDoctor && editor.DoctorID > 0)
-                            {
-                                @I18n.T("No appointments scheduled for this doctor on selected date.")
-                            }
-                            else
-                            {
-                                @I18n.T("No appointments found for the selected date and status.")
-                            }
-                        </div>
-                        @if (filterByCurrentDoctor && appointments.Any())
-                        {
-                            <button type="button" class="btn btn-secondary btn-sm" @onclick="() => SetDoctorScope(false)" style="margin-top:8px;">
-                                👥 @I18n.T("View All Doctors Appointments") (@appointments.Count)
+                    <!-- Scope Switcher & Doctor Dropdown Filter -->
+                    <div style="display:flex; flex-direction:column; gap:6px; width:100%; margin-top:4px;">
+                        <div class="appt-scope-tabs">
+                            <button type="button"
+                                    class="appt-scope-tab @(!filterByCurrentDoctor ? "active" : "")"
+                                    @onclick="() => SetDoctorScope(false)"
+                                    title="@I18n.T("Show all doctors")">
+                                👥 @I18n.T("All Doctors")
+                                <span class="count-pill">@appointments.Count</span>
                             </button>
+                            <button type="button"
+                                    class="appt-scope-tab @(filterByCurrentDoctor ? "active" : "")"
+                                    @onclick="() => SetDoctorScope(true)"
+                                    title="@I18n.T("Filter by specific doctor")">
+                                🩺 @(drawerDoctorId > 0 && doctorById.TryGetValue(drawerDoctorId, out var dItem) ? dItem.DisplayName : I18n.T("Doctor Wise"))
+                                <span class="count-pill">@(drawerDoctorId > 0 ? appointments.Count(a => a.DoctorID == drawerDoctorId) : appointments.Count)</span>
+                            </button>
+                        </div>
+
+                        @if (filterByCurrentDoctor)
+                        {
+                            <div class="appt-drawer-doc-select-wrap">
+                                <select class="classic-input appt-select" value="@drawerDoctorId" @onchange="OnDrawerDoctorChanged" style="font-size:11.5px; height:29px; width:100%;">
+                                    <option value="0">-- @I18n.T("All Doctors in List") --</option>
+                                    @foreach (var doc in doctors)
+                                    {
+                                        <option value="@doc.ID">@DoctorDisplayName(doc) (@appointments.Count(a => a.DoctorID == doc.ID))</option>
+                                    }
+                                </select>
+                            </div>
                         }
                     </div>
-                }
-                @foreach (var appt in VisibleAppointments)
-                {
-                    <div class="appt-queue-item @(appt.Status == "CheckedIn" ? "checkedin-item" : "") @(editor.ID == appt.ID ? "active" : "")">
-                        <div class="appt-serial-col">
-                            <span class="appt-queue-serial">#@appt.ApptSLNO.ToString("00")</span>
-                            <span class="appt-time-pill">@appt.ApptDate.ToString("hh:mm tt")</span>
-                        </div>
+                </div>
 
-                        <div class="appt-queue-info">
-                            <div class="appt-name-row">
-                                <strong class="appt-queue-name">@appt.Name</strong>
-                                <span class="pill @(appt.Status == "CheckedIn" ? "pill-success" : "")" style="font-size:10px; font-weight:700;">
-                                    @appt.Status
-                                </span>
-                            </div>
-                            <div class="appt-queue-meta">
-                                @if (!string.IsNullOrWhiteSpace(appt.PatientID))
+                <!-- Status Filter Bar -->
+                <div class="appt-queue-filter-strip">
+                    <div class="appt-status-chips">
+                        <button type="button" class="status-chip @(statusFilter == "All" ? "active" : "")" @onclick='() => SetStatusFilter("All")'>
+                            @I18n.T("All") (@ScopedAppointments.Count())
+                        </button>
+                        <button type="button" class="status-chip booked @(statusFilter == "Booked" ? "active" : "")" @onclick='() => SetStatusFilter("Booked")'>
+                            @I18n.T("Booked") (@ScopedAppointments.Count(x => x.Status == "Booked"))
+                        </button>
+                        <button type="button" class="status-chip checkedin @(statusFilter == "CheckedIn" ? "active" : "")" @onclick='() => SetStatusFilter("CheckedIn")'>
+                            @I18n.T("Checked In") (@ScopedAppointments.Count(x => x.Status == "CheckedIn"))
+                        </button>
+                    </div>
+
+                    <span style="font-size:11px; font-weight:700; color:#64748b;">
+                        @FilteredAppointments.Count() @I18n.T("Listed")
+                    </span>
+                </div>
+
+                <!-- Barcode & QR Scanner Bar -->
+                <div class="appt-scanner-bar">
+                    <div class="appt-scanner-input-wrap">
+                        <span class="appt-scanner-icon"><SearchIcon /></span>
+                        <input type="text"
+                               class="classic-input appt-scanner-input"
+                               placeholder="@I18n.T("Scan barcode/QR or search serial, patient, mobile...")"
+                               @bind="apptScanQuery"
+                               @bind:event="oninput"
+                               @bind:after="ResetQueuePage"
+                               @onkeydown="HandleApptScanKeyDown" />
+                        @if (!string.IsNullOrWhiteSpace(apptScanQuery))
+                        {
+                            <button type="button" class="appt-scanner-clear" @onclick="ClearApptScan" title="Clear">✕</button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Queue List with Internal Vertical Scroll -->
+                <div class="appt-queue-list">
+                    @if (!FilteredAppointments.Any())
+                    {
+                        <div class="appt-empty-state">
+                            <div class="appt-empty-state-icon">📋</div>
+                            <div class="appt-empty-state-title">@I18n.T("No appointments matching current filters")</div>
+                            <div class="appt-empty-state-desc">
+                                @if (filterByCurrentDoctor && editor.DoctorID > 0)
                                 {
-                                    <span class="meta-tag id-tag">ID: @appt.PatientID</span>
+                                    @I18n.T("No appointments scheduled for this doctor on selected date.")
                                 }
                                 else
                                 {
-                                    <span class="meta-tag walkin-tag">Walk-in</span>
-                                }
-                                @{
-                                    var apptSex = !string.IsNullOrWhiteSpace(appt.Sex) ? appt.Sex : (!string.IsNullOrWhiteSpace(appt.PatientID) && patientSexMap.TryGetValue(appt.PatientID, out var sVal) ? sVal : null);
-                                }
-                                @if (!string.IsNullOrWhiteSpace(apptSex))
-                                {
-                                    <span class="meta-sep">&bull;</span>
-                                    <span class="meta-tag sex-tag-@apptSex.ToLowerInvariant()">
-                                        @(apptSex == "Male" ? "♂ Male" : apptSex == "Female" ? "♀ Female" : apptSex)
-                                    </span>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(appt.Age))
-                                {
-                                    <span class="meta-sep">&bull;</span>
-                                    <span>@appt.Age</span>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(appt.Weight))
-                                {
-                                    <span class="meta-sep">&bull;</span>
-                                    <span>⚖️ @appt.Weight kg</span>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(appt.ContactNo))
-                                {
-                                    <span class="meta-sep">&bull;</span>
-                                    <span>@appt.ContactNo</span>
-                                }
-                                @if (!filterByCurrentDoctor)
-                                {
-                                    <span class="meta-sep">&bull;</span>
-                                    <span class="meta-doc">🩺 @DoctorName(appt.DoctorID)</span>
+                                    @I18n.T("No appointments found for the selected date and status.")
                                 }
                             </div>
-                        </div>
-
-                        <div class="appt-queue-actions">
-                            @if (appt.Status == "Booked" && appt.ApptDate.Date == DateTime.Today)
+                            @if (filterByCurrentDoctor && appointments.Any())
                             {
-                                <button class="appt-action-checkin" @onclick="() => CheckInAsync(appt)" title="@I18n.T("Check in patient to queue")">
-                                    ✓ @I18n.T("Check in")
+                                <button type="button" class="btn btn-secondary btn-sm" @onclick="() => SetDoctorScope(false)" style="margin-top:8px;">
+                                    👥 @I18n.T("View All Doctors Appointments") (@appointments.Count)
                                 </button>
                             }
-                            <button class="appt-tool-btn" @onclick="() => Print(appt)" title="@I18n.T("Print Slip")">
-                                🖨️
-                            </button>
-                            <button class="appt-tool-btn" @onclick="() => Select(appt)" title="@I18n.T("Edit")">
-                                ✎
-                            </button>
-                            <button class="appt-tool-btn danger" @onclick="() => DeleteAsync(appt)" title="@I18n.T("Delete")">
-                                &times;
-                            </button>
                         </div>
+                    }
+                    @foreach (var appt in VisibleAppointments)
+                    {
+                        <div class="appt-queue-item @(appt.Status == "CheckedIn" ? "checkedin-item" : "") @(editor.ID == appt.ID ? "active" : "")">
+                            <div class="appt-serial-col">
+                                <span class="appt-queue-serial">#@appt.ApptSLNO.ToString("00")</span>
+                                <span class="appt-time-pill">@appt.ApptDate.ToString("hh:mm tt")</span>
+                            </div>
+
+                            <div class="appt-queue-info">
+                                <div class="appt-name-row">
+                                    <strong class="appt-queue-name">@appt.Name</strong>
+                                    <span class="pill @(appt.Status == "CheckedIn" ? "pill-success" : "")" style="font-size:10px; font-weight:700;">
+                                        @appt.Status
+                                    </span>
+                                </div>
+                                <div class="appt-queue-meta">
+                                    @if (ClinicalEncounterWorkflow.IsTempPatientId(appt.PatientID))
+                                    {
+                                        <span class="meta-tag temp-id-tag">🪪 Temp: @appt.PatientID</span>
+                                    }
+                                    else if (!string.IsNullOrWhiteSpace(appt.PatientID))
+                                    {
+                                        <span class="meta-tag id-tag">ID: @appt.PatientID</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="meta-tag temp-id-tag">🪪 Temp: @ClinicalEncounterWorkflow.FormatTempPatientId(appt.ID)</span>
+                                    }
+                                    @{
+                                        var apptSex = !string.IsNullOrWhiteSpace(appt.Sex) ? appt.Sex : (!string.IsNullOrWhiteSpace(appt.PatientID) && patientSexMap.TryGetValue(appt.PatientID, out var sVal) ? sVal : null);
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(apptSex))
+                                    {
+                                        <span class="meta-sep">&bull;</span>
+                                        <span class="meta-tag sex-tag-@apptSex.ToLowerInvariant()">
+                                            @(apptSex == "Male" ? "♂ Male" : apptSex == "Female" ? "♀ Female" : apptSex)
+                                        </span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(appt.Age))
+                                    {
+                                        <span class="meta-sep">&bull;</span>
+                                        <span>@appt.Age</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(appt.Weight))
+                                    {
+                                        <span class="meta-sep">&bull;</span>
+                                        <span>⚖️ @appt.Weight kg</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(appt.ContactNo))
+                                    {
+                                        <span class="meta-sep">&bull;</span>
+                                        <span>@appt.ContactNo</span>
+                                    }
+                                    @if (!filterByCurrentDoctor)
+                                    {
+                                        <span class="meta-sep">&bull;</span>
+                                        <span class="meta-doc">🩺 @DoctorName(appt.DoctorID)</span>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="appt-queue-actions">
+                                @if (appt.Status == "Booked" && appt.ApptDate.Date == DateTime.Today)
+                                {
+                                    <button class="appt-action-checkin" @onclick="() => CheckInAsync(appt)" title="@I18n.T("Check in patient to queue")">
+                                        ✓ @I18n.T("Check in")
+                                    </button>
+                                }
+                                <button class="appt-tool-btn" @onclick="() => SelectAndCloseDrawer(appt)" title="@I18n.T("Edit (Select & Open in Form)")">
+                                    ✎
+                                </button>
+                                <button class="appt-tool-btn danger" @onclick="() => DeleteAsync(appt)" title="@I18n.T("Delete")">
+                                    &times;
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+                @if (QueuePageCount > 1)
+                {
+                    <div class="appt-queue-pager">
+                        <button type="button" @onclick="PreviousQueuePage" disabled="@(queuePage == 0)" aria-label="Previous appointments">&lsaquo;</button>
+                        <span>@(queuePage + 1) / @QueuePageCount</span>
+                        <button type="button" @onclick="NextQueuePage" disabled="@(queuePage >= QueuePageCount - 1)" aria-label="Next appointments">&rsaquo;</button>
                     </div>
                 }
             </div>
-            @if (QueuePageCount > 1)
-            {
-                <div class="appt-queue-pager">
-                    <button type="button" @onclick="PreviousQueuePage" disabled="@(queuePage == 0)" aria-label="Previous appointments">&lsaquo;</button>
-                    <span>@(queuePage + 1) / @QueuePageCount</span>
-                    <button type="button" @onclick="NextQueuePage" disabled="@(queuePage >= QueuePageCount - 1)" aria-label="Next appointments">&rsaquo;</button>
-                </div>
-            }
         </div>
-    </div>
+
+        <div class="appt-drawer-footer">
+            <button type="button" class="btn btn-secondary appt-btn" @onclick="PrintScheduleAsync" title="@I18n.T("Print Filtered Schedule List")">
+                🖨️ @I18n.T("Print Schedule")
+            </button>
+            <button type="button" class="btn btn-ghost appt-btn" @onclick="CloseScheduleDrawer">
+                @I18n.T("Close") (Esc)
+            </button>
+        </div>
+    </aside>
 </div>
 
 <div id="appointment-print" class="print-document">
@@ -511,37 +804,94 @@
 <div id="schedule-print" class="print-document">
     <div class="print-sheet">
         <PrintDocumentHeader Title="Daily Doctor Appointment Schedule"
-                             Subtitle="@($"Schedule Date: {filterDate:dd MMM yyyy}")" />
+                             Subtitle="@($"Schedule Date: {filterDate:dd MMM yyyy}{(filterByCurrentDoctor && drawerDoctorId > 0 ? $" • Doctor: {DoctorName(drawerDoctorId)}" : "")}")" />
 
-        <table class="data-table" style="margin-top: 12px;">
-            <thead>
-                <tr>
-                    <th>@I18n.T("Serial")</th>
-                    <th>@I18n.T("Patient Name")</th>
-                    <th>@I18n.T("Patient ID")</th>
-                    <th>@I18n.T("Sex")</th>
-                    <th>@I18n.T("Doctor")</th>
-                    <th>@I18n.T("Age")</th>
-                    <th>@I18n.T("Weight")</th>
-                    <th>@I18n.T("Mobile")</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var a in appointments)
-                {
-                    <tr>
-                        <td><b>#@a.ApptSLNO.ToString("00")</b></td>
-                        <td>@a.Name</td>
-                        <td>@a.PatientID</td>
-                        <td>@(string.IsNullOrWhiteSpace(a.Sex) ? (patientSexMap.TryGetValue(a.PatientID ?? "", out var s) ? s : "-") : a.Sex)</td>
-                        <td>@DoctorName(a.DoctorID)</td>
-                        <td>@a.Age</td>
-                        <td>@(string.IsNullOrWhiteSpace(a.Weight) ? "-" : $"{a.Weight} kg")</td>
-                        <td>@a.ContactNo</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
+        @{
+            var doctorGroups = FilteredAppointments
+                .GroupBy(a => a.DoctorID)
+                .OrderBy(g => DoctorName(g.Key));
+        }
+
+        @if (!doctorGroups.Any())
+        {
+            <div style="text-align:center; padding:24px; color:#64748b; font-size:13px; font-weight:600;">
+                @I18n.T("No appointments scheduled for this date / filter.")
+            </div>
+        }
+        else
+        {
+            @foreach (var group in doctorGroups)
+            {
+                var doc = doctors.FirstOrDefault(d => d.ID == group.Key);
+                var docRoom = doc != null ? CleanDoctorRoom(doc.Room) : string.Empty;
+                var deptName = doc != null && doc.Department.HasValue && departments.TryGetValue(doc.Department.Value, out var dn) ? dn : string.Empty;
+
+                <div class="print-doctor-schedule-block" style="margin-top: 14px; page-break-inside: avoid;">
+                    <!-- Doctor Section Banner (Printed once per doctor, not repeated per row) -->
+                    <div style="background: #f1f5f9; border-left: 4px solid #0284c7; padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-radius: 3px; margin-bottom: 4px;">
+                        <div>
+                            <span style="font-size: 13px; font-weight: 800; color: #0f172a;">🩺 @DoctorName(group.Key)</span>
+                            @if (!string.IsNullOrWhiteSpace(deptName))
+                            {
+                                <span style="font-size: 11px; color: #475569; margin-left: 6px;">&bull; @deptName</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(docRoom))
+                            {
+                                <span style="font-size: 11px; color: #0369a1; font-weight: 700; margin-left: 6px;">&bull; Room: @docRoom</span>
+                            }
+                        </div>
+                        <span style="font-size: 11px; font-weight: 700; color: #0369a1; background: #e0f2fe; padding: 2px 8px; border-radius: 10px;">
+                            @group.Count() @I18n.T("Patient(s)")
+                        </span>
+                    </div>
+
+                    <!-- Patients under this doctor -->
+                    <table class="data-table" style="width: 100%; margin-bottom: 8px;">
+                        <thead>
+                            <tr>
+                                <th style="width: 52px; text-align: center;">@I18n.T("Queue #")</th>
+                                <th style="width: 120px;">@I18n.T("Temp ID")</th>
+                                <th>@I18n.T("Patient Name")</th>
+                                <th style="width: 50px; text-align: center;">@I18n.T("Sex")</th>
+                                <th style="width: 55px; text-align: center;">@I18n.T("Age")</th>
+                                <th style="width: 65px; text-align: center;">@I18n.T("Weight")</th>
+                                <th style="width: 95px;">@I18n.T("Phone No")</th>
+                                <th style="width: 135px; text-align: center;">@I18n.T("Barcode")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in group.OrderBy(x => x.ApptSLNO))
+                            {
+                                var pid = !string.IsNullOrWhiteSpace(a.PatientID) ? a.PatientID : ClinicalEncounterWorkflow.FormatTempPatientId(a.ID);
+                                var apptSex = !string.IsNullOrWhiteSpace(a.Sex) ? a.Sex : (!string.IsNullOrWhiteSpace(a.PatientID) && patientSexMap.TryGetValue(a.PatientID, out var s) ? s : "-");
+                                <tr>
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        <b style="font-size: 13px; color: #0284c7;">#@a.ApptSLNO.ToString("00")</b>
+                                    </td>
+                                    <td style="vertical-align: middle;">
+                                        <span style="font-family: monospace; font-size: 11px; font-weight: 700; color: #0369a1;">@pid</span>
+                                    </td>
+                                    <td style="vertical-align: middle;">
+                                        <b style="font-size: 12px; color: #0f172a;">@a.Name</b>
+                                    </td>
+                                    <td style="text-align: center; vertical-align: middle; font-size: 11px;">@apptSex</td>
+                                    <td style="text-align: center; vertical-align: middle; font-size: 11px;">@a.Age</td>
+                                    <td style="text-align: center; vertical-align: middle; font-size: 11px;">
+                                        @(string.IsNullOrWhiteSpace(a.Weight) ? "-" : $"{a.Weight} kg")
+                                    </td>
+                                    <td style="vertical-align: middle; font-size: 11px;">@a.ContactNo</td>
+                                    <td style="text-align: center; vertical-align: middle; padding: 2px 4px;">
+                                        <div style="display: inline-block; max-width: 130px; overflow: hidden; line-height: 1;">
+                                            @((MarkupString)BarcodeQr.GenerateBarcodeSvg(pid, barHeight: 24, includeText: false))
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
 
         <PrintDocumentFooter SignTitle1="Duty Receptionist"
                              SignTitle3="Medical Officer In-Charge"
@@ -565,14 +915,19 @@
     private bool showDoctorSuggestions;
     private List<Registration> patientIdSuggestions = [];
     private bool showPatientIdSuggestions;
+    private const int PatientBatchSize = 15;
+    private bool hasMorePatientSuggestions = true;
+    private bool isLoadingMorePatients = false;
     private string patientSearchQuery = string.Empty;
-    private bool isWalkInMode;
+    private bool isWalkInMode = true;
     private bool filterByCurrentDoctor = false;
+    private int drawerDoctorId = 0;
     private string statusFilter = "All";
     private bool saving;
+    private bool showScheduleDrawer;
     private int originalDoctorId;
     private DateTime originalDate;
-    private const int QueuePageSize = 7;
+    private const int QueuePageSize = 8;
     private int queuePage;
 
     private DoctorsProfile? SelectedDoctor => doctors.FirstOrDefault(x => x.ID == editor.DoctorID);
@@ -604,8 +959,8 @@
         selectedPatientSex = sex;
     }
 
-    private IEnumerable<DoctorAppointment> ScopedAppointments => filterByCurrentDoctor && editor.DoctorID > 0
-        ? appointments.Where(a => a.DoctorID == editor.DoctorID)
+    private IEnumerable<DoctorAppointment> ScopedAppointments => filterByCurrentDoctor && drawerDoctorId > 0
+        ? appointments.Where(a => a.DoctorID == drawerDoctorId)
         : appointments;
 
     private IEnumerable<DoctorAppointment> FilteredAppointments
@@ -634,20 +989,69 @@
         .Skip(queuePage * QueuePageSize)
         .Take(QueuePageSize);
 
-    private IEnumerable<DoctorsProfile> FilteredDoctors
+    private sealed record DoctorViewItem(
+        DoctorsProfile Doctor,
+        string DisplayName,
+        string Degree,
+        string DepartmentName,
+        string Room,
+        string SearchHaystack);
+
+    private const int DoctorBatchSize = 12;
+    private int doctorVisibleCount = DoctorBatchSize;
+    private List<DoctorViewItem> doctorViewItems = [];
+    private List<DoctorViewItem> filteredDoctorItems = [];
+    private Dictionary<int, DoctorViewItem> doctorById = [];
+    private DotNetObjectReference<Appointments>? dotNetRef;
+
+    private IEnumerable<DoctorViewItem> VisibleDoctorItems => filteredDoctorItems.Take(doctorVisibleCount);
+    private int VisibleDoctorsCount => Math.Min(doctorVisibleCount, filteredDoctorItems.Count);
+
+    private void BuildDoctorCache()
     {
-        get
+        var list = new List<DoctorViewItem>(doctors.Count);
+        var map = new Dictionary<int, DoctorViewItem>(doctors.Count);
+        foreach (var d in doctors)
         {
-            var term = doctorSearchText.Trim();
-            if (string.IsNullOrWhiteSpace(term)) return doctors;
-            return doctors.Where(d => d.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
-                                   || DoctorLabel(d).Contains(term, StringComparison.OrdinalIgnoreCase)
-                                   || (d.Room != null && d.Room.Contains(term, StringComparison.OrdinalIgnoreCase))
-                                   || (d.Department.HasValue && departments.TryGetValue(d.Department.Value, out var deptName) && deptName.Contains(term, StringComparison.OrdinalIgnoreCase)))
-                          .OrderBy(x => x.Priority.HasValue && x.Priority.Value > 0 ? 0 : 1)
-                          .ThenBy(x => x.Priority)
-                          .ThenBy(x => x.Name);
+            var disp = DoctorDisplayName(d);
+            var deg = CleanDoctorDegree(d);
+            var deptName = d.Department.HasValue && departments.TryGetValue(d.Department.Value, out var dn) ? dn : string.Empty;
+            var room = CleanDoctorRoom(d.Room);
+            var haystack = $"D{d.ID} {d.ID} {disp} {deg} {deptName} {room} {d.Room}";
+            var item = new DoctorViewItem(d, disp, deg, deptName, room, haystack);
+            list.Add(item);
+            map[d.ID] = item;
         }
+        doctorViewItems = list;
+        doctorById = map;
+        UpdateFilteredDoctors();
+    }
+
+    private int selectedDepartmentId = 0;
+
+    private void ResetDeptFilter()
+    {
+        selectedDepartmentId = 0;
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
+    }
+
+    private void UpdateFilteredDoctors()
+    {
+        var term = doctorSearchText.Trim();
+        IEnumerable<DoctorViewItem> query = doctorViewItems;
+
+        if (selectedDepartmentId > 0)
+        {
+            query = query.Where(x => x.Doctor.Department == selectedDepartmentId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(term) && (editor.DoctorID <= 0 || !doctorSearchText.StartsWith($"D{editor.DoctorID}")))
+        {
+            query = query.Where(x => x.SearchHaystack.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+
+        filteredDoctorItems = query.ToList();
     }
 
     protected override async Task OnInitializedAsync()
@@ -661,10 +1065,42 @@
             .ThenBy(x => x.Name)
             .ToListAsync();
         departments = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.ID, d => d.Name);
+        BuildDoctorCache();
         editor.DoctorID = 0;
         doctorSearchText = string.Empty;
+        isWalkInMode = true;
+        apptDatePart = filterDate.Date;
+        apptTimePart = "17:00";
+        SyncApptDateTime();
+        PatientSelection.Clear();
         StateHasChanged();
         await LoadAppointmentsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        dotNetRef ??= DotNetObjectReference.Create(this);
+        if (showDoctorSuggestions)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initDoctorInfiniteScroll", "appt-doctor-search-box", "appt-doctor-suggestions-list", dotNetRef);
+            }
+            catch
+            {
+                // Ignore transient JS interop disconnect errors
+            }
+        }
+        if (showPatientIdSuggestions)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "appt-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
+            }
+            catch
+            {
+            }
+        }
     }
 
     private void HandleLanguageChanged()
@@ -674,12 +1110,11 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        var patientId = QueryPatientId ?? PatientSelection.PatientId;
-        if (!string.IsNullOrWhiteSpace(patientId) && editor.ID == 0)
+        if (!string.IsNullOrWhiteSpace(QueryPatientId) && editor.ID == 0)
         {
-            editor.PatientID = patientId.Trim();
-            patientSearchQuery = patientId.Trim();
-            await FindPatientAsync(patientId);
+            editor.PatientID = QueryPatientId.Trim();
+            patientSearchQuery = QueryPatientId.Trim();
+            await FindPatientAsync(QueryPatientId);
         }
     }
 
@@ -722,24 +1157,78 @@ private async Task LoadAppointmentsAsync()
         await LoadPatientIdSuggestionsAsync();
     }
 
-    private async Task LoadPatientIdSuggestionsAsync()
+    private static IQueryable<Registration> BuildPatientQuery(HpmDbContext db, string term)
     {
-        var term = patientSearchQuery.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        patientIdSuggestions = await db.Registrations.AsNoTracking()
+        return db.Registrations.AsNoTracking()
             .Where(x => string.IsNullOrEmpty(term)
                      || x.PatientID.StartsWith(term)
                      || (x.Contact != null && x.Contact.StartsWith(term))
                      || (x.Name != null && x.Name.Contains(term)))
-            .OrderByDescending(x => x.ID)
-            .Take(6)
-            .ToListAsync();
-        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+            .OrderByDescending(x => x.ID);
+    }
+
+    private async Task LoadPatientIdSuggestionsAsync()
+    {
+        var term = patientSearchQuery.Trim();
+        hasMorePatientSuggestions = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            patientIdSuggestions = await q.Take(PatientBatchSize).ToListAsync();
+            hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
+            showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "appt-patient-suggestions-list");
+            }
+            catch { }
+        }
+        catch
+        {
+            patientIdSuggestions.Clear();
+            showPatientIdSuggestions = false;
+            hasMorePatientSuggestions = false;
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadMorePatientsFromJs()
+    {
+        if (isLoadingMorePatients || !hasMorePatientSuggestions || !showPatientIdSuggestions) return;
+        isLoadingMorePatients = true;
+        await InvokeAsync(StateHasChanged);
+
+        var term = patientSearchQuery.Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            var nextBatch = await q.Skip(patientIdSuggestions.Count).Take(PatientBatchSize).ToListAsync();
+            if (nextBatch.Count > 0)
+            {
+                patientIdSuggestions.AddRange(nextBatch);
+                hasMorePatientSuggestions = nextBatch.Count >= PatientBatchSize;
+            }
+            else
+            {
+                hasMorePatientSuggestions = false;
+            }
+        }
+        catch
+        {
+            hasMorePatientSuggestions = false;
+        }
+        finally
+        {
+            isLoadingMorePatients = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private async Task HidePatientSuggestionsAsync()
     {
-        await Task.Delay(150);
+        await Task.Delay(250);
         showPatientIdSuggestions = false;
     }
 
@@ -838,13 +1327,21 @@ private async Task LoadAppointmentsAsync()
             if (editor.DoctorID <= 0 || doctors.All(x => x.ID != editor.DoctorID))
                 throw new InvalidOperationException("Select a consultant doctor from the search results.");
 
+            var selectedDoc = doctors.First(x => x.ID == editor.DoctorID);
+            if (IsDoctorOffDay(selectedDoc, editor.ApptDate))
+                throw new InvalidOperationException($"Cannot schedule appointment: {DoctorDisplayName(selectedDoc)} is OFF on {editor.ApptDate:dddd} ({GetDoctorOffDaysDisplay(selectedDoc)}). Please choose an active working day.");
+
             var appointmentId = editor.ID;
             var doctorId = editor.DoctorID;
             var appointmentDate = editor.ApptDate;
             var appointmentDayStart = appointmentDate.Date;
             var appointmentDayEnd = appointmentDayStart.AddDays(1);
             var name = editor.Name;
-            var age = editor.Age;
+            var age = editor.Age?.Trim();
+            if (!string.IsNullOrWhiteSpace(age) && age.All(char.IsDigit))
+            {
+                age = $"{age}Y";
+            }
             var weight = editor.Weight?.Trim();
             var contactNo = editor.ContactNo;
             var patientId = editor.PatientID;
@@ -854,6 +1351,7 @@ private async Task LoadAppointmentsAsync()
             var savedId = appointmentId;
             var savedSerial = editor.ApptSLNO;
             var savedTransactionDate = transactionDate;
+            var savedPatientId = patientId;
 
             await using var strategyDb = await DbFactory.CreateDbContextAsync();
             var strategy = strategyDb.Database.CreateExecutionStrategy();
@@ -910,21 +1408,33 @@ private async Task LoadAppointmentsAsync()
                 }
 
                 await db.SaveChangesAsync();
+
+                if (string.IsNullOrWhiteSpace(entity.PatientID))
+                {
+                    entity.PatientID = ClinicalEncounterWorkflow.FormatTempPatientId(entity.ID);
+                    await db.SaveChangesAsync();
+                }
+
                 await transaction.CommitAsync();
                 savedId = entity.ID;
                 savedSerial = entity.ApptSLNO;
                 savedTransactionDate = entity.TransDate;
+                savedPatientId = entity.PatientID;
             });
 
             editor.ID = savedId;
             editor.ApptSLNO = savedSerial;
             editor.ApptDate = appointmentDate;
             editor.TransDate = savedTransactionDate;
+            editor.PatientID = savedPatientId;
+            editor.Age = age;
             originalDoctorId = doctorId;
             originalDate = appointmentDate;
             filterDate = appointmentDate.Date;
+            apptDatePart = appointmentDate.Date;
+            apptTimePart = appointmentDate.ToString("HH:mm");
             messageClass = "success";
-            message = $"Booked. Serial #{savedSerial:00}";
+            message = $"✓ Booked! Serial #{savedSerial:00} • {(ClinicalEncounterWorkflow.IsTempPatientId(savedPatientId) ? $"Temp Patient ID: {savedPatientId}" : $"Patient ID: {savedPatientId}")}";
             await LoadAppointmentsAsync();
         }
         catch (Exception ex)
@@ -949,14 +1459,20 @@ private async Task LoadAppointmentsAsync()
     {
         editor = NewAppointment();
         editor.DoctorID = 0;
+        selectedDepartmentId = 0;
         editor.Sex = null;
         selectedPatientSex = null;
         doctorSearchText = string.Empty;
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
         patientSearchQuery = string.Empty;
-        isWalkInMode = false;
+        isWalkInMode = true;
         filterByCurrentDoctor = false;
         showDoctorSuggestions = false;
         showPatientIdSuggestions = false;
+        apptDatePart = filterDate.Date;
+        apptTimePart = "17:00";
+        SyncApptDateTime();
     }
 
     private void Select(DoctorAppointment a)
@@ -979,8 +1495,18 @@ private async Task LoadAppointmentsAsync()
         };
         originalDoctorId = a.DoctorID;
         originalDate = a.ApptDate;
-        patientSearchQuery = a.PatientID ?? string.Empty;
-        isWalkInMode = string.IsNullOrWhiteSpace(a.PatientID);
+        apptDatePart = a.ApptDate.Date;
+        apptTimePart = a.ApptDate.ToString("HH:mm");
+        if (doctorById.TryGetValue(a.DoctorID, out var dItem) && dItem.Doctor.Department.HasValue)
+        {
+            selectedDepartmentId = dItem.Doctor.Department.Value;
+        }
+        else
+        {
+            selectedDepartmentId = 0;
+        }
+        patientSearchQuery = ClinicalEncounterWorkflow.IsTempPatientId(a.PatientID) ? string.Empty : (a.PatientID ?? string.Empty);
+        isWalkInMode = string.IsNullOrWhiteSpace(a.PatientID) || ClinicalEncounterWorkflow.IsTempPatientId(a.PatientID);
         selectedPatientSex = !string.IsNullOrWhiteSpace(a.PatientID) && patientSexMap.TryGetValue(a.PatientID, out var s) ? s : null;
         PatientSelection.Select(a.PatientID);
         SyncDoctorSearchText();
@@ -1203,6 +1729,7 @@ private async Task LoadAppointmentsAsync()
 
     private string DoctorName(int id)
     {
+        if (doctorById.TryGetValue(id, out var item)) return item.DisplayName;
         var doc = doctors.FirstOrDefault(x => x.ID == id);
         return doc is null ? "Doctor" : DoctorDisplayName(doc);
     }
@@ -1214,19 +1741,72 @@ private async Task LoadAppointmentsAsync()
         return string.IsNullOrWhiteSpace(deg) ? disp : $"{disp} {deg}".Trim();
     }
 
-    private void HandleDoctorSearchInput(ChangeEventArgs e)
+    private async Task HandleDepartmentFilterChanged(ChangeEventArgs e)
+    {
+        selectedDepartmentId = int.TryParse(e.Value?.ToString(), out var id) ? id : 0;
+        if (editor.DoctorID > 0)
+        {
+            if (selectedDepartmentId > 0 && SelectedDoctor?.Department != selectedDepartmentId)
+            {
+                editor.DoctorID = 0;
+                doctorSearchText = string.Empty;
+            }
+        }
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
+        showDoctorSuggestions = true;
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.resetDoctorScrollTop", "appt-doctor-suggestions-list");
+        }
+        catch { }
+    }
+
+    private async Task HandleDoctorSearchInputAsync(ChangeEventArgs e)
     {
         doctorSearchText = e.Value?.ToString() ?? string.Empty;
         editor.DoctorID = 0;
+        doctorVisibleCount = DoctorBatchSize;
+        UpdateFilteredDoctors();
         showDoctorSuggestions = true;
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.resetDoctorScrollTop", "appt-doctor-suggestions-list");
+        }
+        catch
+        {
+            // Ignore transient JS errors
+        }
     }
 
-    private void ShowDoctorSuggestions() => showDoctorSuggestions = true;
-
-    private async Task HideDoctorSuggestionsAsync()
+    private void ShowDoctorSuggestions()
     {
-        await Task.Delay(150);
-        showDoctorSuggestions = false;
+        if (!showDoctorSuggestions)
+        {
+            doctorVisibleCount = DoctorBatchSize;
+            UpdateFilteredDoctors();
+            showDoctorSuggestions = true;
+        }
+    }
+
+    [JSInvokable]
+    public void LoadMoreDoctorsFromJs()
+    {
+        if (doctorVisibleCount < filteredDoctorItems.Count)
+        {
+            doctorVisibleCount = Math.Min(filteredDoctorItems.Count, doctorVisibleCount + DoctorBatchSize);
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void CloseDoctorSuggestionsFromJs()
+    {
+        if (showDoctorSuggestions)
+        {
+            showDoctorSuggestions = false;
+            StateHasChanged();
+        }
     }
 
     private void HandleDoctorSearchKeyDown(KeyboardEventArgs e)
@@ -1236,32 +1816,310 @@ private async Task LoadAppointmentsAsync()
             showDoctorSuggestions = false;
             SyncDoctorSearchText();
         }
+        else if (e.Key == "Tab")
+        {
+            showDoctorSuggestions = false;
+        }
         else if (e.Key == "Enter")
         {
-            var doctor = FilteredDoctors.FirstOrDefault();
-            if (doctor is not null) SelectDoctor(doctor);
+            var item = filteredDoctorItems.FirstOrDefault();
+            if (item is not null) SelectDoctor(item.Doctor);
         }
+    }
+
+    private DateTime apptDatePart = DateTime.Today;
+    private string apptTimePart = "17:00";
+
+    private void SyncApptDateTime()
+    {
+        if (TimeSpan.TryParse(apptTimePart, out var ts))
+        {
+            editor.ApptDate = apptDatePart.Date.Add(ts);
+        }
+        else
+        {
+            editor.ApptDate = apptDatePart.Date.Add(TimeSpan.FromHours(17));
+        }
+    }
+
+    public static HashSet<DayOfWeek> GetDoctorOffDays(DoctorsProfile? doctor)
+    {
+        var set = new HashSet<DayOfWeek>();
+        if (doctor == null) return set;
+
+        if (!string.IsNullOrWhiteSpace(doctor.OffDay))
+        {
+            var tokens = doctor.OffDay.Split([',', ';', '/', ' ', '|', '&', '+'], StringSplitOptions.RemoveEmptyEntries);
+            foreach (var tok in tokens)
+            {
+                var cleaned = tok.Trim().ToLowerInvariant();
+                if (cleaned.StartsWith("fri")) set.Add(DayOfWeek.Friday);
+                else if (cleaned.StartsWith("sat")) set.Add(DayOfWeek.Saturday);
+                else if (cleaned.StartsWith("sun")) set.Add(DayOfWeek.Sunday);
+                else if (cleaned.StartsWith("mon")) set.Add(DayOfWeek.Monday);
+                else if (cleaned.StartsWith("tue")) set.Add(DayOfWeek.Tuesday);
+                else if (cleaned.StartsWith("wed")) set.Add(DayOfWeek.Wednesday);
+                else if (cleaned.StartsWith("thu")) set.Add(DayOfWeek.Thursday);
+            }
+            if (set.Count > 0) return set;
+        }
+
+        if (!string.IsNullOrWhiteSpace(doctor.ConsultationTime))
+        {
+            var text = doctor.ConsultationTime.ToLowerInvariant();
+            if (text.Contains("off") || text.Contains("except") || text.Contains("closed"))
+            {
+                if (text.Contains("fri")) set.Add(DayOfWeek.Friday);
+                if (text.Contains("sat")) set.Add(DayOfWeek.Saturday);
+                if (text.Contains("sun")) set.Add(DayOfWeek.Sunday);
+                if (text.Contains("mon")) set.Add(DayOfWeek.Monday);
+                if (text.Contains("tue")) set.Add(DayOfWeek.Tuesday);
+                if (text.Contains("wed")) set.Add(DayOfWeek.Wednesday);
+                if (text.Contains("thu")) set.Add(DayOfWeek.Thursday);
+            }
+            else if (text.Contains("sat") && text.Contains("thu"))
+            {
+                set.Add(DayOfWeek.Friday);
+            }
+            else if (text.Contains("sun") && text.Contains("thu"))
+            {
+                set.Add(DayOfWeek.Friday);
+                set.Add(DayOfWeek.Saturday);
+            }
+        }
+
+        // Default off day in Bangladesh clinic practice is Friday
+        if (set.Count == 0 && doctor.ID > 0)
+        {
+            set.Add(DayOfWeek.Friday);
+        }
+
+        return set;
+    }
+
+    public static bool IsDoctorOffDay(DoctorsProfile? doctor, DateTime date)
+    {
+        if (doctor == null || doctor.ID <= 0) return false;
+        var offDays = GetDoctorOffDays(doctor);
+        return offDays.Contains(date.DayOfWeek);
+    }
+
+    public static string GetDoctorOffDaysDisplay(DoctorsProfile? doctor)
+    {
+        if (doctor == null) return string.Empty;
+        var offDays = GetDoctorOffDays(doctor);
+        if (offDays.Count == 0) return "None";
+        return string.Join(", ", offDays.Select(d => d.ToString()));
+    }
+
+    public static DateTime? GetNextAvailableDoctorDate(DoctorsProfile? doctor, DateTime fromDate)
+    {
+        if (doctor == null) return null;
+        var date = fromDate.Date.AddDays(1);
+        for (int i = 0; i < 7; i++)
+        {
+            if (!IsDoctorOffDay(doctor, date))
+            {
+                return date;
+            }
+            date = date.AddDays(1);
+        }
+        return null;
+    }
+
+    private void SwitchToAvailableDate(DateTime date)
+    {
+        apptDatePart = date.Date;
+        OnApptDateChanged();
+    }
+
+    private void OnApptDateChanged()
+    {
+        SyncApptDateTime();
+        if (SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, apptDatePart))
+        {
+            message = $"🚫 {DoctorDisplayName(SelectedDoctor)} {I18n.T("is OFF on")} {apptDatePart:dddd} ({GetDoctorOffDaysDisplay(SelectedDoctor)}). {I18n.T("Appointments cannot be booked on an off day.")}";
+            messageClass = "warning";
+        }
+        else if (message.Contains(I18n.T("is OFF on")))
+        {
+            message = string.Empty;
+        }
+    }
+
+    private void OnApptTimeInputChanged(ChangeEventArgs e)
+    {
+        apptTimePart = e.Value?.ToString() ?? "00:00";
+        SyncApptDateTime();
+    }
+
+    private bool IsSlotSelected(TimeSpan slotTime)
+    {
+        if (TimeSpan.TryParse(apptTimePart, out var curTime))
+        {
+            return curTime.Hours == slotTime.Hours && Math.Abs(curTime.Minutes - slotTime.Minutes) < 15;
+        }
+        return false;
     }
 
     private void SelectDoctor(DoctorsProfile doctor)
     {
         editor.DoctorID = doctor.ID;
-        doctorSearchText = $"{doctor.ID} - {DoctorDisplayName(doctor)}";
+        drawerDoctorId = doctor.ID;
+        if (doctor.Department.HasValue && doctor.Department.Value > 0)
+        {
+            selectedDepartmentId = doctor.Department.Value;
+        }
+        doctorSearchText = $"D{doctor.ID} - {DoctorDisplayName(doctor)}";
         showDoctorSuggestions = false;
         filterByCurrentDoctor = true;
         queuePage = 0;
+
+        if (IsDoctorOffDay(doctor, apptDatePart))
+        {
+            var nextWorking = GetNextAvailableDoctorDate(doctor, apptDatePart);
+            if (nextWorking.HasValue)
+            {
+                var offName = apptDatePart.ToString("dddd");
+                apptDatePart = nextWorking.Value;
+                SyncApptDateTime();
+                message = $"ℹ️ {DoctorDisplayName(doctor)} {I18n.T("is OFF on")} {offName}. {I18n.T("Date automatically moved to next working day")}: {apptDatePart:ddd, dd MMM yyyy}.";
+                messageClass = "info";
+            }
+        }
+        else if (message.Contains(I18n.T("is OFF on")))
+        {
+            message = string.Empty;
+        }
+
+        var slots = GetDoctorAvailableSlots(doctor, apptDatePart);
+        if (slots.Any())
+        {
+            var nowTime = DateTime.Now.TimeOfDay;
+            var upcoming = slots.FirstOrDefault(s => apptDatePart.Date > DateTime.Today || s.Time >= nowTime);
+            var chosen = upcoming ?? slots.First();
+            apptTimePart = chosen.Time.ToString(@"hh\:mm");
+            SyncApptDateTime();
+        }
+    }
+
+    public sealed record DoctorTimeSlot(TimeSpan Time, string Label, int BookedCount);
+
+    public static string GetDoctorConsultationHours(DoctorsProfile? doctor)
+    {
+        if (doctor is null) return string.Empty;
+        if (!string.IsNullOrWhiteSpace(doctor.ConsultationTime))
+            return doctor.ConsultationTime.Trim();
+
+        if (!string.IsNullOrWhiteSpace(doctor.Address))
+        {
+            var addr = doctor.Address.Trim();
+            if (addr.Contains("AM", StringComparison.OrdinalIgnoreCase) || addr.Contains("PM", StringComparison.OrdinalIgnoreCase))
+                return addr;
+        }
+
+        var att = doctor.Attachment?.Trim();
+        return att switch
+        {
+            "Visiting" => "06:00 PM - 09:30 PM (Sat - Thu)",
+            "Consultant" => "05:00 PM - 09:00 PM (Sat - Thu)",
+            "Permanent" => "09:00 AM - 01:00 PM & 05:00 PM - 08:30 PM",
+            "Residential" => "08:00 AM - 02:00 PM & 24/7 On-Call",
+            _ => "05:00 PM - 09:00 PM (Sat - Thu)"
+        };
+    }
+
+    private List<DoctorTimeSlot> GetDoctorAvailableSlots(DoctorsProfile doctor, DateTime date)
+    {
+        if (IsDoctorOffDay(doctor, date))
+        {
+            return [];
+        }
+
+        var hoursText = GetDoctorConsultationHours(doctor);
+        var slotList = new List<TimeSpan>();
+
+        if (hoursText.Contains("AM", StringComparison.OrdinalIgnoreCase))
+        {
+            slotList.Add(new TimeSpan(9, 30, 0));
+            slotList.Add(new TimeSpan(10, 0, 0));
+            slotList.Add(new TimeSpan(10, 30, 0));
+            slotList.Add(new TimeSpan(11, 0, 0));
+            slotList.Add(new TimeSpan(11, 30, 0));
+            slotList.Add(new TimeSpan(12, 0, 0));
+            slotList.Add(new TimeSpan(12, 30, 0));
+        }
+
+        if (hoursText.Contains("PM", StringComparison.OrdinalIgnoreCase) || slotList.Count == 0)
+        {
+            if (hoursText.Contains("06:00", StringComparison.OrdinalIgnoreCase) && !hoursText.Contains("05:00", StringComparison.OrdinalIgnoreCase))
+            {
+                slotList.Add(new TimeSpan(18, 0, 0));
+                slotList.Add(new TimeSpan(18, 30, 0));
+                slotList.Add(new TimeSpan(19, 0, 0));
+                slotList.Add(new TimeSpan(19, 30, 0));
+                slotList.Add(new TimeSpan(20, 0, 0));
+                slotList.Add(new TimeSpan(20, 30, 0));
+                slotList.Add(new TimeSpan(21, 0, 0));
+            }
+            else
+            {
+                slotList.Add(new TimeSpan(17, 0, 0));
+                slotList.Add(new TimeSpan(17, 30, 0));
+                slotList.Add(new TimeSpan(18, 0, 0));
+                slotList.Add(new TimeSpan(18, 30, 0));
+                slotList.Add(new TimeSpan(19, 0, 0));
+                slotList.Add(new TimeSpan(19, 30, 0));
+                slotList.Add(new TimeSpan(20, 0, 0));
+                slotList.Add(new TimeSpan(20, 30, 0));
+            }
+        }
+
+        var targetDate = date.Date;
+        var result = new List<DoctorTimeSlot>(slotList.Count);
+        foreach (var ts in slotList)
+        {
+            var dummyDt = DateTime.Today.Add(ts);
+            var label = dummyDt.ToString("hh:mm tt");
+            var booked = appointments.Count(a => a.DoctorID == doctor.ID
+                && a.ApptDate.Date == targetDate
+                && a.ApptDate.Hour == ts.Hours
+                && Math.Abs(a.ApptDate.Minute - ts.Minutes) < 15);
+            result.Add(new DoctorTimeSlot(ts, label, booked));
+        }
+        return result;
+    }
+
+    private void SetAppointmentTimeSlot(TimeSpan time)
+    {
+        if (SelectedDoctor != null && IsDoctorOffDay(SelectedDoctor, apptDatePart))
+        {
+            message = $"🚫 {DoctorDisplayName(SelectedDoctor)} {I18n.T("is OFF on")} {apptDatePart:dddd}. {I18n.T("Slots cannot be selected on an off day.")}";
+            messageClass = "warning";
+            return;
+        }
+        apptTimePart = time.ToString(@"hh\:mm");
+        SyncApptDateTime();
     }
 
     private void SyncDoctorSearchText()
     {
         var doctor = doctors.FirstOrDefault(x => x.ID == editor.DoctorID);
-        doctorSearchText = doctor is null ? string.Empty : $"{doctor.ID} - {DoctorDisplayName(doctor)}";
+        doctorSearchText = doctor is null ? string.Empty : $"D{doctor.ID} - {DoctorDisplayName(doctor)}";
     }
 
     private void SetPatientMode(bool walkIn)
     {
         isWalkInMode = walkIn;
         if (walkIn)
+        {
+            if (!ClinicalEncounterWorkflow.IsTempPatientId(editor.PatientID))
+            {
+                editor.PatientID = null;
+            }
+            patientSearchQuery = string.Empty;
+        }
+        else if (ClinicalEncounterWorkflow.IsTempPatientId(editor.PatientID))
         {
             editor.PatientID = null;
             patientSearchQuery = string.Empty;
@@ -1276,18 +2134,33 @@ private async Task LoadAppointmentsAsync()
 
     private void SetApptDateToday()
     {
-        editor.ApptDate = DateTime.Today.Add(DateTime.Now.TimeOfDay);
+        apptDatePart = DateTime.Today;
+        OnApptDateChanged();
     }
 
     private void SetApptDateTomorrow()
     {
-        editor.ApptDate = DateTime.Today.AddDays(1).Add(DateTime.Now.TimeOfDay);
+        apptDatePart = DateTime.Today.AddDays(1);
+        OnApptDateChanged();
     }
 
     private void SetDoctorScope(bool currentDoctorOnly)
     {
         filterByCurrentDoctor = currentDoctorOnly;
+        if (filterByCurrentDoctor && drawerDoctorId == 0 && editor.DoctorID > 0)
+        {
+            drawerDoctorId = editor.DoctorID;
+        }
         queuePage = 0;
+    }
+
+    private void OnDrawerDoctorChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var docId))
+        {
+            drawerDoctorId = docId;
+            queuePage = 0;
+        }
     }
 
     private void SetStatusFilter(string filter)
@@ -1305,23 +2178,64 @@ private async Task LoadAppointmentsAsync()
         }
     }
 
+    private void ToggleScheduleDrawer() => showScheduleDrawer = !showScheduleDrawer;
+    private void CloseScheduleDrawer() => showScheduleDrawer = false;
+    private void OpenScheduleDrawer() => showScheduleDrawer = true;
+
+    private void SelectAndCloseDrawer(DoctorAppointment a)
+    {
+        Select(a);
+        showScheduleDrawer = false;
+    }
+
+    private void HandlePageKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "F2" || (e.Key == "q" && e.CtrlKey))
+        {
+            ToggleScheduleDrawer();
+        }
+        else if (e.Key == "Escape" && showScheduleDrawer)
+        {
+            CloseScheduleDrawer();
+        }
+    }
+
     private async Task HandleFormKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter" && e.CtrlKey)
         {
-            await SaveAndPrintAsync();
+            await SaveAsync();
+        }
+        else if (e.Key == "F2" || (e.Key == "q" && e.CtrlKey))
+        {
+            ToggleScheduleDrawer();
+        }
+        else if (e.Key == "Escape" && showScheduleDrawer)
+        {
+            CloseScheduleDrawer();
         }
     }
 
-    private static string Age(DateTime birth)
+    private static string Age(DateTime? birth)
     {
-        var years = DateTime.Today.Year - birth.Year;
-        if (birth.Date > DateTime.Today.AddYears(-years)) years--;
+        if (!birth.HasValue) return string.Empty;
+        var b = birth.Value;
+        var years = DateTime.Today.Year - b.Year;
+        if (b.Date > DateTime.Today.AddYears(-years)) years--;
         return $"{Math.Max(0, years)}Y";
     }
 
     public void Dispose()
     {
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.disposeDoctorInfiniteScroll");
+        }
+        catch
+        {
+            // Ignore disconnect errors on dispose
+        }
+        dotNetRef?.Dispose();
     }
 }

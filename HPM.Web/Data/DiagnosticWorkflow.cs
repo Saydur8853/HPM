@@ -6,9 +6,12 @@ public static class DiagnosticWorkflow
         (currentStatus ?? "Pending", nextStatus) is
             ("Pending", "Collected") or
             ("Collected", "Received") or
+            ("Collected", "InProcess") or
+            ("Collected", "Completed") or
             ("Received", "InProcess") or
             ("Pending", "Scheduled") or
             ("Scheduled", "InProcess") or
             ("Pending", "InProcess") or
-            ("InProcess", "Completed");
+            ("InProcess", "Completed") or
+            ("Collected", "Pending"); // Allow sample recollection
 }
