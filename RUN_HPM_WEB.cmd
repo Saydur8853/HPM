@@ -10,7 +10,7 @@ echo.
 
 set "HPM_URL=http://localhost:5180"
 set "HPM_PORT=5180"
-set "HPM_SQL_SERVICE=MSSQL$HPMDB"
+set "HPM_SQL_SERVICE=MSSQL$SQLEXPRESS"
 
 rem 1. Stop any currently running HPM.Web instances or processes on port 5180
 echo [1/4] Stopping any existing HPM Web or port %HPM_PORT% processes...

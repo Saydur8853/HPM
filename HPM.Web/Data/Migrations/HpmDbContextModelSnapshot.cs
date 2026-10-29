@@ -4066,6 +4066,108 @@ namespace HPM.Web.Data.Migrations
                     b.ToTable("Prescription_Medicine", (string)null);
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.PurchaseRequisition", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Requested_At");
+
+                    b.Property<int>("RequestedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Requested_By");
+
+                    b.Property<string>("RequisitionNo")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Requisition_No");
+
+                    b.Property<string>("ReviewNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Review_Note");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Reviewed_At");
+
+                    b.Property<int?>("ReviewedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Reviewed_By");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Pending");
+
+                    b.Property<int>("StoreID")
+                        .HasColumnType("int")
+                        .HasColumnName("Store_ID");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("StoreID", "TransDate");
+
+                    b.ToTable("Purchase_Requisition", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.PurchaseRequisitionItem", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal?>("EstimatedRate")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Estimated_Rate");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("RequestedQty")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Requested_Qty");
+
+                    b.Property<long>("RequisitionID")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Requisition_ID");
+
+                    b.Property<int>("SLNO")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ServiceID")
+                        .HasColumnType("int")
+                        .HasColumnName("Service_ID");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ServiceID");
+
+                    b.HasIndex("RequisitionID", "SLNO")
+                        .IsUnique();
+
+                    b.ToTable("Purchase_Requisition_Sub", (string)null);
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.Registration", b =>
                 {
                     b.Property<long>("ID")
@@ -4344,6 +4446,233 @@ namespace HPM.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreChallan", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<DateTime>("InvoiceDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Invoice_Date");
+
+                    b.Property<string>("InvoiceNo")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Invoice_No");
+
+                    b.Property<bool>("IsPosted")
+                        .HasColumnType("bit")
+                        .HasColumnName("Is_Posted");
+
+                    b.Property<int>("Supplier")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Supplier");
+
+                    b.ToTable("Store_Challan");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreChallanSub", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("BuyRate")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<long>("ChallanNo")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Challan_No");
+
+                    b.Property<int>("ProductID")
+                        .HasColumnType("int")
+                        .HasColumnName("Product_ID");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("SLNO")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ChallanNo");
+
+                    b.HasIndex("ProductID");
+
+                    b.ToTable("Store_Challan_Sub");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreIssue", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<string>("IndentNo")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<int>("IssueDepartment")
+                        .HasColumnType("int")
+                        .HasColumnName("Issue_Department");
+
+                    b.Property<decimal?>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Store_Issue");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreIssueSub", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal?>("BuyRate")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<long>("IssueNo")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Issue_No");
+
+                    b.Property<int?>("ProductID")
+                        .HasColumnType("int")
+                        .HasColumnName("Product_ID");
+
+                    b.Property<decimal?>("Quantity")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int?>("SLNO")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("IssueNo");
+
+                    b.HasIndex("ProductID");
+
+                    b.ToTable("Store_Issue_Sub");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreProduct", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<decimal>("Balance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("BuyRate")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("Buy_Rate");
+
+                    b.Property<int>("CategoryID")
+                        .HasColumnType("int")
+                        .HasColumnName("Category");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("ReOrderLevel")
+                        .HasColumnType("int")
+                        .HasColumnName("Re_Order_Level");
+
+                    b.Property<decimal>("SaleRate")
+                        .HasColumnType("decimal(18,2)")
+                        .HasColumnName("Sale_Rate");
+
+                    b.Property<int>("Supplier")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.Property<string>("Unit")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("CategoryID");
+
+                    b.HasIndex("Supplier");
+
+                    b.ToTable("Store_Product");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreProductCategory", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Store_Product_Category");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.SupplierLedger", b =>
                 {
                     b.Property<long>("ID")
@@ -4451,6 +4780,39 @@ namespace HPM.Web.Data.Migrations
                     b.HasIndex("Name");
 
                     b.ToTable("Supplier_Pharmacy", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.SupplierStore", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Contact")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<DateTime?>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Supplier_Store");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.TicketType", b =>
@@ -5218,6 +5580,98 @@ namespace HPM.Web.Data.Migrations
                     b.Navigation("Prescription");
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.PurchaseRequisition", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.MedicineStore", null)
+                        .WithMany()
+                        .HasForeignKey("StoreID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.PurchaseRequisitionItem", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.PurchaseRequisition", "Requisition")
+                        .WithMany("Items")
+                        .HasForeignKey("RequisitionID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Requisition");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreChallan", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.SupplierStore", "SupplierStore")
+                        .WithMany()
+                        .HasForeignKey("Supplier")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("SupplierStore");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreChallanSub", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.StoreChallan", "Challan")
+                        .WithMany("Items")
+                        .HasForeignKey("ChallanNo")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.StoreProduct", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Challan");
+
+                    b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreIssueSub", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.StoreIssue", "Issue")
+                        .WithMany("Items")
+                        .HasForeignKey("IssueNo")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.StoreProduct", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductID");
+
+                    b.Navigation("Issue");
+
+                    b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreProduct", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.StoreProductCategory", "Category")
+                        .WithMany()
+                        .HasForeignKey("CategoryID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.SupplierStore", "SupplierStore")
+                        .WithMany()
+                        .HasForeignKey("Supplier")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+
+                    b.Navigation("SupplierStore");
+                });
+
             modelBuilder.Entity("HPM.Web.Security.AppUser", b =>
                 {
                     b.HasOne("HPM.Web.Data.Entities.DoctorsProfile", null)
@@ -5353,6 +5807,21 @@ namespace HPM.Web.Data.Migrations
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.PrescriptionDispense", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.PurchaseRequisition", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreChallan", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.StoreIssue", b =>
                 {
                     b.Navigation("Items");
                 });

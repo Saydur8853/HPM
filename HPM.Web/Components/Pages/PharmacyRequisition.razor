@@ -1,0 +1,422 @@
+@page "/pharmacy/requisition"
+@attribute [Authorize(Roles = "Administrator,Pharmacy Operator")]
+@rendermode InteractiveServer
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using HPM.Web.Localization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject I18nService I18n
+@implements IDisposable
+
+<PageTitle>@I18n.T("Purchase Requisition") | @Branding.HospitalName</PageTitle>
+
+@inject HospitalSetupService Branding
+
+<div class="page-heading">
+    <span class="eyebrow">@I18n.T("Pharmacy & Stock")</span>
+    <h1>@I18n.T("Purchase Requisition")</h1>
+    <p>@I18n.T("Request medicines for procurement approval.")</p>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" role="alert">@message</div>
+}
+
+<div class="module-layout">
+    <div class="form-panel">
+        <div class="form-panel-header">
+            <h2>@(savedReq == null ? I18n.T("New Requisition") : $"{I18n.T("Requisition")} #{savedReq.ID}")</h2>
+            @if (savedReq != null)
+            {
+                <button class="btn btn-secondary" @onclick="ResetForm">@I18n.T("+ New")</button>
+            }
+        </div>
+
+        @if (savedReq == null)
+        {
+            <div class="form-grid">
+                <label>
+                    <span>@I18n.T("Pharmacy / Store", "Store")*</span>
+                    <select @bind="storeId" disabled="@isSaving">
+                        <option value="0">@I18n.T("Select")</option>
+                        @foreach (var s in stores)
+                        {
+                            <option value="@s.ID">@s.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Remarks / Purpose")</span>
+                    <input type="text" @bind="remarks" placeholder="@I18n.T("Optional note")" disabled="@isSaving" />
+                </label>
+            </div>
+
+            <div class="form-section-title">@I18n.T("Medicine Items")</div>
+
+            <div class="form-grid three">
+                <label class="span-2">
+                    <span>@I18n.T("Medicine / Product")*</span>
+                    <select @bind="selectedServiceId" disabled="@isSaving">
+                        <option value="0">@I18n.T("Select Medicine...")</option>
+                        @foreach (var m in medicines)
+                        {
+                            <option value="@m.ID">@m.Name</option>
+                        }
+                    </select>
+                </label>
+                <label>
+                    <span>@I18n.T("Qty Needed")*</span>
+                    <input type="number" @bind="selectedQty" min="1" step="1" disabled="@isSaving" />
+                </label>
+                <label>
+                    <span>@I18n.T("Est. Rate (Tk)")</span>
+                    <input type="number" @bind="selectedRate" min="0" step="0.01" disabled="@isSaving" />
+                </label>
+                <label>
+                    <span>@I18n.T("Item Remarks")</span>
+                    <input type="text" @bind="selectedItemRemarks" placeholder="@I18n.T("Optional")" disabled="@isSaving" />
+                </label>
+                <label style="align-self:end">
+                    <span>&nbsp;</span>
+                    <button class="btn btn-secondary" @onclick="AddLine" disabled="@isSaving">+ @I18n.T("Add")</button>
+                </label>
+            </div>
+
+            @if (lines.Count > 0)
+            {
+                <table class="data-table" style="margin-top:12px">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>@I18n.T("Medicine")</th>
+                            <th>@I18n.T("Qty")</th>
+                            <th>@I18n.T("Est. Rate")</th>
+                            <th>@I18n.T("Est. Total")</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var (line, idx) in lines.Select((l, i) => (l, i + 1)))
+                        {
+                            <tr>
+                                <td>@idx</td>
+                                <td>@line.MedicineName</td>
+                                <td>@line.Qty</td>
+                                <td>@(line.Rate.HasValue ? I18n.FormatCurrency(line.Rate.Value) : "—")</td>
+                                <td>@(line.Rate.HasValue ? I18n.FormatCurrency(line.Qty * line.Rate.Value) : "—")</td>
+                                <td><button class="btn-icon danger" @onclick="() => RemoveLine(line)" title="Remove">✕</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            <div class="form-actions" style="margin-top:16px">
+                <button class="btn btn-primary" @onclick="SubmitAsync" disabled="@isSaving">
+                    @(isSaving ? I18n.T("Submitting...") : I18n.T("Submit Requisition"))
+                </button>
+            </div>
+        }
+        else
+        {
+            <div class="status-banner @StatusClass(savedReq.Status)">
+                @I18n.T("Status"): <strong>@savedReq.Status</strong>
+                @if (!string.IsNullOrWhiteSpace(savedReq.ReviewNote))
+                {
+                    <span> — @savedReq.ReviewNote</span>
+                }
+            </div>
+
+            <table class="data-table" style="margin-top:12px">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>@I18n.T("Medicine")</th>
+                        <th>@I18n.T("Qty")</th>
+                        <th>@I18n.T("Est. Rate")</th>
+                        <th>@I18n.T("Est. Total")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var (item, idx) in savedReq.Items.Select((x, i) => (x, i + 1)))
+                    {
+                        <tr>
+                            <td>@idx</td>
+                            <td>@(medicines.FirstOrDefault(m => m.ID == item.ServiceID)?.Name ?? item.ServiceID.ToString())</td>
+                            <td>@item.RequestedQty</td>
+                            <td>@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.EstimatedRate.Value) : "—")</td>
+                            <td>@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.RequestedQty * item.EstimatedRate.Value) : "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (isAdmin && savedReq.Status == "Pending")
+            {
+                <div class="form-grid" style="margin-top:16px">
+                    <label class="span-2">
+                        <span>@I18n.T("Review Note")</span>
+                        <input type="text" @bind="reviewNote" placeholder="@I18n.T("Optional note to requester")" />
+                    </label>
+                </div>
+                <div class="form-actions" style="margin-top:8px">
+                    <button class="btn btn-primary" @onclick="() => ReviewAsync(true)" disabled="@isSaving">
+                        ✓ @I18n.T("Approve")
+                    </button>
+                    <button class="btn btn-danger" @onclick="() => ReviewAsync(false)" disabled="@isSaving">
+                        ✕ @I18n.T("Reject")
+                    </button>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="list-panel">
+        <div class="list-panel-header">
+            <h2>@I18n.T("Recent Requisitions")</h2>
+            <span class="badge">@recentList.Count @I18n.T("records")</span>
+        </div>
+        <div class="scanner-search-group">
+            <input type="search" @bind="searchTerm" @bind:event="oninput" placeholder="@I18n.T("Search by ID or status...")" />
+        </div>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>@I18n.T("Date")</th>
+                    <th>@I18n.T("Store")</th>
+                    <th>@I18n.T("Items")</th>
+                    <th>@I18n.T("Status")</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in FilteredList)
+                {
+                    <tr class="@(savedReq?.ID == r.ID ? "row-selected" : "")">
+                        <td>@r.ID</td>
+                        <td>@r.TransDate.ToString("dd MMM")</td>
+                        <td>@(stores.FirstOrDefault(s => s.ID == r.StoreID)?.Name ?? "")</td>
+                        <td>@r.Items.Count</td>
+                        <td><span class="badge @StatusClass(r.Status)">@r.Status</span></td>
+                        <td><button class="btn-link" @onclick="() => LoadReq(r)">@I18n.T("View")</button></td>
+                    </tr>
+                }
+                @if (!FilteredList.Any())
+                {
+                    <tr><td colspan="6" class="empty-row">@I18n.T("No requisitions found.")</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private record LineItem(int ServiceId, string MedicineName, decimal Qty, decimal? Rate, string? ItemRemarks);
+
+    private List<MedicineStore> stores = [];
+    private List<Service> medicines = [];
+    private List<PurchaseRequisition> recentList = [];
+
+    private int storeId;
+    private string remarks = string.Empty;
+    private int selectedServiceId;
+    private decimal selectedQty = 1;
+    private decimal? selectedRate;
+    private string selectedItemRemarks = string.Empty;
+    private List<LineItem> lines = [];
+
+    private PurchaseRequisition? savedReq;
+    private string reviewNote = string.Empty;
+    private bool isAdmin;
+    private bool isSaving;
+    private string message = string.Empty;
+    private string messageClass = string.Empty;
+    private string searchTerm = string.Empty;
+
+    private IEnumerable<PurchaseRequisition> FilteredList => string.IsNullOrWhiteSpace(searchTerm)
+        ? recentList
+        : recentList.Where(r => r.ID.ToString().Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
+            || r.Status.Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        isAdmin = auth.User.IsInRole(RoleNames.Administrator);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        stores = await db.MedicineStores.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+
+        if (stores.Count > 0) storeId = stores[0].ID;
+
+        await LoadListAsync(db);
+    }
+
+    private async Task LoadListAsync(HpmDbContext db)
+    {
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userId = int.TryParse(auth.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 0;
+
+        var query = db.PurchaseRequisitions
+            .AsNoTracking()
+            .Include(x => x.Items)
+            .OrderByDescending(x => x.ID);
+
+        recentList = isAdmin
+            ? await query.Take(50).ToListAsync()
+            : await query.Where(x => x.RequestedBy == userId).Take(50).ToListAsync();
+    }
+
+    private void AddLine()
+    {
+        if (selectedServiceId <= 0) { Fail(I18n.T("Select a medicine.")); return; }
+        if (selectedQty <= 0) { Fail(I18n.T("Quantity must be greater than zero.")); return; }
+        if (lines.Any(l => l.ServiceId == selectedServiceId)) { Fail(I18n.T("This medicine is already in the list.")); return; }
+
+        var medicine = medicines.First(m => m.ID == selectedServiceId);
+        lines.Add(new LineItem(selectedServiceId, medicine.Name ?? medicine.ID.ToString(), selectedQty, selectedRate > 0 ? selectedRate : null, selectedItemRemarks.Trim()));
+        selectedServiceId = 0;
+        selectedQty = 1;
+        selectedRate = null;
+        selectedItemRemarks = string.Empty;
+        message = string.Empty;
+    }
+
+    private void RemoveLine(LineItem line) => lines.Remove(line);
+
+    private async Task SubmitAsync()
+    {
+        if (storeId <= 0) { Fail(I18n.T("Select a store.")); return; }
+        if (lines.Count == 0) { Fail(I18n.T("Add at least one medicine.")); return; }
+
+        isSaving = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userId = int.TryParse(auth.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+            var now = DateTime.UtcNow;
+
+            savedReq = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var lastId = await db.PurchaseRequisitions.MaxAsync(x => (long?)x.ID) ?? 0;
+                var req = new PurchaseRequisition
+                {
+                    StoreID = storeId,
+                    RequisitionNo = $"REQ-{lastId + 1:D5}",
+                    Status = "Pending",
+                    RequestedBy = userId,
+                    RequestedAt = now,
+                    Remarks = remarks.Trim(),
+                    TransDate = now,
+                };
+                db.PurchaseRequisitions.Add(req);
+                await db.SaveChangesAsync();
+
+                int slno = 1;
+                foreach (var line in lines)
+                {
+                    db.PurchaseRequisitionItems.Add(new PurchaseRequisitionItem
+                    {
+                        RequisitionID = req.ID,
+                        SLNO = slno++,
+                        ServiceID = line.ServiceId,
+                        RequestedQty = line.Qty,
+                        EstimatedRate = line.Rate,
+                        Remarks = line.ItemRemarks,
+                    });
+                }
+                await db.SaveChangesAsync();
+
+                return await db.PurchaseRequisitions.Include(x => x.Items).FirstAsync(x => x.ID == req.ID);
+            });
+
+            lines.Clear();
+            remarks = string.Empty;
+            Success(I18n.T("Requisition submitted successfully."));
+
+            await using var db2 = await DbFactory.CreateDbContextAsync();
+            await LoadListAsync(db2);
+        }
+        catch (Exception ex)
+        {
+            Fail($"{I18n.T("Failed to submit")}: {ex.GetBaseException().Message}");
+        }
+        finally { isSaving = false; }
+    }
+
+    private async Task ReviewAsync(bool approve)
+    {
+        if (savedReq == null) return;
+        isSaving = true;
+        try
+        {
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var userId = int.TryParse(auth.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
+            var now = DateTime.UtcNow;
+            var reqId = savedReq.ID;
+            var note = reviewNote.Trim();
+            var newStatus = approve ? "Approved" : "Rejected";
+
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var req = await db.PurchaseRequisitions.FirstAsync(x => x.ID == reqId);
+                req.Status = newStatus;
+                req.ReviewedBy = userId;
+                req.ReviewedAt = now;
+                req.ReviewNote = note;
+                await db.SaveChangesAsync();
+                return req;
+            });
+
+            await using var db2 = await DbFactory.CreateDbContextAsync();
+            savedReq = await db2.PurchaseRequisitions.Include(x => x.Items).FirstAsync(x => x.ID == reqId);
+            await LoadListAsync(db2);
+
+            Success(approve ? I18n.T("Requisition approved.") : I18n.T("Requisition rejected."));
+        }
+        catch (Exception ex)
+        {
+            Fail($"{I18n.T("Failed")}: {ex.GetBaseException().Message}");
+        }
+        finally { isSaving = false; }
+    }
+
+    private void LoadReq(PurchaseRequisition r)
+    {
+        savedReq = r;
+        reviewNote = string.Empty;
+        message = string.Empty;
+    }
+
+    private void ResetForm()
+    {
+        savedReq = null;
+        lines.Clear();
+        remarks = string.Empty;
+        reviewNote = string.Empty;
+        message = string.Empty;
+        selectedServiceId = 0;
+        selectedQty = 1;
+        selectedRate = null;
+    }
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Approved" => "success",
+        "Rejected" => "danger",
+        _ => "warning"
+    };
+
+    private void Success(string x) { messageClass = "success"; message = x; }
+    private void Fail(string x) { messageClass = "danger"; message = x; }
+
+    public void Dispose() { }
+}
