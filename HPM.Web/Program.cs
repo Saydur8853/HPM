@@ -154,6 +154,14 @@ await using (var scope = app.Services.CreateAsyncScope())
             BEGIN
                 ALTER TABLE [Doctors_Profile] ADD [Off_Day] nvarchar(100) NULL;
             END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'Consultation_Fee')
+            BEGIN
+                ALTER TABLE [Doctors_Profile] ADD [Consultation_Fee] numeric(18,2) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'OPD_Consultation_Fee')
+            BEGIN
+                ALTER TABLE [Doctors_Profile] ADD [OPD_Consultation_Fee] numeric(18,2) NULL;
+            END
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'Delivery_Hours')
             BEGIN
                 ALTER TABLE [Service] ADD [Delivery_Hours] int NULL;

@@ -578,6 +578,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         doctor.Property(x => x.Priority).HasColumnName("Priority");
         doctor.Property(x => x.ConsultationTime).HasColumnName("Consultation_Time").HasMaxLength(100);
         doctor.Property(x => x.OffDay).HasColumnName("Off_Day").HasMaxLength(100);
+        doctor.Property(x => x.ConsultationFee).HasColumnName("Consultation_Fee").HasColumnType("numeric(18,2)");
+        doctor.Property(x => x.OpdConsultationFee).HasColumnName("OPD_Consultation_Fee").HasColumnType("numeric(18,2)");
 
         var department = b.Entity<Department>();
         department.ToTable("Department");
