@@ -813,6 +813,20 @@
 
                                                 }
 
+                                                @if (hasMorePatientSuggestions)
+                                                {
+                                                    <div class="appt-doctor-scroll-hint" @onclick="LoadMorePatientsFromJs" @onmousedown:preventDefault>
+                                                        @if (isLoadingMorePatients)
+                                                        {
+                                                            <span>@I18n.T("Loading more...")</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@I18n.T("Showing") @patientIdSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                                        }
+                                                    </div>
+                                                }
+
                                             </div>
 
                                         }
@@ -2093,6 +2107,12 @@
 
     private List<Registration> patientIdSuggestions = [];
 
+    private const int PatientBatchSize = 15;
+
+    private bool hasMorePatientSuggestions = true;
+
+    private bool isLoadingMorePatients = false;
+
     private bool isWalkInMode = true;
 
     private string? patientContact;
@@ -2329,6 +2349,26 @@
             {
 
                 await JS.InvokeVoidAsync("hpm.initDoctorInfiniteScroll", "appt-doctor-search-box", "appt-doctor-suggestions-list", dotNetRef);
+
+            }
+
+            catch
+
+            {
+
+            }
+
+        }
+
+        if (showPatientIdSuggestions)
+
+        {
+
+            try
+
+            {
+
+                await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "appt-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
 
             }
 
@@ -2935,11 +2975,11 @@
 
         patientSearchQuery = e.Value?.ToString() ?? string.Empty;
 
-        await FilterPatientSuggestionsAsync();
+        await LoadPatientIdSuggestionsAsync();
 
     }
 
-    private async Task ShowPatientIdSuggestionsAsync() => await FilterPatientSuggestionsAsync();
+    private async Task ShowPatientIdSuggestionsAsync() => await LoadPatientIdSuggestionsAsync();
 
     private async Task HidePatientSuggestionsAsync()
 
@@ -2951,47 +2991,133 @@
 
     }
 
-    private async Task FilterPatientSuggestionsAsync()
+    private static IQueryable<Registration> BuildPatientQuery(HpmDbContext db, string term)
 
     {
 
-        await using var db = await DbFactory.CreateDbContextAsync();
+        return db.Registrations.AsNoTracking()
 
-        if (string.IsNullOrWhiteSpace(patientSearchQuery))
+            .Where(x => string.IsNullOrEmpty(term)
 
-        {
+                     || x.PatientID.StartsWith(term)
 
-            patientIdSuggestions = await db.Registrations.AsNoTracking()
-
-                .OrderByDescending(x => x.ID)
-
-                .Take(6)
-
-                .ToListAsync();
-
-            showPatientIdSuggestions = patientIdSuggestions.Count > 0;
-
-            return;
-
-        }
-
-        var term = patientSearchQuery.Trim();
-
-        patientIdSuggestions = await db.Registrations.AsNoTracking()
-
-            .Where(x => (x.PatientID != null && x.PatientID.Contains(term))
-
-                     || (x.Contact != null && x.Contact.Contains(term))
+                     || (x.Contact != null && x.Contact.StartsWith(term))
 
                      || (x.Name != null && x.Name.Contains(term)))
 
-            .OrderByDescending(x => x.ID)
+            .OrderByDescending(x => x.ID);
 
-            .Take(6)
+    }
 
-            .ToListAsync();
+    private async Task LoadPatientIdSuggestionsAsync()
 
-        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+    {
+
+        var term = patientSearchQuery.Trim();
+
+        hasMorePatientSuggestions = true;
+
+        try
+
+        {
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var q = BuildPatientQuery(db, term);
+
+            patientIdSuggestions = await q.Take(PatientBatchSize).ToListAsync();
+
+            hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
+
+            showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+
+            try
+
+            {
+
+                await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "appt-patient-suggestions-list");
+
+            }
+
+            catch { }
+
+        }
+
+        catch
+
+        {
+
+            patientIdSuggestions.Clear();
+
+            showPatientIdSuggestions = false;
+
+            hasMorePatientSuggestions = false;
+
+        }
+
+    }
+
+    [JSInvokable]
+
+    public async Task LoadMorePatientsFromJs()
+
+    {
+
+        if (isLoadingMorePatients || !hasMorePatientSuggestions || !showPatientIdSuggestions) return;
+
+        isLoadingMorePatients = true;
+
+        await InvokeAsync(StateHasChanged);
+
+        var term = patientSearchQuery.Trim();
+
+        try
+
+        {
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var q = BuildPatientQuery(db, term);
+
+            var nextBatch = await q.Skip(patientIdSuggestions.Count).Take(PatientBatchSize).ToListAsync();
+
+            if (nextBatch.Count > 0)
+
+            {
+
+                patientIdSuggestions.AddRange(nextBatch);
+
+                hasMorePatientSuggestions = nextBatch.Count >= PatientBatchSize;
+
+            }
+
+            else
+
+            {
+
+                hasMorePatientSuggestions = false;
+
+            }
+
+        }
+
+        catch
+
+        {
+
+            hasMorePatientSuggestions = false;
+
+        }
+
+        finally
+
+        {
+
+            isLoadingMorePatients = false;
+
+            await InvokeAsync(StateHasChanged);
+
+        }
 
     }
 

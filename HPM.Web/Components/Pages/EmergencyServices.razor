@@ -6,8 +6,10 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IBarcodeQrService BarcodeQr
 @inject PatientSelectionState PatientSelection
+@inject UserManager<AppUser> UserManager
 @implements IDisposable
 @using System.Security.Claims
+@using Microsoft.AspNetCore.Identity
 @using HPM.Web.Components.Common
 @using HPM.Web.Data
 @using HPM.Web.Data.Entities
@@ -43,18 +45,16 @@
         <div class="appt-top-actions">
             <!-- Print Format Mode Toggle -->
             <div class="tickets-print-mode-group" title="@I18n.T("Select printer slip format")">
-                <button type="button" class="tickets-mode-pill @(isThermalMode ? "active" : "")" @onclick="() => isThermalMode = true" title="80mm Thermal POS Slip">
+                <button type="button" class="tickets-mode-pill @(printLayout == "POS" ? "active" : "")" @onclick='() => printLayout = "POS"' title="80mm Thermal POS Slip">
                     🖨️ @I18n.T("80mm POS")
                 </button>
-                <button type="button" class="tickets-mode-pill @(!isThermalMode ? "active" : "")" @onclick="() => isThermalMode = false" title="Standard A4 Voucher">
-                    📄 @I18n.T("A4 Sheet")
+                <button type="button" class="tickets-mode-pill @(printLayout == "A5" ? "active" : "")" @onclick='() => printLayout = "A5"' title="@I18n.T("Delta Hospital style compact Half-A4 / A5 receipt")">
+                    📄 @I18n.T("A5 Sheet")
+                </button>
+                <button type="button" class="tickets-mode-pill @(printLayout == "A4" ? "active" : "")" @onclick='() => printLayout = "A4"' title="Standard A4 Voucher">
+                    📑 @I18n.T("A4 Sheet")
                 </button>
             </div>
-
-            <!-- Auto-Print Toggle -->
-            <button type="button" class="tickets-auto-print-pill @(autoPrint ? "active" : "")" @onclick="ToggleAutoPrint" title="@I18n.T("Automatically open print dialogue upon saving memo")">
-                ⚡ @(autoPrint ? I18n.T("Auto-Print ON") : I18n.T("Auto-Print"))
-            </button>
 
             <!-- Quick Patient Registration Modal -->
             <button type="button" class="btn btn-secondary appt-btn" @onclick="OpenNewPatientModal" title="@I18n.T("Quick Patient Registration")">
@@ -106,38 +106,58 @@
                          ========================================================================= -->
                     <div class="appt-col-left">
                         <!-- Patient ID Search Combo with suggestions -->
-                        <div class="appt-field-group">
+                        <div class="appt-field-group appt-patient-search-field">
                             <span class="appt-field-label">
                                 <span>@I18n.T("Patient ID (Optional)")</span>
                             </span>
                             <div class="appt-patient-search-combo">
                                 <input class="classic-input"
-                                       value="@editor.PatientID"
-                                       @oninput="HandlePatientIdInputAsync"
+                                       value="@patientSearchQuery"
+                                       @oninput="HandlePatientSearchInputAsync"
                                        @onfocus="ShowPatientIdSuggestionsAsync"
                                        @onblur="HidePatientSuggestionsAsync"
                                        @onkeydown="HandlePatientIdKeyDown"
                                        autocomplete="off"
-                                       placeholder="@I18n.T("Patient ID or mobile...")"
-                                       title="@I18n.T("Type Patient ID or mobile & press Enter to find")" />
-                                <button type="button" class="btn-find" @onclick="FindPatientAsync" title="@I18n.T("Find Patient (Enter)")">
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                                        <circle cx="11" cy="11" r="8"></circle>
-                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                    </svg>
-                                    <span>@I18n.T("Find")</span>
+                                       placeholder="@I18n.T("Search by Patient ID, Mobile or Name...")"
+                                       title="@I18n.T("Search by Patient ID, Mobile or Name & press Enter")" />
+                                <button type="button" class="btn-find" @onclick="FindPatientAsync" title="@I18n.T("Search Patient")">
+                                    <SearchIcon />
+                                    <span>@I18n.T("Search")</span>
                                 </button>
                             </div>
-                            @if (showPatientIdSuggestions && patientIdSuggestions.Count > 0)
+                            @if (showPatientIdSuggestions)
                             {
-                                <div class="appt-patient-suggestions">
+                                <div class="appt-patient-suggestions" id="emg-patient-suggestions-list">
                                     @foreach (var patient in patientIdSuggestions)
                                     {
                                         <button type="button" class="appt-patient-option" @onmousedown:preventDefault @onclick="() => SelectPatientFromSuggestion(patient)">
                                             <span class="patient-id">@patient.PatientID</span>
                                             <span class="patient-name">@patient.Name</span>
+                                            @if (!string.IsNullOrWhiteSpace(patient.Sex))
+                                            {
+                                                <span class="meta-tag sex-tag-@patient.Sex.ToLowerInvariant()">
+                                                    @(patient.Sex == "Male" ? "♂ Male" : patient.Sex == "Female" ? "♀ Female" : patient.Sex)
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(patient.Weight))
+                                            {
+                                                <span class="patient-weight-pill">⚖️ @patient.Weight kg</span>
+                                            }
                                             <span class="patient-contact">@patient.Contact</span>
                                         </button>
+                                    }
+                                    @if (hasMorePatientSuggestions)
+                                    {
+                                        <div class="appt-doctor-scroll-hint" @onclick="LoadMorePatientsFromJs" @onmousedown:preventDefault>
+                                            @if (isLoadingMorePatients)
+                                            {
+                                                <span>@I18n.T("Loading more...")</span>
+                                            }
+                                            else
+                                            {
+                                                <span>@I18n.T("Showing") @patientIdSuggestions.Count &bull; @I18n.T("Scroll for more...")</span>
+                                            }
+                                        </div>
                                     }
                                 </div>
                             }
@@ -155,49 +175,19 @@
                             </div>
                         </div>
 
-                        <!-- Sex & Age -->
-                        <div style="display:flex; gap:8px;">
-                            <div class="appt-field-group" style="flex:1.2; min-width:0;">
-                                <span class="appt-field-label"><span>@I18n.T("Sex")</span></span>
-                                <div class="sex-btn-group" role="radiogroup" aria-label="@I18n.T("Sex")">
-                                    <button type="button" class="sex-btn sex-btn-male @(string.Equals(editor.Sex, "Male", StringComparison.OrdinalIgnoreCase) ? "is-selected" : "")"
-                                            @onclick='() => editor.Sex = "Male"'>
-                                        <span class="sex-icon">♂</span>
-                                        <span class="sex-text">@I18n.T("Male")</span>
-                                    </button>
-                                    <button type="button" class="sex-btn sex-btn-female @(string.Equals(editor.Sex, "Female", StringComparison.OrdinalIgnoreCase) ? "is-selected" : "")"
-                                            @onclick='() => editor.Sex = "Female"'>
-                                        <span class="sex-icon">♀</span>
-                                        <span class="sex-text">@I18n.T("Female")</span>
-                                    </button>
-                                    <button type="button" class="sex-btn sex-btn-other @(string.Equals(editor.Sex, "Other", StringComparison.OrdinalIgnoreCase) ? "is-selected" : "")"
-                                            @onclick='() => editor.Sex = "Other"'>
-                                        <span class="sex-icon">⚪</span>
-                                        <span class="sex-text">@I18n.T("Other")</span>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="appt-field-group" style="flex:0.8; min-width:0;">
-                                <span class="appt-field-label"><span>@I18n.T("Age")</span></span>
-                                <div class="appt-unit-input-box">
-                                    <InputText class="classic-input appt-unit-input" @bind-Value="editor.Age" placeholder="e.g. 35" />
-                                    <span class="appt-unit-addon">Yrs</span>
-                                </div>
-                            </div>
-                        </div>
-
                         <!-- Attending / Ref. Doctor -->
                         <div class="appt-field-group">
                             <span class="appt-field-label">
                                 <span>@I18n.T("Attending / Ref. Doctor")</span>
                             </span>
-                            <div class="appt-doctor-search-combo-wrap" style="position: relative; width: 100%;">
+                            <div class="appt-doctor-search-combo-wrap" id="emg-doctor-search-box" style="position: relative; width: 100%;">
                                 <div style="display: flex; gap: 6px; align-items: center;">
                                     <div class="appt-doctor-search" style="flex: 1; min-width: 0; position: relative;">
                                         <input class="classic-input"
                                                value="@doctorSearchText"
-                                               @oninput="HandleDoctorSearchInput"
-                                               @onfocus="() => showDoctorSuggestions = true"
+                                               @oninput="HandleDoctorSearchInputAsync"
+                                               @onfocus="ShowDoctorSuggestions"
+                                               @onkeydown="HandleDoctorSearchKeyDown"
                                                autocomplete="off"
                                                placeholder="@(SelectedDoctor != null ? DoctorLabel(SelectedDoctor) : I18n.T("Search doctor by name, degree, room..."))" />
                                         @if (SelectedDoctor != null || !string.IsNullOrWhiteSpace(doctorSearchText))
@@ -224,15 +214,15 @@
                                         <span>@I18n.T("Browse")</span>
                                     </button>
                                 </div>
-                                @if (showDoctorSuggestions && FilteredDoctorsList.Count > 0)
+                                @if (showDoctorSuggestions)
                                 {
-                                    <div class="appt-doctor-suggestions" style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 120;">
+                                    <div class="appt-doctor-suggestions" id="emg-doctor-suggestions-list" style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 120;">
                                         <button type="button" class="appt-doctor-option @(editor.DoctorID == null ? "selected" : "")" @onmousedown:preventDefault @onclick="() => SelectDoctorInline(null)">
                                             <div class="appt-doctor-option-main">
                                                 <span class="appt-doctor-option-name">🚶 @I18n.T("Walk-in / None")</span>
                                             </div>
                                         </button>
-                                        @foreach (var doc in FilteredDoctorsList.Take(15))
+                                        @foreach (var doc in VisibleDoctorsList)
                                         {
                                             <button type="button" class="appt-doctor-option @(editor.DoctorID == doc.ID ? "selected" : "")" @onmousedown:preventDefault @onclick="() => SelectDoctorInline(doc)">
                                                 <div class="appt-doctor-option-main">
@@ -244,6 +234,16 @@
                                                 </div>
                                                 <div class="appt-doctor-option-sub">@doc.Degree</div>
                                             </button>
+                                        }
+                                        @if (HasMoreDoctorSuggestions)
+                                        {
+                                            <div class="appt-doctor-scroll-hint" @onmousedown:preventDefault @onclick="LoadMoreDoctorsFromJs">
+                                                @I18n.T("Showing") @Math.Min(doctorVisibleCount, FilteredDoctorsList.Count) / @FilteredDoctorsList.Count &bull; @I18n.T("Scroll for more...")
+                                            </div>
+                                        }
+                                        @if (FilteredDoctorsList.Count == 0)
+                                        {
+                                            <div class="appt-doctor-empty">@I18n.T("No doctor found")</div>
                                         }
                                     </div>
                                 }
@@ -307,83 +307,164 @@
                             </div>
                         </div>
 
-                        <!-- Itemized Line Table -->
-                        <div class="emg-line-table-container">
-                            <div class="emg-line-table-head">
-                                <span>#</span>
-                                <span>@I18n.T("Emergency Service Description")</span>
-                                <span style="text-align: right;">@I18n.T("Rate")</span>
-                                <span style="text-align: center;">@I18n.T("Qty")</span>
-                                <span style="text-align: right;">@I18n.T("Amount")</span>
-                                <span></span>
-                            </div>
-                            <div class="emg-line-table-body">
-                                @if (editor.Items.Count == 0)
+                        <!-- Right Part: Added Services List & Billing Calculations (Matches /diagnostic/billing) -->
+                        <div class="diag-preview-card" style="margin-top: 4px;">
+                            <div class="diag-preview-card-header">
+                                <div class="diag-preview-title-group">
+                                    <span class="diag-preview-title">📋 @I18n.T("Added Emergency Services List:")</span>
+                                    <span class="diag-preview-badge">@editor.Items.Count @(editor.Items.Count == 1 ? I18n.T("Service") : I18n.T("Services"))</span>
+                                </div>
+                                @if (editor.Items.Count > 0)
                                 {
-                                    <div class="tickets-queue-empty" style="padding: 12px; font-size:12px;">
-                                        <span>⚡ @I18n.T("Add at least one emergency service to this memo.")</span>
-                                    </div>
-                                }
-                                @foreach (var item in editor.Items)
-                                {
-                                    <div class="emg-line-row">
-                                        <span>@item.SLNo</span>
-                                        <strong style="color:#0f172a;">@ServiceName(item.TestID)</strong>
-                                        <span style="text-align: right;">@(I18n.FormatCurrency(item.Rate))</span>
-                                        <span style="text-align: center;">@item.Quantity</span>
-                                        <strong style="text-align: right; color:#059669;">@(I18n.FormatCurrency(item.Rate * item.Quantity))</strong>
-                                        <button type="button" class="btn btn-link btn-sm p-0" style="color:#dc2626; text-decoration:none;" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">×</button>
-                                    </div>
+                                    <button type="button" class="btn-clear-tests" @onclick="ClearAllItems" title="@I18n.T("Clear All")">
+                                        ✕ @I18n.T("Clear All")
+                                    </button>
                                 }
                             </div>
-                        </div>
 
-                        <!-- POS Financial Summary & Cash Counter -->
-                        <div class="emg-pos-counter-card">
-                            <div class="emg-pos-figures-row">
-                                <div class="emg-pos-stat">
-                                    <span class="emg-pos-stat-lbl">@I18n.T("Gross Total")</span>
-                                    <span class="emg-pos-stat-val gross">@(I18n.FormatCurrency(editor.Total))</span>
+                            <!-- Table matching /diagnostic/billing columns -->
+                            <div class="diag-bill-preview-table-wrap" style="--diag-bill-columns: 34px minmax(180px, 1fr) 80px 48px 95px 30px;">
+                                <div class="diag-preview-table-head">
+                                    <span class="pcol-sl">SL</span>
+                                    <span class="pcol-name">@I18n.T("Emergency Service Description")</span>
+                                    <span class="pcol-rate" style="text-align: right;">@I18n.T("Rate")</span>
+                                    <span class="pcol-qty" style="text-align: center;">@I18n.T("Qty")</span>
+                                    <span class="pcol-amount" style="text-align: right;">@I18n.T("Amount")</span>
+                                    <span class="pcol-del" style="text-align: center;">✕</span>
                                 </div>
-                                <div class="emg-pos-stat" @onclick="OpenDiscountModal" title="@I18n.T("Click to apply discount / authorization")">
-                                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                                        <span class="emg-pos-stat-lbl">@I18n.T("Discount")</span>
-                                        <span style="font-size:10px;">✏️</span>
-                                    </div>
-                                    <span class="emg-pos-stat-val discount">
-                                        @(editor.Discount > 0 ? $"-{I18n.FormatCurrency(editor.Discount)}" : "৳ 0")
-                                    </span>
-                                </div>
-                                <div class="emg-pos-stat">
-                                    <span class="emg-pos-stat-lbl">@I18n.T("Cash Paid")</span>
-                                    <InputNumber class="classic-input bold-number" style="height:24px !important; min-height:24px !important; padding:1px 4px !important; font-size:13px !important; font-weight:800; border:none !important; border-bottom:1.5px solid #0284c7 !important; border-radius:0 !important;" 
-                                                 @bind-Value="editor.Paid" 
-                                                 @bind-Value:after="PaidChanged" />
-                                </div>
-                                <div class="emg-pos-stat">
-                                    @{
-                                        var netDue = Math.Max(0, editor.Total - editor.Discount - editor.Paid);
-                                        var changeReturn = Math.Max(0, editor.Paid - (editor.Total - editor.Discount));
-                                    }
-                                    @if (changeReturn > 0)
+                                <div class="diag-preview-table-rows">
+                                    @if (editor.Items.Count == 0)
                                     {
-                                        <span class="emg-pos-stat-lbl" style="color:#0284c7;">@I18n.T("Change Return")</span>
-                                        <span class="emg-pos-stat-val change">@(I18n.FormatCurrency(changeReturn))</span>
+                                        <div class="diag-preview-empty-state">
+                                            <div class="empty-icon">⚡</div>
+                                            <strong>@I18n.T("No services added yet")</strong>
+                                            <span>@I18n.T("Select and add emergency procedures above to calculate bill.")</span>
+                                        </div>
                                     }
                                     else
                                     {
-                                        <span class="emg-pos-stat-lbl" style="color:#dc2626;">@I18n.T("Net Due")</span>
-                                        <span class="emg-pos-stat-val due">@(I18n.FormatCurrency(netDue))</span>
+                                        @for (var i = 0; i < editor.Items.Count; i++)
+                                        {
+                                            var idx = i;
+                                            var item = editor.Items[idx];
+                                            <div class="diag-preview-table-row">
+                                                <span class="pcol-sl">@(idx + 1)</span>
+                                                <div class="pcol-name">
+                                                    <span class="pcol-test-title">@ServiceName(item.TestID)</span>
+                                                </div>
+                                                <span class="pcol-rate" style="text-align: right;">@I18n.FormatCurrency(item.Rate)</span>
+                                                <span class="pcol-qty" style="text-align: center;">@item.Quantity</span>
+                                                <strong class="pcol-amount" style="text-align: right; color: #059669;">@I18n.FormatCurrency(item.Rate * item.Quantity)</strong>
+                                                <span class="pcol-del" style="text-align: center;">
+                                                    <button type="button" class="diag-item-del-btn" title="@I18n.T("Delete")" @onclick="() => RemoveLine(item)">✕</button>
+                                                </span>
+                                            </div>
+                                        }
                                     }
                                 </div>
                             </div>
 
-                            @if (editor.Discount > 0 && !string.IsNullOrWhiteSpace(editor.DiscountBy))
-                            {
-                                <div style="display:flex; justify-content:flex-end; margin-top:2px;">
-                                    <span style="font-size:10px; color:#059669; font-weight:700;">✓ Auth: @editor.DiscountBy</span>
+                            <!-- Calculations Block matching /diagnostic/billing -->
+                            <div class="diag-totals-summary-box">
+                                <div class="diag-totals-row gross-row">
+                                    <span class="totals-label">@I18n.T("Total amount"):</span>
+                                    <strong class="totals-value gross-val">@I18n.FormatCurrency(editor.Total)</strong>
                                 </div>
-                            }
+
+                                <div class="diag-totals-row input-row">
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <span class="totals-label">@I18n.T("Disc (% + Amount)"):</span>
+                                        <button type="button" class="btn btn-link btn-sm p-0" style="font-size:10.5px; color:#0284c7; text-decoration:none;" @onclick="OpenDiscountModal" title="@I18n.T("Open discount & authorization modal")">
+                                            ✏️ @I18n.T("Dialog")
+                                        </button>
+                                    </div>
+                                    <div class="totals-dual-input-wrap">
+                                        <div class="percent-input-wrap">
+                                            <input type="number" step="0.5" min="0" max="100" class="classic-input diag-tot-input"
+                                                   value="@quickDiscountPercent"
+                                                   @onchange="HandleInlineDiscountPercentChange"
+                                                   aria-label="@I18n.T("Percentage discount")"
+                                                   placeholder="%" />
+                                            <span class="unit-symbol">%</span>
+                                        </div>
+                                        <InputNumber class="classic-input diag-tot-input"
+                                                     @bind-Value="editor.Discount"
+                                                     @bind-Value:after="OnInlineDiscountAmountChanged"
+                                                     aria-label="@I18n.T("Discount amount")"
+                                                     placeholder="Tk" />
+                                    </div>
+                                </div>
+
+                                @if (editor.Discount > 0)
+                                {
+                                    <div class="diag-totals-row discount-total-row">
+                                        <span class="totals-label">@I18n.T("Total Discount"):</span>
+                                        <strong class="totals-value">- @I18n.FormatCurrency(editor.Discount)</strong>
+                                    </div>
+                                    <div class="diag-totals-row input-row">
+                                        <span class="totals-label">@I18n.T("Authorized By")<span class="req" style="color:#dc2626;">*</span>:</span>
+                                        <div class="totals-input-wrap authorizer-input-wrap">
+                                            <InputSelect class="classic-input diag-tot-input tickets-select diag-authorizer-select" @bind-Value="editor.DiscountBy">
+                                                <option value="">@I18n.T("Select authorizer")</option>
+                                                @foreach (var authorizer in authorizers)
+                                                {
+                                                    <option value="@authorizer.DisplayName">@authorizer.DisplayName</option>
+                                                }
+                                            </InputSelect>
+                                        </div>
+                                    </div>
+                                }
+
+                                <div class="diag-totals-row net-payable-row">
+                                    <span class="totals-label">@I18n.T("Payable"):</span>
+                                    <strong class="totals-value net-val">@I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount))</strong>
+                                </div>
+
+                                <div class="diag-totals-row input-row">
+                                    <span class="totals-label">@I18n.T("Received"):</span>
+                                    <div class="totals-input-wrap">
+                                        <InputNumber class="classic-input diag-tot-input" @bind-Value="editor.Paid" @bind-Value:after="PaidChanged" />
+                                    </div>
+                                </div>
+
+                                @{
+                                    var currentDue = Math.Max(0, editor.Total - editor.Discount - editor.Paid);
+                                    var currentChange = Math.Max(0, editor.Paid - (editor.Total - editor.Discount));
+                                }
+                                @if (currentChange > 0)
+                                {
+                                    <div class="diag-totals-row" style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:4px; padding:3px 6px;">
+                                        <span class="totals-label" style="color:#166534;">@I18n.T("Change Return"):</span>
+                                        <strong class="totals-value" style="color:#16a34a; font-size:12px;">@I18n.FormatCurrency(currentChange)</strong>
+                                    </div>
+                                }
+                                else if (currentDue > 0)
+                                {
+                                    <div class="diag-due-alert-card">
+                                        <div class="diag-due-top-row">
+                                            <div class="diag-due-summary">
+                                                <span class="diag-due-icon" aria-hidden="true">!</span>
+                                                <div>
+                                                    <span class="due-warning-text">@I18n.T("Balance Due")</span>
+                                                    <strong class="diag-due-amount">@I18n.FormatCurrency(currentDue)</strong>
+                                                </div>
+                                            </div>
+                                            <div class="diag-due-actions">
+                                                <button type="button" class="btn-quick-full-pay" @onclick="PayDueInFull" title="@I18n.T("Set Paid Amount to Net Payable")">
+                                                    ✓ @(editor.ID > 0 ? I18n.T("Mark Due Paid") : I18n.T("Mark Fully Paid"))
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="diag-totals-row due-row zero-due">
+                                        <span class="totals-label">@I18n.T("Due"):</span>
+                                        <strong class="totals-value due-val">@I18n.FormatCurrency(0)</strong>
+                                    </div>
+                                }
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -405,12 +486,12 @@
                         </button>
                         @if (editor.ID > 0)
                         {
-                            <button class="btn btn-secondary appt-btn" type="button" @onclick="PrintMemoAsync" title="@I18n.T("Print Cash Memo")">
-                                🖨️ @I18n.T("Print")
+                            <button class="btn btn-secondary appt-btn" type="button" @onclick="PrintMemoAsync" title="@I18n.T("Reprint Cash Memo")">
+                                🖨️ @I18n.T("Reprint")
                             </button>
                         }
-                        <button class="btn btn-primary appt-btn appt-book-btn" type="submit" disabled="@saving" title="@I18n.T("Save Emergency Memo (Ctrl+Enter)")">
-                            ✓ @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Emergency Memo") : I18n.T("Update Memo"))
+                        <button class="btn btn-primary appt-btn appt-book-btn" type="submit" disabled="@saving" title="@I18n.T("Save and print Emergency Memo (Ctrl+Enter)")">
+                            🖨️ @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save & Print") : I18n.T("Update & Print"))
                         </button>
                     </div>
                 </div>
@@ -779,58 +860,84 @@
 
                 <div class="discount-quick-chips">
                     <span class="quick-chip-title">@I18n.T("Quick Percentages"):</span>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(0)">0%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(5)">5%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(10)">10%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(15)">15%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(20)">20%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(50)">50%</button>
-                    <button type="button" class="quick-chip" @onclick="() => SetDiscountPercent(100)">100% (Free)</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 0 && tempDiscount == 0 ? "active" : "")" @onclick="() => SetDiscountPercent(0)">0%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 5 ? "active" : "")" @onclick="() => SetDiscountPercent(5)">5%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 10 ? "active" : "")" @onclick="() => SetDiscountPercent(10)">10%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 15 ? "active" : "")" @onclick="() => SetDiscountPercent(15)">15%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 20 ? "active" : "")" @onclick="() => SetDiscountPercent(20)">20%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 50 ? "active" : "")" @onclick="() => SetDiscountPercent(50)">50%</button>
+                    <button type="button" class="quick-chip @(tempDiscountPercent == 100 ? "active" : "")" @onclick="() => SetDiscountPercent(100)">100% (Free)</button>
                 </div>
 
-                <div class="discount-form-fields">
+                <div class="discount-form-fields" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-top:8px;">
                     <label>
-                        <span>@I18n.T("Discount Amount (৳)")</span>
+                        <span style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>@I18n.T("Discount (%)")</span>
+                            <small style="font-size:10px; color:#64748b; font-weight:normal;">@I18n.T("Custom %")</small>
+                        </span>
+                        <div style="position:relative; display:flex; align-items:center;">
+                            <input type="number"
+                                   step="0.5"
+                                   min="0"
+                                   max="100"
+                                   class="classic-input bold-number"
+                                   style="padding-right: 22px; width: 100%; text-align: right;"
+                                   value="@tempDiscountPercent"
+                                   @oninput="HandleTempDiscountPercentInput"
+                                   placeholder="0" />
+                            <span style="position:absolute; right:8px; font-weight:800; font-size:11px; color:#64748b; pointer-events:none;">%</span>
+                        </div>
+                    </label>
+
+                    <label>
+                        <span style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>@I18n.T("Discount Amount (৳)")</span>
+                            <small style="font-size:10px; color:#64748b; font-weight:normal;">@I18n.T("Custom ৳")</small>
+                        </span>
                         <input type="number"
                                step="0.01"
                                min="0"
                                max="@editor.Total"
                                class="classic-input bold-number"
+                               style="width: 100%; text-align: right;"
                                value="@tempDiscount"
-                               @oninput="HandleTempDiscountInput" />
-                    </label>
-
-                    <label>
-                        <span>
-                            @I18n.T("Authorized By")
-                            @if (tempDiscount > 0)
-                            {
-                                <span class="req">*</span>
-                            }
-                        </span>
-                        <input type="text"
-                               class="classic-input"
-                               maxlength="50"
-                               placeholder="@I18n.T("Name / Title of authorizing authority")"
-                               @bind="tempDiscountBy"
-                               @bind:event="oninput" />
+                               @oninput="HandleTempDiscountInput"
+                               placeholder="0.00" />
                     </label>
                 </div>
 
-                @if (tempDiscount > 0)
-                {
-                    <div class="authorizer-quick-chips">
-                        <span class="quick-chip-title">@I18n.T("Quick Authorizer"):</span>
-                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Duty Doctor"'>Duty Doctor</button>
-                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "RMO"'>RMO</button>
-                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Hospital Director"'>Director</button>
-                        <button type="button" class="quick-chip" @onclick='() => tempDiscountBy = "Admin Office"'>Admin Office</button>
-                    </div>
-                }
+                <div class="discount-authorizer-row" style="margin-top:10px;">
+                    <label style="display:flex; flex-direction:column; gap:3px;">
+                        <span style="font-size:11px; font-weight:700; color:#475569;">
+                            @I18n.T("Authorized By")
+                            @if (tempDiscount > 0)
+                            {
+                                <span class="req" style="color:#dc2626; font-weight:700;">*</span>
+                            }
+                        </span>
+                        <select class="classic-input tickets-select diag-authorizer-select"
+                                style="width:100%; height:32px;"
+                                @bind="tempDiscountBy">
+                            <option value="">@I18n.T("Select authorizer")</option>
+                            @if (authorizers.Count == 0)
+                            {
+                                <option value="" disabled>@I18n.T("No active Authorizer user")</option>
+                            }
+                            @foreach (var authorizer in authorizers)
+                            {
+                                <option value="@authorizer.DisplayName">@authorizer.DisplayName</option>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(tempDiscountBy) && !authorizers.Any(x => string.Equals(x.DisplayName, tempDiscountBy, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                <option value="@tempDiscountBy">@tempDiscountBy</option>
+                            }
+                        </select>
+                    </label>
+                </div>
 
                 @if (tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy))
                 {
-                    <div class="discount-warning-note">
+                    <div class="discount-warning-note" style="margin-top:8px;">
                         ⚠️ @I18n.T("Authorization name is required when discount is greater than 0.")
                     </div>
                 }
@@ -1092,6 +1199,240 @@
     </div>
 </div>
 
+<!-- =========================================================================
+     3. Delta Hospital Style Compact A5 (Half-A4) Cash Memo
+     ========================================================================= -->
+<div id="emergency-a5-print" class="a5-memo-sheet panel print-document">
+    <!-- Header -->
+    <div class="a5-header">
+        <div class="a5-brand-block">
+            @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+            {
+                <img src="@Branding.LogoData" alt="Logo" class="a5-brand-logo" />
+            }
+            else
+            {
+                <div class="a5-logo-placeholder">⚡</div>
+            }
+            <div class="a5-brand-text">
+                <h2 class="a5-hosp-name">@Branding.HospitalName</h2>
+                <div class="a5-hosp-address">
+                    @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}")
+                    @if (!string.IsNullOrWhiteSpace(Branding.Hotline) || !string.IsNullOrWhiteSpace(Branding.Phone))
+                    {
+                        <span> Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</span>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="a5-copy-tags">
+            <div class="a5-patient-copy-tag">EMERGENCY CASH MEMO</div>
+            <div class="a5-orig-copy-tag">PATIENT COPY</div>
+        </div>
+    </div>
+
+    <!-- Bill No & Barcode Row -->
+    <div class="a5-bill-meta-row">
+        <div class="a5-bill-no-date">
+            <span class="a5-meta-label">Memo No. :</span>
+            <strong class="a5-meta-val">EMG@(editor.ID.ToString("D8"))</strong>
+            <span class="a5-meta-sep">&nbsp;&bull;&nbsp;</span>
+            <span class="a5-meta-label">Date :</span>
+            <span class="a5-meta-val">@editor.TransDate.ToString("dd/MM/yy hh:mm tt")</span>
+        </div>
+        <div class="a5-bill-barcode">
+            <BarcodeQrView Code="@(!string.IsNullOrWhiteSpace(editor.PatientID) ? editor.PatientID : $"EMG{editor.ID}")" ShowBarcode="true" ShowQr="false" Layout="barcode-only" BarHeight="26" IncludeBarcodeText="false" />
+        </div>
+    </div>
+
+    <!-- Patient Information Grid -->
+    <div class="a5-patient-info-box">
+        <div class="a5-patient-info-left">
+            <div class="a5-pinfo-row">
+                <div class="a5-pinfo-col a5-col-full">
+                    <span class="a5-lbl">Name</span>
+                    <span class="a5-colon">:</span>
+                    <strong class="a5-val a5-patient-name">@editor.PatientName.ToUpper()</strong>
+                </div>
+            </div>
+            <div class="a5-pinfo-row">
+                <div class="a5-pinfo-col" style="flex: 1.2;">
+                    <span class="a5-lbl">Age</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Age) ? "—" : editor.Age)</span>
+                </div>
+                <div class="a5-pinfo-col" style="flex: 1.2;">
+                    <span class="a5-lbl">Gender</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Sex) ? "—" : editor.Sex)</span>
+                </div>
+                <div class="a5-pinfo-col" style="flex: 1.8;">
+                    <span class="a5-lbl">Contact No</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Contact) ? "—" : editor.Contact)</span>
+                </div>
+            </div>
+            <div class="a5-pinfo-row">
+                <div class="a5-pinfo-col a5-col-full">
+                    <span class="a5-lbl">Attending</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-val">@DoctorName(editor.DoctorID)</span>
+                </div>
+            </div>
+            <div class="a5-pinfo-row">
+                <div class="a5-pinfo-col a5-col-full">
+                    <span class="a5-lbl">Department</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-val">Emergency & Trauma Care</span>
+                </div>
+            </div>
+            <div class="a5-pinfo-row">
+                <div class="a5-pinfo-col a5-col-full">
+                    <span class="a5-lbl">Patient ID</span>
+                    <span class="a5-colon">:</span>
+                    <strong class="a5-val">@(string.IsNullOrWhiteSpace(editor.PatientID) ? "Walk-in" : editor.PatientID)</strong>
+                </div>
+            </div>
+        </div>
+        <div class="a5-patient-info-right-qr">
+            <BarcodeQrView Code="@($"EMG-{editor.ID}")"
+                           QrPayload="@BarcodeQr.GenerateEmergencyQrPayload(editor.ID, int.TryParse(editor.PatientID, out var emgPid) ? emgPid : 0, editor.PatientName ?? "", editor.Total, Math.Max(0, editor.Total - editor.Discount - editor.Paid))"
+                           ShowBarcode="false"
+                           ShowQr="true"
+                           Layout="qr-only"
+                           QrPixelsPerModule="3" />
+        </div>
+    </div>
+
+    <!-- Items Table -->
+    <table class="a5-items-table">
+        <thead>
+            <tr>
+                <th style="width: 8%;">#</th>
+                <th style="width: 54%;">Emergency Service / Procedure</th>
+                <th style="width: 12%; text-align: right;">Rate</th>
+                <th style="width: 8%; text-align: center;">Qty</th>
+                <th style="width: 18%; text-align: right;">Price (Tk.)</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in editor.Items)
+            {
+                <tr>
+                    <td class="a5-cell-code">@item.SLNo</td>
+                    <td class="a5-cell-name">@ServiceName(item.TestID)</td>
+                    <td class="a5-cell-rate" style="text-align: right;">@item.Rate.ToString("N2")</td>
+                    <td class="a5-cell-qty" style="text-align: center;">@item.Quantity</td>
+                    <td class="a5-cell-price" style="text-align: right;">@((item.Rate * item.Quantity).ToString("N2"))</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <!-- Remarks Row -->
+    <div class="a5-remarks-test-id-row">
+        <div class="a5-remarks-line">
+            <span class="a5-lbl">Remarks :</span>
+            <span class="a5-val">@(string.IsNullOrWhiteSpace(editor.Remarks) ? "N/A" : editor.Remarks)</span>
+        </div>
+    </div>
+
+    <!-- Financial Summary & Payment Breakdown Split -->
+    <div class="a5-financial-split">
+        <!-- Left: Stamp, In Words, Mini Payment Table, Prepared By -->
+        <div class="a5-fin-left">
+            <div class="a5-stamp-box">
+                @if (editor.Total - editor.Discount - editor.Paid <= 0)
+                {
+                    <div class="a5-stamp a5-stamp-paid">PAID</div>
+                }
+                else
+                {
+                    <div class="a5-stamp a5-stamp-due">DUE: @I18n.FormatCurrency(Math.Max(0, editor.Total - editor.Discount - editor.Paid))</div>
+                }
+            </div>
+
+            <div class="a5-in-word">
+                In Word: @CurrencyWordsHelper.ToTakaWords(editor.Paid > 0 ? editor.Paid : Math.Max(0, editor.Total - editor.Discount))
+            </div>
+
+            <table class="a5-mini-pay-table">
+                <thead>
+                    <tr>
+                        <th>Payment Type</th>
+                        <th>Coll. By</th>
+                        <th>Auth. By</th>
+                        <th>Date</th>
+                        <th>Mode</th>
+                        <th style="text-align: right;">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (editor.Discount > 0)
+                    {
+                        <tr>
+                            <td>Discount</td>
+                            <td>@currentUserName</td>
+                            <td>@(string.IsNullOrWhiteSpace(editor.DiscountBy) ? "—" : editor.DiscountBy)</td>
+                            <td>@editor.TransDate.ToString("dd/MM/yy")</td>
+                            <td>Discount</td>
+                            <td style="text-align: right;">@editor.Discount.ToString("N2")</td>
+                        </tr>
+                    }
+                    <tr>
+                        <td>Collection</td>
+                        <td>@currentUserName</td>
+                        <td>—</td>
+                        <td>@editor.TransDate.ToString("dd/MM/yy")</td>
+                        <td>Cash</td>
+                        <td style="text-align: right;">@editor.Paid.ToString("N2")</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="a5-prepared-by">
+                Prepared By : <strong>@currentUserName</strong>
+            </div>
+        </div>
+
+        <!-- Right: Financial Totals Box -->
+        <div class="a5-fin-right">
+            <div class="a5-financial-summary">
+                <div class="a5-fin-row">
+                    <span>Gross Total Tk.</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-fin-val">@editor.Total.ToString("N2")</span>
+                </div>
+                @if (editor.Discount > 0)
+                {
+                    <div class="a5-fin-row">
+                        <span>(-)Discount Tk.</span>
+                        <span class="a5-colon">:</span>
+                        <span class="a5-fin-val">@editor.Discount.ToString("N2")</span>
+                    </div>
+                }
+                <div class="a5-fin-row a5-fin-net">
+                    <span>Net Payable Tk.</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-fin-val">@Math.Max(0, editor.Total - editor.Discount).ToString("N2")</span>
+                </div>
+                <div class="a5-fin-row">
+                    <span>Paid Amount Tk.</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-fin-val">@editor.Paid.ToString("N2")</span>
+                </div>
+                <div class="a5-fin-row a5-fin-due">
+                    <span>Due Tk.</span>
+                    <span class="a5-colon">:</span>
+                    <span class="a5-fin-val @(editor.Total - editor.Discount - editor.Paid > 0 ? "a5-due-text" : "")">
+                        @Math.Max(0, editor.Total - editor.Discount - editor.Paid).ToString("N2")
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 @code {
     [SupplyParameterFromQuery(Name = "patientId")]
     public string? QueryPatientId { get; set; }
@@ -1112,18 +1453,26 @@
     private bool paidManuallyEdited;
     private bool showPatientIdSuggestions;
     private List<Registration> patientIdSuggestions = [];
+    private DotNetObjectReference<EmergencyServices>? dotNetRef;
+    private const int PatientBatchSize = 15;
+    private bool hasMorePatientSuggestions = true;
+    private bool isLoadingMorePatients = false;
+    private string patientSearchQuery = string.Empty;
 
     // Drawer & Filter state
     private bool showScheduleDrawer = false;
     private string drawerFilter = "All";
 
     // Format & Auto-print state
-    private bool isThermalMode = true;
-    private bool autoPrint = false;
+    private string printLayout = "A5";
+    private string currentUserName = "Cashier";
+    private decimal quickDiscountPercent = 0;
 
     // Doctor autocomplete inline
     private string doctorSearchText = string.Empty;
     private bool showDoctorSuggestions = false;
+    private const int DoctorBatchSize = 15;
+    private int doctorVisibleCount = DoctorBatchSize;
 
     // Quick Patient Modal State
     private bool showNewPatientModal = false;
@@ -1143,7 +1492,9 @@
     // Discount modal state
     private bool isDiscountModalOpen = false;
     private decimal tempDiscount = 0;
+    private decimal tempDiscountPercent = 0;
     private string? tempDiscountBy = string.Empty;
+    private List<AppUser> authorizers = [];
 
     // Service catalog modal state
     private bool isServiceModalOpen = false;
@@ -1159,6 +1510,9 @@
         : doctors.Where(d => (d.Name?.Contains(doctorSearchText.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
                           || (d.Degree?.Contains(doctorSearchText.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
                           || (d.Room?.Contains(doctorSearchText.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+
+    private IEnumerable<DoctorsProfile> VisibleDoctorsList => FilteredDoctorsList.Take(doctorVisibleCount);
+    private bool HasMoreDoctorSuggestions => doctorVisibleCount < FilteredDoctorsList.Count;
 
     private IEnumerable<DoctorsProfile> FilteredDoctors => string.IsNullOrWhiteSpace(doctorSearchQuery)
         ? doctors
@@ -1203,6 +1557,13 @@
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        currentUserName = authState.User?.Identity?.Name ?? "Cashier";
+        var roleAuthorizers = await UserManager.GetUsersInRoleAsync(RoleNames.Authorizer);
+        authorizers = roleAuthorizers
+            .Where(x => x.IsActive && !string.IsNullOrWhiteSpace(x.DisplayName))
+            .OrderBy(x => x.DisplayName)
+            .ToList();
         await using var db = await DbFactory.CreateDbContextAsync();
         doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         foreach (var d in doctors)
@@ -1222,12 +1583,38 @@
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        dotNetRef ??= DotNetObjectReference.Create(this);
+        if (showDoctorSuggestions)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initDoctorInfiniteScroll", "emg-doctor-search-box", "emg-doctor-suggestions-list", dotNetRef);
+            }
+            catch
+            {
+            }
+        }
+        if (showPatientIdSuggestions)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "emg-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
+            }
+            catch
+            {
+            }
+        }
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         var patientId = QueryPatientId ?? PatientSelection.PatientId;
         if (!string.IsNullOrWhiteSpace(patientId) && editor.ID == 0)
         {
-            editor.PatientID = patientId.Trim();
+            patientSearchQuery = patientId.Trim();
+            editor.PatientID = patientSearchQuery;
             await FindPatientAsync();
         }
     }
@@ -1242,7 +1629,6 @@
 
     private void ToggleScheduleDrawer() => showScheduleDrawer = !showScheduleDrawer;
     private void CloseScheduleDrawer() => showScheduleDrawer = false;
-    private void ToggleAutoPrint() => autoPrint = !autoPrint;
 
     private void SelectAndCloseDrawer(CashMemoDInvestigation m)
     {
@@ -1281,10 +1667,54 @@
         }
     }
 
-    private void HandleDoctorSearchInput(ChangeEventArgs e)
+    private async Task HandleDoctorSearchInputAsync(ChangeEventArgs e)
     {
         doctorSearchText = e.Value?.ToString() ?? string.Empty;
+        doctorVisibleCount = DoctorBatchSize;
         showDoctorSuggestions = true;
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.resetDoctorScrollTop", "emg-doctor-suggestions-list");
+        }
+        catch { }
+    }
+
+    private void ShowDoctorSuggestions()
+    {
+        doctorVisibleCount = DoctorBatchSize;
+        showDoctorSuggestions = true;
+    }
+
+    [JSInvokable]
+    public void LoadMoreDoctorsFromJs()
+    {
+        if (HasMoreDoctorSuggestions)
+        {
+            doctorVisibleCount = Math.Min(FilteredDoctorsList.Count, doctorVisibleCount + DoctorBatchSize);
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void CloseDoctorSuggestionsFromJs()
+    {
+        if (showDoctorSuggestions)
+        {
+            showDoctorSuggestions = false;
+            StateHasChanged();
+        }
+    }
+
+    private void HandleDoctorSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            showDoctorSuggestions = false;
+        }
+        else if (e.Key == "Enter")
+        {
+            SelectDoctorInline(FilteredDoctorsList.FirstOrDefault());
+        }
     }
 
     private void SelectDoctorInline(DoctorsProfile? doc)
@@ -1443,36 +1873,73 @@
     {
         tempDiscount = editor.Discount;
         tempDiscountBy = editor.DiscountBy;
+        tempDiscountPercent = editor.Total > 0 ? Math.Round((tempDiscount / editor.Total) * 100m, 2, MidpointRounding.AwayFromZero) : 0;
         isDiscountModalOpen = true;
     }
     private void CloseDiscountModal() => isDiscountModalOpen = false;
     private void SetDiscountPercent(int percent)
     {
-        if (percent <= 0) tempDiscount = 0;
-        else tempDiscount = Math.Round(editor.Total * (percent / 100m), 2);
+        tempDiscountPercent = percent;
+        if (percent <= 0)
+        {
+            tempDiscount = 0;
+            tempDiscountPercent = 0;
+        }
+        else
+        {
+            tempDiscount = Math.Round(editor.Total * (percent / 100m), 2, MidpointRounding.AwayFromZero);
+        }
+    }
+    private void HandleTempDiscountPercentInput(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var p))
+        {
+            tempDiscountPercent = Math.Clamp(p, 0, 100);
+            tempDiscount = Math.Round(editor.Total * (tempDiscountPercent / 100m), 2, MidpointRounding.AwayFromZero);
+        }
+        else
+        {
+            tempDiscountPercent = 0;
+            tempDiscount = 0;
+        }
     }
     private void HandleTempDiscountInput(ChangeEventArgs e)
     {
         if (decimal.TryParse(e.Value?.ToString(), out var val))
         {
             tempDiscount = Math.Max(0, Math.Min(val, editor.Total));
+            tempDiscountPercent = editor.Total > 0 ? Math.Round((tempDiscount / editor.Total) * 100m, 2, MidpointRounding.AwayFromZero) : 0;
         }
         else
         {
             tempDiscount = 0;
+            tempDiscountPercent = 0;
         }
     }
     private void RemoveDiscount()
     {
+        tempDiscount = 0;
+        tempDiscountPercent = 0;
+        tempDiscountBy = null;
         editor.Discount = 0;
         editor.DiscountBy = null;
+        quickDiscountPercent = 0;
         RecalculatePayable();
         isDiscountModalOpen = false;
     }
     private void ApplyDiscount()
     {
+        if (tempDiscount > 0 && string.IsNullOrWhiteSpace(tempDiscountBy)) return;
         editor.Discount = Math.Max(0, Math.Min(tempDiscount, editor.Total));
-        editor.DiscountBy = string.IsNullOrWhiteSpace(tempDiscountBy) ? null : tempDiscountBy.Trim();
+        editor.DiscountBy = editor.Discount > 0 ? tempDiscountBy?.Trim() : null;
+        if (editor.Total > 0 && editor.Discount > 0)
+        {
+            quickDiscountPercent = Math.Round((editor.Discount / editor.Total) * 100m, 1);
+        }
+        else
+        {
+            quickDiscountPercent = 0;
+        }
         RecalculatePayable();
         isDiscountModalOpen = false;
     }
@@ -1502,33 +1969,86 @@
         isServiceModalOpen = false;
     }
 
-    private async Task HandlePatientIdInputAsync(ChangeEventArgs e)
+    private async Task HandlePatientSearchInputAsync(ChangeEventArgs e)
     {
-        editor.PatientID = e.Value?.ToString();
-        await FilterPatientIdSuggestionsAsync();
+        patientSearchQuery = e.Value?.ToString() ?? string.Empty;
+        editor.PatientID = patientSearchQuery;
+        await LoadPatientIdSuggestionsAsync();
     }
-    private async Task ShowPatientIdSuggestionsAsync() => await FilterPatientIdSuggestionsAsync();
+    private async Task ShowPatientIdSuggestionsAsync() => await LoadPatientIdSuggestionsAsync();
     private async Task HidePatientSuggestionsAsync()
     {
-        await Task.Delay(200);
+        await Task.Delay(250);
         showPatientIdSuggestions = false;
     }
-    private async Task FilterPatientIdSuggestionsAsync()
+
+    private static IQueryable<Registration> BuildPatientQuery(HpmDbContext db, string term)
     {
-        if (string.IsNullOrWhiteSpace(editor.PatientID) || editor.PatientID.Trim().Length < 2)
+        return db.Registrations.AsNoTracking()
+            .Where(x => string.IsNullOrEmpty(term)
+                     || x.PatientID.StartsWith(term)
+                     || (x.Contact != null && x.Contact.StartsWith(term))
+                     || (x.Name != null && x.Name.Contains(term)))
+            .OrderByDescending(x => x.ID);
+    }
+
+    private async Task LoadPatientIdSuggestionsAsync()
+    {
+        var term = patientSearchQuery.Trim();
+        hasMorePatientSuggestions = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            patientIdSuggestions = await q.Take(PatientBatchSize).ToListAsync();
+            hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
+            showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "emg-patient-suggestions-list");
+            }
+            catch { }
+        }
+        catch
         {
             patientIdSuggestions.Clear();
             showPatientIdSuggestions = false;
-            return;
+            hasMorePatientSuggestions = false;
         }
-        var term = editor.PatientID.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        patientIdSuggestions = await db.Registrations.AsNoTracking()
-            .Where(x => (x.PatientID != null && x.PatientID.Contains(term)) || (x.Contact != null && x.Contact.Contains(term)) || (x.Name != null && x.Name.Contains(term)))
-            .OrderByDescending(x => x.ID)
-            .Take(8)
-            .ToListAsync();
-        showPatientIdSuggestions = patientIdSuggestions.Count > 0;
+    }
+
+    [JSInvokable]
+    public async Task LoadMorePatientsFromJs()
+    {
+        if (isLoadingMorePatients || !hasMorePatientSuggestions || !showPatientIdSuggestions) return;
+        isLoadingMorePatients = true;
+        await InvokeAsync(StateHasChanged);
+
+        var term = patientSearchQuery.Trim();
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var q = BuildPatientQuery(db, term);
+            var nextBatch = await q.Skip(patientIdSuggestions.Count).Take(PatientBatchSize).ToListAsync();
+            if (nextBatch.Count > 0)
+            {
+                patientIdSuggestions.AddRange(nextBatch);
+                hasMorePatientSuggestions = nextBatch.Count >= PatientBatchSize;
+            }
+            else
+            {
+                hasMorePatientSuggestions = false;
+            }
+        }
+        catch
+        {
+            hasMorePatientSuggestions = false;
+        }
+        finally
+        {
+            isLoadingMorePatients = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void SelectPatient(Registration patient)
@@ -1538,6 +2058,7 @@
         editor.Age = Age(patient.DateOfBirth);
         editor.Sex = patient.Sex;
         editor.Contact = patient.Contact;
+        patientSearchQuery = patient.PatientID ?? string.Empty;
         PatientSelection.Select(patient.PatientID);
         showPatientIdSuggestions = false;
         messageClass = "success";
@@ -1560,8 +2081,8 @@
 
     private async Task FindPatientAsync()
     {
-        if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
-        var lookup = editor.PatientID.Trim();
+        var lookup = (string.IsNullOrWhiteSpace(patientSearchQuery) ? editor.PatientID : patientSearchQuery)?.Trim();
+        if (string.IsNullOrWhiteSpace(lookup)) return;
         await using var db = await DbFactory.CreateDbContextAsync();
         var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup || x.Contact == lookup);
         if (patient is null && lookup.StartsWith("0") && lookup.Length >= 10)
@@ -1569,6 +2090,13 @@
             var withoutLeadingZero = lookup[1..];
             patient = await db.Registrations.AsNoTracking()
                 .Where(x => x.Contact != null && x.Contact.EndsWith(withoutLeadingZero))
+                .OrderByDescending(x => x.ID)
+                .FirstOrDefaultAsync();
+        }
+        if (patient is null)
+        {
+            patient = await db.Registrations.AsNoTracking()
+                .Where(x => x.Name != null && x.Name.Contains(lookup))
                 .OrderByDescending(x => x.ID)
                 .FirstOrDefaultAsync();
         }
@@ -1624,9 +2152,53 @@
         Recalculate();
     }
 
+    private void ClearAllItems()
+    {
+        editor.Items.Clear();
+        Recalculate();
+    }
+
+    private void PayDueInFull()
+    {
+        editor.Paid = Math.Max(0, editor.Total - editor.Discount);
+        paidManuallyEdited = true;
+    }
+
+    private void HandleInlineDiscountPercentChange(ChangeEventArgs e)
+    {
+        if (decimal.TryParse(e.Value?.ToString(), out var pct))
+        {
+            quickDiscountPercent = Math.Clamp(pct, 0, 100);
+            editor.Discount = Math.Round(editor.Total * (quickDiscountPercent / 100m), 2);
+        }
+        else
+        {
+            quickDiscountPercent = 0;
+            editor.Discount = 0;
+        }
+        RecalculatePayable();
+    }
+
+    private void OnInlineDiscountAmountChanged()
+    {
+        if (editor.Total > 0 && editor.Discount > 0)
+        {
+            quickDiscountPercent = Math.Round((editor.Discount / editor.Total) * 100m, 1);
+        }
+        else
+        {
+            quickDiscountPercent = 0;
+        }
+        RecalculatePayable();
+    }
+
     private void Recalculate()
     {
         editor.Total = editor.Items.Sum(x => x.Rate * x.Quantity);
+        if (quickDiscountPercent > 0)
+        {
+            editor.Discount = Math.Round(editor.Total * (quickDiscountPercent / 100m), 2);
+        }
         SetSuggestedPayment();
     }
     private void RecalculatePayable() => SetSuggestedPayment();
@@ -1706,10 +2278,9 @@
             message = $"Emergency cash memo #{memoId} saved successfully.";
             await LoadMemosAsync();
 
-            if (autoPrint)
-            {
-                await PrintMemoAsync();
-            }
+            await InvokeAsync(StateHasChanged);
+            await Task.Delay(100);
+            await PrintMemoAsync();
         }
         catch (Exception ex)
         {
@@ -1724,6 +2295,7 @@
 
     private void Reset()
     {
+        patientSearchQuery = string.Empty;
         showPatientIdSuggestions = false;
         showDoctorSuggestions = false;
         PatientSelection.Clear();
@@ -1733,6 +2305,7 @@
 
     private void ResetEditor()
     {
+        patientSearchQuery = string.Empty;
         showPatientIdSuggestions = false;
         showDoctorSuggestions = false;
         editor = NewMemo();
@@ -1746,6 +2319,7 @@
 
     private void Select(CashMemoDInvestigation m)
     {
+        patientSearchQuery = m.PatientID ?? string.Empty;
         showPatientIdSuggestions = false;
         showDoctorSuggestions = false;
         editor = new CashMemoDInvestigation
@@ -1853,6 +2427,7 @@
             if (regPart != null)
             {
                 var regNo = regPart.Substring(4).Trim();
+                patientSearchQuery = regNo;
                 editor.PatientID = regNo;
                 await FindPatientAsync();
                 return;
@@ -1929,7 +2504,12 @@
         Select(m);
         await InvokeAsync(StateHasChanged);
         await Task.Delay(50);
-        var printId = isThermalMode ? "emergency-thermal-print" : "emergency-print";
+        var printId = printLayout switch
+        {
+            "POS" => "emergency-thermal-print",
+            "A4" => "emergency-print",
+            _ => "emergency-a5-print"
+        };
         await JS.InvokeVoidAsync("hpm.printElement", printId, $"Emergency memo {m.ID}");
     }
 
@@ -1937,7 +2517,12 @@
     {
         await InvokeAsync(StateHasChanged);
         await Task.Delay(50);
-        var printId = isThermalMode ? "emergency-thermal-print" : "emergency-print";
+        var printId = printLayout switch
+        {
+            "POS" => "emergency-thermal-print",
+            "A4" => "emergency-print",
+            _ => "emergency-a5-print"
+        };
         await JS.InvokeVoidAsync("hpm.printElement", printId, $"Emergency memo {editor.ID}");
     }
 
@@ -1962,5 +2547,13 @@
     public void Dispose()
     {
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.disposeDoctorInfiniteScroll");
+        }
+        catch
+        {
+        }
+        dotNetRef?.Dispose();
     }
 }
