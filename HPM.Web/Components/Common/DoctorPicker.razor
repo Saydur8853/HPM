@@ -1,0 +1,271 @@
+@inject IJSRuntime JS
+@implements IDisposable
+@using HPM.Web.Data.Entities
+@using System.Text.RegularExpressions
+
+<div class="appt-doctor-search-combo-wrap ipd-doctor-picker" style="position: relative; width: 100%;">
+    <div class="appt-doctor-search" style="position: relative; width: 100%;">
+        <input class="classic-input"
+               value="@searchText"
+               @oninput="HandleInput"
+               @onfocus="Open"
+               @onkeydown="HandleKeyDown"
+               placeholder="@Placeholder"
+               disabled="@Disabled"
+               autocomplete="off"
+               style="width: 100%; height: 30px !important; font-size: 11.5px; padding-right: @(Value.HasValue && !Disabled ? "26px" : "8px");" />
+        @if (!Disabled && Value.HasValue)
+        {
+            <button type="button" class="appt-clear-link" @onclick="ClearAsync" title="@I18n.T("Clear doctor")"
+                    style="position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #94a3b8; font-size: 13px; font-weight: bold; cursor: pointer; padding: 2px 4px; line-height: 1;">✕</button>
+        }
+    </div>
+
+    @if (showSuggestions && !Disabled)
+    {
+        <div class="appt-dropdown-backdrop" style="position: fixed; inset: 0; z-index: 110;" @onclick="Close"></div>
+        <div class="appt-doctor-suggestions ipd-doctor-picker-list"
+             id="@listId"
+             style="position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 125; max-height: 240px; overflow-y: auto; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 8px 24px rgba(15,23,42,0.15);">
+            @foreach (var doctor in FilteredDoctors.Take(visibleCount))
+            {
+                var cleanName = CleanDoctorName(doctor);
+                var desig = GetDoctorDesignation(doctor);
+                <button type="button"
+                        class="appt-doctor-clean-option @(Value == doctor.ID ? "selected" : "")"
+                        style="width: 100%; display: grid; grid-template-columns: 55px minmax(130px, 1fr) auto; gap: 8px; align-items: center; padding: 6px 10px; border: none; border-bottom: 1px solid #f1f5f9; background: @(Value == doctor.ID ? "#eff6ff" : "#ffffff"); text-align: left; cursor: pointer; box-sizing: border-box; transition: background 0.12s ease;"
+                        @onmousedown:preventDefault
+                        @onclick="() => SelectAsync(doctor)">
+                    <span style="font-size: 10.5px; font-weight: 800; color: #0284c7; background: #e0f2fe; padding: 1px 5px; border-radius: 4px; text-align: center; white-space: nowrap;">
+                        D@(doctor.ID)
+                    </span>
+                    <span style="font-size: 11.5px; font-weight: 650; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px;" title="@cleanName">
+                        @if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
+                        {
+                            <span style="font-size: 9.5px; padding: 1px 4px; background: #fef3c7; color: #b45309; border-radius: 3px; font-weight: 700; flex-shrink: 0;">⭐ #@doctor.Priority</span>
+                        }
+                        @cleanName
+                    </span>
+                    @if (!string.IsNullOrWhiteSpace(desig))
+                    {
+                        <span style="font-size: 10.5px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; margin-left: auto;" title="@desig">
+                            @desig
+                        </span>
+                    }
+                </button>
+            }
+            @if (FilteredDoctors.Count == 0)
+            {
+                <div class="appt-doctor-empty" style="padding: 10px; font-size: 11.5px; color: #64748b; text-align: center;">@I18n.T("No doctor found")</div>
+            }
+            else if (visibleCount < FilteredDoctors.Count)
+            {
+                <div class="appt-doctor-scroll-hint"
+                     style="width: 100%; padding: 6px 10px; color: #0284c7; background: #f8fafc; font-size: 10.5px; font-weight: 700; text-align: center; cursor: pointer; border-top: 1px dashed #e2e8f0;"
+                     @onmousedown:preventDefault
+                     @onclick="LoadMore">
+                    @I18n.T("Showing") @Math.Min(visibleCount, FilteredDoctors.Count) / @FilteredDoctors.Count &bull; @I18n.T("Scroll for more...")
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<DoctorsProfile> Doctors { get; set; } = [];
+    [Parameter] public int? Value { get; set; }
+    [Parameter] public EventCallback<int?> ValueChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Search doctor...";
+    [Parameter] public bool Disabled { get; set; }
+
+    private readonly string listId = "doc-picker-list-" + Guid.NewGuid().ToString("N")[..8];
+    private DotNetObjectReference<DoctorPicker>? dotNetRef;
+    private string searchText = string.Empty;
+    private bool showSuggestions;
+    private int visibleCount = 15;
+    private int? lastSyncedValue;
+
+    private List<DoctorsProfile> FilteredDoctors
+    {
+        get
+        {
+            var term = searchText.Trim();
+            var selectedDoc = Value.HasValue ? Doctors.FirstOrDefault(x => x.ID == Value) : null;
+            if (Value.HasValue && Value == lastSyncedValue && selectedDoc != null &&
+                (string.Equals(term, CleanDoctorName(selectedDoc), StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(term, $"D{selectedDoc.ID} - {CleanDoctorName(selectedDoc)}", StringComparison.OrdinalIgnoreCase)))
+            {
+                term = string.Empty;
+            }
+
+            return Doctors
+                .Where(x => string.IsNullOrWhiteSpace(term)
+                    || $"D{x.ID}".Equals(term, StringComparison.OrdinalIgnoreCase)
+                    || x.ID.ToString() == term
+                    || CleanDoctorName(x).Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || CleanDoctorDegree(x).Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrWhiteSpace(x.Room) && x.Room.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(x => (x.Priority ?? 0) > 0)
+                .ThenBy(x => x.Priority ?? int.MaxValue)
+                .ThenBy(x => CleanDoctorName(x), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (lastSyncedValue == Value) return;
+        lastSyncedValue = Value;
+        var selected = Doctors.FirstOrDefault(x => x.ID == Value);
+        searchText = selected is null ? string.Empty : $"D{selected.ID} - {CleanDoctorName(selected)}";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (showSuggestions && !Disabled)
+        {
+            dotNetRef ??= DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("hpm.initPatientIdScroll", listId, dotNetRef, nameof(LoadMoreFromJs));
+            }
+            catch { }
+        }
+    }
+
+    private async Task HandleInput(ChangeEventArgs e)
+    {
+        searchText = e.Value?.ToString() ?? string.Empty;
+        visibleCount = 15;
+        showSuggestions = true;
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", listId);
+        }
+        catch { }
+    }
+
+    private void Open()
+    {
+        visibleCount = 15;
+        showSuggestions = true;
+    }
+
+    private void Close()
+    {
+        showSuggestions = false;
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") showSuggestions = false;
+        if (e.Key == "Enter" && FilteredDoctors.Count == 1)
+            await SelectAsync(FilteredDoctors[0]);
+    }
+
+    private async Task SelectAsync(DoctorsProfile doctor)
+    {
+        lastSyncedValue = doctor.ID;
+        searchText = $"D{doctor.ID} - {CleanDoctorName(doctor)}";
+        showSuggestions = false;
+        await ValueChanged.InvokeAsync(doctor.ID);
+    }
+
+    private async Task ClearAsync()
+    {
+        lastSyncedValue = null;
+        searchText = string.Empty;
+        showSuggestions = true;
+        await ValueChanged.InvokeAsync(null);
+    }
+
+    private void LoadMore() => LoadMoreFromJs();
+
+    [JSInvokable]
+    public void LoadMoreFromJs()
+    {
+        if (visibleCount < FilteredDoctors.Count)
+        {
+            visibleCount += 15;
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    public static string CleanDoctorName(DoctorsProfile? d)
+    {
+        if (d is null) return string.Empty;
+        var rawTitle = d.Title?.Trim();
+        var rawName = d.Name?.Trim() ?? string.Empty;
+
+        var title = IsDummyTitle(rawTitle) ? string.Empty : CleanDoctorToken(rawTitle);
+        var name = CleanDoctorToken(rawName);
+
+        if (string.IsNullOrWhiteSpace(title)) return name;
+        if (string.IsNullOrWhiteSpace(name)) return title;
+        if (name.StartsWith(title, StringComparison.OrdinalIgnoreCase)) return name;
+        return $"{title} {name}".Trim();
+    }
+
+    private static bool IsDummyTitle(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        var t = text.Trim();
+        if (t.Length <= 2 && (t.Equals("O", StringComparison.OrdinalIgnoreCase) || t == "0" || t == "00" || t == "-" || t == "--" || t == "." || t == ".."))
+            return true;
+        if (Regex.IsMatch(t, @"^[\s.・•,\-_0]+$"))
+            return true;
+        if (string.Equals(t, "OTHER", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t, "CLINIC", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t, "Hospital", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    public static string CleanDoctorToken(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var cleaned = Regex.Replace(text, @"\.{2,}", " ");
+        cleaned = Regex.Replace(cleaned, @"^[\s.・•,\-_]+", "");
+        cleaned = cleaned.TrimEnd(',', '-', ' ', '_', '.');
+        cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+        return cleaned;
+    }
+
+    public static string CleanDoctorDegree(DoctorsProfile? d)
+    {
+        if (d is null || string.IsNullOrWhiteSpace(d.Degree)) return string.Empty;
+        var deg = d.Degree.Trim();
+        if (deg == "0" || deg == "00" || deg == "-" || deg == "--" || deg == "." || deg == "..")
+            return string.Empty;
+        if (Regex.IsMatch(deg, @"^[\s.・•,\-_0]+$"))
+            return string.Empty;
+        deg = Regex.Replace(deg, @"\.{2,}", " ");
+        deg = deg.Trim(' ', ',', '.', '-');
+        deg = Regex.Replace(deg, @"\s+", " ").Trim();
+        return deg;
+    }
+
+    public static string CleanDoctorRoom(string? room)
+    {
+        if (string.IsNullOrWhiteSpace(room)) return string.Empty;
+        var r = room.Trim().Trim('.', '-', ' ', '_');
+        if (string.IsNullOrEmpty(r) || r == "0" || r == "00") return string.Empty;
+        return r;
+    }
+
+    public static string GetDoctorDesignation(DoctorsProfile? d)
+    {
+        if (d is null) return string.Empty;
+        var parts = new List<string>();
+        var deg = CleanDoctorDegree(d);
+        if (!string.IsNullOrWhiteSpace(deg)) parts.Add(deg);
+        var room = CleanDoctorRoom(d.Room);
+        if (!string.IsNullOrWhiteSpace(room)) parts.Add($"Room {room}");
+        return string.Join(" • ", parts);
+    }
+
+    public void Dispose()
+    {
+        dotNetRef?.Dispose();
+    }
+}
