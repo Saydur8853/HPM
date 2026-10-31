@@ -4,25 +4,110 @@
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
+@implements IDisposable
 @using System.Security.Claims
 
-<PageTitle>@I18n.T("Medical Discharge Orders") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("IPD Medical Clearance") | @Branding.HospitalName</PageTitle>
 
-<div class="ipd-classic-fit">
+<style>
+    .medical-discharge-page { gap: 7px; }
+    .medical-discharge-page .ipd-classic-topbar { min-height: 54px; padding: 7px 12px; }
+    .medical-discharge-page .ipd-classic-title-group { min-width: 0; flex: 1 1 auto; }
+    .medical-discharge-page .ipd-classic-eyebrow { display: block; color: #0284c7; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .medical-discharge-page .ipd-classic-title { margin: 0; color: #0f172a; font-size: 18px; font-weight: 850; line-height: 1.2; }
+    .medical-discharge-page .ipd-classic-subtitle { display: block; margin-top: 2px; color: #64748b; font-size: 10.5px; }
+    .medical-discharge-page .ipd-topbar-metrics { display: flex; align-items: stretch; gap: 6px; }
+    .medical-discharge-page .ipd-metric-chip { min-width: 90px; padding: 5px 9px; border: 1px solid #dbe4ee; border-radius: 6px; background: #f8fafc; text-align: center; }
+    .medical-discharge-page .ipd-metric-label { display: block; color: #64748b; font-size: 8.5px; font-weight: 800; text-transform: uppercase; }
+    .medical-discharge-page .ipd-metric-value { display: block; color: #0f172a; font-size: 15px; font-weight: 900; line-height: 1.15; }
+    .medical-discharge-page .ipd-topbar-actions { flex: 0 0 auto; }
+    .medical-discharge-page .discharge-flow { display: grid; grid-template-columns: 1fr 24px 1fr 24px 1fr; align-items: center; padding: 6px 12px; border: 1px solid #cfe2f3; border-radius: 7px; background: #f8fbff; }
+    .medical-discharge-page .flow-step { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .medical-discharge-page .flow-number { width: 23px; height: 23px; display: grid; place-items: center; flex: 0 0 23px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 10px; font-weight: 900; }
+    .medical-discharge-page .flow-step.active .flow-number { background: #0284c7; color: white; }
+    .medical-discharge-page .flow-step.next .flow-number { background: #dcfce7; color: #15803d; }
+    .medical-discharge-page .flow-copy strong { display: block; color: #1e293b; font-size: 10.5px; line-height: 1.1; }
+    .medical-discharge-page .flow-copy small { display: block; color: #64748b; font-size: 8.5px; margin-top: 1px; }
+    .medical-discharge-page .flow-arrow { color: #94a3b8; text-align: center; font-weight: 900; }
+    .medical-discharge-page .ipd-classic-workspace { grid-template-columns: minmax(300px, 340px) minmax(0, 1fr); gap: 10px; }
+    .medical-discharge-page .ipd-queue-card,
+    .medical-discharge-page .ipd-form-card { width: 100%; max-width: none !important; }
+    .medical-discharge-page .ipd-queue-header { flex: 0 0 auto; padding: 9px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+    .medical-discharge-page .ipd-queue-title-wrap { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .medical-discharge-page .ipd-queue-title { color: #0f172a; font-size: 12px; font-weight: 850; }
+    .medical-discharge-page .ipd-queue-count { min-width: 24px; padding: 2px 7px; border-radius: 999px; background: #e0f2fe; color: #0369a1; text-align: center; font-size: 10px; font-weight: 900; }
+    .medical-discharge-page .ipd-queue-search-input { height: 31px; font-size: 11px; }
+    .medical-discharge-page .queue-filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 6px; }
+    .medical-discharge-page .queue-filter { padding: 4px 5px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; color: #475569; font-size: 9.5px; font-weight: 800; cursor: pointer; }
+    .medical-discharge-page .queue-filter.active { border-color: #0284c7; background: #e0f2fe; color: #0369a1; }
+    .medical-discharge-page .ipd-queue-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px; }
+    .medical-discharge-page .ipd-queue-list { display: flex; flex-direction: column; gap: 5px; }
+    .medical-discharge-page .ipd-queue-row { padding: 8px 9px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; cursor: pointer; transition: .15s ease; }
+    .medical-discharge-page .ipd-queue-row:hover { border-color: #7dd3fc; background: #f8fcff; }
+    .medical-discharge-page .ipd-queue-row.selected { border-color: #0284c7; background: #eff9ff; box-shadow: inset 3px 0 #0284c7; }
+    .medical-discharge-page .ipd-queue-row-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .medical-discharge-page .ipd-reg-badge { color: #0369a1; font-size: 10.5px; font-weight: 900; }
+    .medical-discharge-page .ipd-queue-patient-name { margin-top: 3px; color: #0f172a; font-size: 12px; font-weight: 800; }
+    .medical-discharge-page .ipd-queue-row-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px; color: #64748b; font-size: 9.5px; }
+    .medical-discharge-page .queue-location { margin-top: 4px; color: #475569; font-size: 9.5px; font-weight: 700; }
+    .medical-discharge-page .queue-patient-id { color: #0f766e; font-weight: 850; }
+    .medical-discharge-page .queue-load-state { padding: 7px 5px 3px; color: #64748b; text-align: center; font-size: 9.5px; font-weight: 700; }
+    .medical-discharge-page .ipd-empty-queue,
+    .medical-discharge-page .ipd-empty-form { height: 100%; display: grid; place-content: center; justify-items: center; padding: 24px; color: #64748b; text-align: center; }
+    .medical-discharge-page .ipd-empty-icon { font-size: 34px; opacity: .65; }
+    .medical-discharge-page .ipd-empty-title { margin-top: 7px; color: #334155; font-size: 14px; font-weight: 850; }
+    .medical-discharge-page .ipd-empty-desc { max-width: 360px; margin-top: 3px; font-size: 11px; }
+    .medical-discharge-page .ipd-form-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 49px; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+    .medical-discharge-page .ipd-form-title { display: block; color: #0f172a; font-size: 14px; font-weight: 900; }
+    .medical-discharge-page .ipd-form-meta { display: block; margin-top: 2px; color: #64748b; font-size: 10px; }
+    .medical-discharge-page .ipd-form-scrollable-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+    .medical-discharge-page .patient-context-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 8px; }
+    .medical-discharge-page .context-cell { padding: 6px 8px; border: 1px solid #dbe4ee; border-radius: 6px; background: #f8fafc; min-width: 0; }
+    .medical-discharge-page .context-cell span { display: block; color: #64748b; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+    .medical-discharge-page .context-cell strong { display: block; overflow: hidden; margin-top: 1px; color: #1e293b; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .medical-discharge-page .clinical-section { margin-bottom: 8px; padding: 8px 10px 10px; border: 1px solid #dbe4ee; border-radius: 7px; background: white; }
+    .medical-discharge-page .clinical-section-title { margin: 0 0 7px; padding-bottom: 5px; border-bottom: 1px solid #eef2f7; color: #334155; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
+    .medical-discharge-page .form-label { color: #334155; font-size: 10px !important; font-weight: 750 !important; }
+    .medical-discharge-page .form-control-sm,
+    .medical-discharge-page .form-select-sm { font-size: 11px; }
+    .medical-discharge-page .required-field-invalid .form-label { color: #b91c1c !important; }
+    .medical-discharge-page .required-field-invalid .form-control,
+    .medical-discharge-page .required-field-invalid .form-select { border-color: #ef4444 !important; background-color: #fff7f7; box-shadow: 0 0 0 2px rgba(239, 68, 68, .08); }
+    .medical-discharge-page .required-field-invalid .form-control:focus,
+    .medical-discharge-page .required-field-invalid .form-select:focus { border-color: #dc2626 !important; box-shadow: 0 0 0 3px rgba(220, 38, 38, .12) !important; }
+    .medical-discharge-page .field-validation-error { display: flex; align-items: center; gap: 4px; margin-top: 3px; color: #b91c1c; font-size: 9.5px; font-weight: 750; }
+    .medical-discharge-page textarea.form-control { resize: vertical; min-height: 50px; }
+    .medical-discharge-page .long-stay-warning { margin-bottom: 8px; padding: 6px 9px; border: 1px solid #fed7aa; border-radius: 6px; background: #fff7ed; color: #9a3412; font-size: 10px; font-weight: 700; }
+    .medical-discharge-page .ipd-form-actions-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid #e2e8f0; background: #f8fafc; }
+    .medical-discharge-page .footer-hint { color: #64748b; font-size: 9.5px; }
+    .medical-discharge-page .footer-actions { display: flex; align-items: center; gap: 7px; }
+    .medical-discharge-page .badge { white-space: nowrap; }
+    @@media (max-width: 950px) {
+        .medical-discharge-page .ipd-classic-workspace { grid-template-columns: minmax(260px, 310px) minmax(0, 1fr); }
+        .medical-discharge-page .patient-context-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .medical-discharge-page .ipd-classic-subtitle, .medical-discharge-page .flow-copy small { display: none; }
+    }
+</style>
+
+<div class="ipd-classic-fit medical-discharge-page">
     <div class="ipd-classic-topbar">
         <div class="ipd-classic-title-group">
             <span class="ipd-classic-eyebrow">@I18n.T("IPD Clinical Care")</span>
-            <h1 class="ipd-classic-title">@I18n.T("Medical Discharge Orders")</h1>
+            <h1 class="ipd-classic-title">@I18n.T("IPD Medical Clearance")</h1>
             <span class="ipd-classic-subtitle">@I18n.T("Doctor clinical clearance before final billing and administrative discharge.")</span>
         </div>
         <div class="ipd-topbar-metrics">
             <div class="ipd-metric-chip">
                 <span class="ipd-metric-label">@I18n.T("Active Inpatients")</span>
-                <span class="ipd-metric-value">@admissions.Count</span>
+                <span class="ipd-metric-value">@totalActiveAdmissions</span>
+            </div>
+            <div class="ipd-metric-chip">
+                <span class="ipd-metric-label">@I18n.T("Pending Review")</span>
+                <span class="ipd-metric-value text-warning">@pendingAdmissionCount</span>
             </div>
             <div class="ipd-metric-chip">
                 <span class="ipd-metric-label">@I18n.T("Orders Ready")</span>
-                <span class="ipd-metric-value text-success">@orderStatuses.Values.Count(s => s == "Ready")</span>
+                <span class="ipd-metric-value text-success">@readyAdmissionCount</span>
             </div>
         </div>
         <div class="ipd-topbar-actions">
@@ -30,12 +115,29 @@
         </div>
     </div>
 
-    @if (!string.IsNullOrWhiteSpace(message))
+    @if (!string.IsNullOrWhiteSpace(message) && (!showRequiredValidationSummary || HasRequiredFieldErrors))
     {
         <div class="alert @messageClass" style="margin: 0.25rem 0.75rem 0; padding: 0.4rem 0.75rem; font-size: 0.82rem;">
             @message
         </div>
     }
+
+    <div class="discharge-flow" aria-label="@I18n.T("Discharge workflow")">
+        <div class="flow-step">
+            <span class="flow-number">1</span>
+            <span class="flow-copy"><strong>@I18n.T("Clinical Review")</strong><small>@I18n.T("Diagnosis, outcome and advice")</small></span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step active">
+            <span class="flow-number">2</span>
+            <span class="flow-copy"><strong>@I18n.T("Medical Clearance")</strong><small>@I18n.T("Doctor marks patient ready")</small></span>
+        </div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-step next">
+            <span class="flow-number">3</span>
+            <span class="flow-copy"><strong>@I18n.T("Hand off to Billing Team")</strong><small>@I18n.T("Patient enters the final billing queue")</small></span>
+        </div>
+    </div>
 
     <div class="ipd-classic-workspace">
         <!-- Left: Active Inpatient Queue -->
@@ -43,36 +145,51 @@
             <div class="ipd-queue-header">
                 <div class="ipd-queue-title-wrap">
                     <span class="ipd-queue-title">@I18n.T("Active Inpatients")</span>
-                    <span class="ipd-queue-count">@FilteredAdmissions.Count</span>
+                    <span class="ipd-queue-count">@queueTotalMatches</span>
                 </div>
                 <div class="ipd-queue-search-wrap">
-                    <input type="text" class="form-control ipd-queue-search-input" placeholder="@I18n.T("Search patient or Reg No...")" @bind="searchFilter" @bind:event="oninput" />
+                    <input type="text" class="form-control ipd-queue-search-input" placeholder="@I18n.T("Search name, Patient ID or Reg No...")" value="@searchFilter" @oninput="HandleSearchInputAsync" autocomplete="off" />
+                </div>
+                <div class="queue-filters">
+                    <button type="button" class="queue-filter @(queueFilter == "All" ? "active" : "")" @onclick='() => SetQueueFilterAsync("All")'>@I18n.T("All")</button>
+                    <button type="button" class="queue-filter @(queueFilter == "Pending" ? "active" : "")" @onclick='() => SetQueueFilterAsync("Pending")'>@I18n.T("Pending")</button>
+                    <button type="button" class="queue-filter @(queueFilter == "Ready" ? "active" : "")" @onclick='() => SetQueueFilterAsync("Ready")'>@I18n.T("Ready")</button>
                 </div>
             </div>
 
-            <div class="ipd-queue-body">
-                @if (FilteredAdmissions.Count == 0)
+            <div class="ipd-queue-body" id="medical-discharge-inpatient-list">
+                @if (admissions.Count == 0)
                 {
                     <div class="ipd-empty-queue">@I18n.T("No active assigned inpatient.")</div>
                 }
                 else
                 {
                     <div class="ipd-queue-list">
-                        @foreach (var admission in FilteredAdmissions)
+                        @foreach (var admission in admissions)
                         {
                             var isSelected = selectedAdmission?.ID == admission.ID;
                             var status = OrderStatus(admission.ID);
                             <div class="ipd-queue-row @(isSelected ? "selected" : "")" @onclick="() => SelectAsync(admission)">
                                 <div class="ipd-queue-row-top">
                                     <span class="ipd-reg-badge">@admission.RegNo</span>
-                                    <span class="badge @(status == "Ready" ? "badge-success" : status == "Completed" ? "badge-info" : "badge-secondary")" style="font-size:0.7rem;">@status</span>
+                                    <span class="badge @StatusBadgeClass(status)" style="font-size:0.7rem;">@status</span>
                                 </div>
                                 <div class="ipd-queue-patient-name">@PatientName(admission.PatientID)</div>
+                                <div class="queue-patient-id">@I18n.T("Patient ID"): @(admission.PatientID ?? "—")</div>
                                 <div class="ipd-queue-row-meta">
-                                    <span>@DoctorName(admission.Consultant ?? admission.AdmittedBy)</span>
-                                    <span>@admission.AdmissionDate?.ToString("dd MMM yyyy")</span>
+                                    <span>@DoctorDisplayName(admission.Consultant ?? admission.AdmittedBy)</span>
+                                    <span>@StayDays(admission) @I18n.T("day(s)")</span>
                                 </div>
+                                <div class="queue-location">🛏 @BedName(admission.BedCabinID) · @DepartmentName(admission.Department)</div>
                             </div>
+                        }
+                        @if (isLoadingMoreAdmissions)
+                        {
+                            <div class="queue-load-state"><span class="spinner-border spinner-border-sm me-1"></span>@I18n.T("Loading more patients...")</div>
+                        }
+                        else if (hasMoreAdmissions)
+                        {
+                            <div class="queue-load-state">↓ @I18n.T("Scroll for more patients")</div>
                         }
                     </div>
                 }
@@ -96,74 +213,125 @@
                         <span class="ipd-form-title">@PatientName(selectedAdmission.PatientID)</span>
                         <span class="ipd-form-meta">@selectedAdmission.RegNo · @I18n.T("Admitted"): @selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy hh:mm tt")</span>
                     </div>
-                    <span class="badge @(order?.Status == "Ready" ? "badge-success" : order?.Status == "Completed" ? "badge-info" : "badge-warning")">
-                        @(order?.Status ?? "NEW")
+                    <span class="badge @StatusBadgeClass(order?.Status)">
+                        @(order?.Status == "Ready" ? I18n.T("READY FOR BILLING") : order?.Status == "Completed" ? I18n.T("COMPLETED") : order?.Status == "Cancelled" ? I18n.T("CANCELLED") : I18n.T("PENDING REVIEW"))
                     </span>
                 </div>
 
                 <div class="ipd-form-scrollable-body" style="padding: 0.75rem 1rem;">
-                    <div class="row g-2">
-                        <div class="col-md-6">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Discharging Doctor *")</label>
-                            <select class="form-select form-select-sm" @bind="doctorId" disabled="@(!isAdministrator)">
-                                <option value="0">@I18n.T("Select doctor")</option>
-                                @foreach (var doctor in doctors)
+                    <div class="patient-context-grid">
+                        <div class="context-cell"><span>@I18n.T("Patient ID")</span><strong>@(selectedAdmission.PatientID ?? "—")</strong></div>
+                        <div class="context-cell"><span>@I18n.T("Bed / Ward")</span><strong>@BedName(selectedAdmission.BedCabinID) · @DepartmentName(selectedAdmission.Department)</strong></div>
+                        <div class="context-cell"><span>@I18n.T("Consultant")</span><strong>@DoctorDisplayName(selectedAdmission.Consultant ?? selectedAdmission.AdmittedBy)</strong></div>
+                        <div class="context-cell"><span>@I18n.T("Length of Stay")</span><strong>@StayDays(selectedAdmission) @I18n.T("day(s)")</strong></div>
+                    </div>
+
+                    @if (StayDays(selectedAdmission) > 365)
+                    {
+                        <div class="long-stay-warning">⚠ @I18n.T("This admission is more than one year old. Verify the admission history and dates before issuing medical clearance.")</div>
+                    }
+
+                    <div class="clinical-section">
+                        <h3 class="clinical-section-title">@I18n.T("Discharge Decision")</h3>
+                        <div class="row g-2">
+                            <div class="col-md-6 @(DoctorFieldInvalid ? "required-field-invalid" : "")">
+                                <label class="form-label mb-1">@I18n.T("Discharging Doctor *")</label>
+                                <select class="form-select form-select-sm" @bind="doctorId" disabled="@(!isAdministrator || order?.Status == "Completed")" aria-invalid="@DoctorFieldInvalid">
+                                    <option value="0">@I18n.T("Select doctor")</option>
+                                    @foreach (var doctor in doctors)
+                                    {
+                                        <option value="@doctor.ID">@($"D{doctor.ID} - {DoctorName(doctor.ID)}")</option>
+                                    }
+                                </select>
+                                @if (DoctorFieldInvalid)
                                 {
-                                    <option value="@doctor.ID">@DoctorName(doctor.ID)</option>
+                                    <div class="field-validation-error">⚠ @I18n.T("Discharging doctor is required.")</div>
                                 }
-                            </select>
+                            </div>
+                            <div class="col-md-6 @(OutcomeFieldInvalid ? "required-field-invalid" : "")">
+                                <label class="form-label mb-1">@I18n.T("Clinical Outcome *")</label>
+                                <select class="form-select form-select-sm" @bind="outcome" disabled="@(order?.Status == "Completed")" aria-invalid="@OutcomeFieldInvalid">
+                                    <option value="Cured">Cured / Recovered</option>
+                                    <option value="Improved">Improved</option>
+                                    <option value="Referred">Referred to Higher Centre</option>
+                                    <option value="DOR">Discharge on Request (DOR)</option>
+                                    <option value="DAMA">Discharged Against Medical Advice (DAMA)</option>
+                                    <option value="Expired">Expired</option>
+                                </select>
+                                @if (OutcomeFieldInvalid)
+                                {
+                                    <div class="field-validation-error">⚠ @I18n.T("Clinical outcome is required.")</div>
+                                }
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Outcome *")</label>
-                            <select class="form-select form-select-sm" @bind="outcome" disabled="@(order?.Status == "Completed")">
-                                <option value="Cured">Cured / Recovered</option>
-                                <option value="Improved">Improved</option>
-                                <option value="Referred">Referred to Higher Centre</option>
-                                <option value="DOR">Discharge on Request (DOR)</option>
-                                <option value="DAMA">Discharged Against Medical Advice (DAMA)</option>
-                                <option value="Expired">Expired</option>
-                            </select>
+                    </div>
+
+                    <div class="clinical-section">
+                        <h3 class="clinical-section-title">@I18n.T("Clinical Summary")</h3>
+                        <div class="row g-2">
+                            <div class="col-md-7 @(FinalDiagnosisFieldInvalid ? "required-field-invalid" : "")">
+                                <label class="form-label mb-1">@I18n.T("Final Diagnosis *")</label>
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="finalDiagnosis" placeholder="@I18n.T("Final confirmed diagnosis")" disabled="@(order?.Status == "Completed")" aria-invalid="@FinalDiagnosisFieldInvalid" />
+                                @if (FinalDiagnosisFieldInvalid)
+                                {
+                                    <div class="field-validation-error">⚠ @I18n.T("Final diagnosis is required.")</div>
+                                }
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label mb-1">@I18n.T("Condition at Discharge")</label>
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="condition" placeholder="@I18n.T("Stable, ambulatory, etc.")" disabled="@(order?.Status == "Completed")" />
+                            </div>
                         </div>
-                        <div class="col-12">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Final Diagnosis *")</label>
-                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="finalDiagnosis" disabled="@(order?.Status == "Completed")" />
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Condition at Discharge")</label>
-                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="condition" disabled="@(order?.Status == "Completed")" />
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Treatment Advice / Medication Instructions *")</label>
-                            <InputTextArea class="form-control form-control-sm" rows="3" @bind-Value="advice" disabled="@(order?.Status == "Completed")" />
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label" style="font-size:0.8rem;font-weight:600;margin-bottom:0.2rem;">@I18n.T("Follow-up Plan")</label>
-                            <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="followUp" disabled="@(order?.Status == "Completed")" />
+                    </div>
+
+                    <div class="clinical-section" style="margin-bottom:0;">
+                        <h3 class="clinical-section-title">@I18n.T("Home Care & Follow-up")</h3>
+                        <div class="row g-2">
+                            <div class="col-md-7">
+                                <label class="form-label mb-1">@I18n.T("Treatment Advice / Medication Instructions") <span class="text-muted">(@I18n.T("Optional"))</span></label>
+                                <InputTextArea class="form-control form-control-sm" rows="3" @bind-Value="advice" placeholder="@I18n.T("Medicines, dose, duration and home-care instructions")" disabled="@(order?.Status == "Completed")" />
+                            </div>
+                            <div class="col-md-5">
+                                <label class="form-label mb-1">@I18n.T("Follow-up Plan")</label>
+                                <InputTextArea class="form-control form-control-sm" rows="3" @bind-Value="followUp" placeholder="@I18n.T("Review date, department or referral plan")" disabled="@(order?.Status == "Completed")" />
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <div class="ipd-form-actions-footer">
+                    <div class="footer-hint">
+                        @if (order?.Status == "Ready")
+                        {
+                            <span>✓ @I18n.T("Medical clearance issued. The billing team can now prepare final settlement.")</span>
+                        }
+                        else
+                        {
+                            <span>@I18n.T("This step does not discharge the patient or collect payment.")</span>
+                        }
+                    </div>
+                    <div class="footer-actions">
                     @if (order?.Status != "Completed")
                     {
-                        <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@isSaving">
-                            @if (isSaving)
-                            {
-                                <span class="spinner-border spinner-border-sm me-1"></span>
-                            }
-                            @I18n.T("Mark Medically Ready for Discharge")
-                        </button>
                         @if (order?.Status == "Ready")
                         {
                             <button class="btn btn-outline-danger btn-sm" @onclick="CancelAsync" disabled="@isSaving">
                                 @I18n.T("Cancel Medical Order")
                             </button>
                         }
+                        <button class="btn btn-primary btn-sm" @onclick="SaveAsync" disabled="@isSaving">
+                            @if (isSaving)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            @(order?.Status == "Ready" ? I18n.T("Update Medical Clearance") : I18n.T("Issue Medical Clearance"))
+                        </button>
                     }
                     else
                     {
                         <span class="text-muted small">@I18n.T("This discharge order is completed and administratively finalized.")</span>
                     }
+                    </div>
                 </div>
             }
         </div>
@@ -175,22 +343,30 @@
     private List<DoctorsProfile> doctors = [];
     private Dictionary<string, string> patientNames = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<long, string> orderStatuses = [];
+    private Dictionary<int, string> bedNames = [];
+    private Dictionary<int, string> departmentNames = [];
     private PatientAdmission? selectedAdmission;
     private IpdMedicalDischargeOrder? order;
+    private DotNetObjectReference<IpdMedicalDischargeOrders>? dotNetRef;
     private int doctorId;
     private int? currentDoctorProfileId;
     private bool isAdministrator;
     private bool isSaving;
-    private string searchFilter = "";
+    private bool validationAttempted;
+    private bool showRequiredValidationSummary;
+    private bool isLoadingMoreAdmissions;
+    private bool hasMoreAdmissions;
+    private int totalActiveAdmissions;
+    private int pendingAdmissionCount;
+    private int readyAdmissionCount;
+    private int queueTotalMatches;
+    private const int AdmissionBatchSize = 20;
+    private string searchFilter = "", queueFilter = "All";
     private string outcome = "Improved", finalDiagnosis = "", condition = "", advice = "", followUp = "", message = "", messageClass = "success";
-
-    private List<PatientAdmission> FilteredAdmissions =>
-        string.IsNullOrWhiteSpace(searchFilter)
-            ? admissions
-            : admissions.Where(a =>
-                (a.RegNo?.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (PatientName(a.PatientID).Contains(searchFilter, StringComparison.OrdinalIgnoreCase))
-            ).ToList();
+    private bool DoctorFieldInvalid => validationAttempted && doctorId <= 0;
+    private bool OutcomeFieldInvalid => validationAttempted && string.IsNullOrWhiteSpace(outcome);
+    private bool FinalDiagnosisFieldInvalid => validationAttempted && string.IsNullOrWhiteSpace(finalDiagnosis);
+    private bool HasRequiredFieldErrors => DoctorFieldInvalid || OutcomeFieldInvalid || FinalDiagnosisFieldInvalid;
 
     protected override async Task OnInitializedAsync()
     {
@@ -206,18 +382,123 @@
         await LoadAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        dotNetRef ??= DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "medical-discharge-inpatient-list", dotNetRef, nameof(LoadMoreAdmissionsFromJs));
+        }
+        catch { }
+    }
+
     private async Task LoadAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).OrderBy(x => x.Name).ToListAsync();
+        bedNames = await db.BedCabins.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+        departmentNames = await db.IpdDepartments.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+        var baseQuery = BuildBaseAdmissionQuery(db);
+        totalActiveAdmissions = await baseQuery.CountAsync();
+        readyAdmissionCount = await baseQuery.CountAsync(a => db.IpdMedicalDischargeOrders.Any(o => o.AdmissionID == a.ID && o.Status == "Ready"));
+        pendingAdmissionCount = Math.Max(0, totalActiveAdmissions - readyAdmissionCount);
+        await LoadAdmissionBatchAsync(reset: true);
+    }
+
+    private IQueryable<PatientAdmission> BuildBaseAdmissionQuery(HpmDbContext db)
+    {
         var query = db.PatientAdmissions.AsNoTracking().Where(x => x.IsAdmitted == true);
         if (currentDoctorProfileId.HasValue)
             query = query.Where(x => x.Consultant == currentDoctorProfileId || x.AdmittedBy == currentDoctorProfileId);
-        admissions = await query.OrderBy(x => x.AdmissionDate).ToListAsync();
-        var ids = admissions.Select(x => x.ID).ToArray();
-        orderStatuses = ids.Length == 0 ? [] : await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x => ids.Contains(x.AdmissionID)).ToDictionaryAsync(x => x.AdmissionID, x => x.Status);
-        var patientIds = admissions.Where(x => x.PatientID != null).Select(x => x.PatientID!).Distinct().ToArray();
-        patientNames = patientIds.Length == 0 ? new(StringComparer.OrdinalIgnoreCase) : await db.Registrations.AsNoTracking().Where(x => patientIds.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
+        return query;
+    }
+
+    private IQueryable<PatientAdmission> BuildQueueQuery(HpmDbContext db)
+    {
+        var query = BuildBaseAdmissionQuery(db);
+        var term = searchFilter.Trim();
+        if (!string.IsNullOrWhiteSpace(term))
+        {
+            query = query.Where(a => a.RegNo.Contains(term)
+                || (a.PatientID != null && a.PatientID.Contains(term))
+                || db.Registrations.Any(r => r.PatientID == a.PatientID && r.Name.Contains(term)));
+        }
+
+        if (queueFilter == "Ready")
+            query = query.Where(a => db.IpdMedicalDischargeOrders.Any(o => o.AdmissionID == a.ID && o.Status == "Ready"));
+        else if (queueFilter == "Pending")
+            query = query.Where(a => !db.IpdMedicalDischargeOrders.Any(o => o.AdmissionID == a.ID && o.Status == "Ready"));
+
+        return query.OrderBy(a => a.AdmissionDate).ThenBy(a => a.ID);
+    }
+
+    private async Task LoadAdmissionBatchAsync(bool reset)
+    {
+        if (isLoadingMoreAdmissions) return;
+        isLoadingMoreAdmissions = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var query = BuildQueueQuery(db);
+            if (reset)
+            {
+                admissions = [];
+                patientNames = new(StringComparer.OrdinalIgnoreCase);
+                orderStatuses = [];
+                queueTotalMatches = await query.CountAsync();
+            }
+
+            var batch = await query.Skip(admissions.Count).Take(AdmissionBatchSize).ToListAsync();
+            var ids = batch.Select(x => x.ID).ToArray();
+            var statuses = ids.Length == 0
+                ? new Dictionary<long, string>()
+                : await db.IpdMedicalDischargeOrders.AsNoTracking()
+                    .Where(x => ids.Contains(x.AdmissionID))
+                    .ToDictionaryAsync(x => x.AdmissionID, x => x.Status);
+            foreach (var pair in statuses)
+                orderStatuses[pair.Key] = pair.Value;
+
+            var patientIds = batch.Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToArray();
+            var patients = patientIds.Length == 0
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : await db.Registrations.AsNoTracking()
+                    .Where(x => patientIds.Contains(x.PatientID))
+                    .ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in patients)
+                patientNames[pair.Key] = pair.Value;
+
+            admissions.AddRange(batch);
+            hasMoreAdmissions = admissions.Count < queueTotalMatches;
+            if (reset)
+            {
+                try { await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "medical-discharge-inpatient-list"); } catch { }
+            }
+        }
+        finally
+        {
+            isLoadingMoreAdmissions = false;
+        }
+    }
+
+    private async Task HandleSearchInputAsync(ChangeEventArgs e)
+    {
+        searchFilter = e.Value?.ToString() ?? "";
+        await LoadAdmissionBatchAsync(reset: true);
+    }
+
+    private async Task SetQueueFilterAsync(string filter)
+    {
+        if (queueFilter == filter) return;
+        queueFilter = filter;
+        await LoadAdmissionBatchAsync(reset: true);
+    }
+
+    [JSInvokable]
+    public async Task LoadMoreAdmissionsFromJs()
+    {
+        if (!hasMoreAdmissions || isLoadingMoreAdmissions) return;
+        await LoadAdmissionBatchAsync(reset: false);
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task SelectAsync(PatientAdmission admission)
@@ -231,16 +512,21 @@
         condition = order?.ConditionAtDischarge ?? "";
         advice = order?.Advice ?? "";
         followUp = order?.FollowUp ?? "";
+        validationAttempted = false;
+        showRequiredValidationSummary = false;
         message = "";
     }
 
     private async Task SaveAsync()
     {
-        if (selectedAdmission is null || doctorId <= 0 || string.IsNullOrWhiteSpace(finalDiagnosis) || string.IsNullOrWhiteSpace(advice))
+        validationAttempted = true;
+        if (selectedAdmission is null || DoctorFieldInvalid || OutcomeFieldInvalid || FinalDiagnosisFieldInvalid)
         {
-            Fail(I18n.T("Doctor, final diagnosis and discharge advice are required."));
+            showRequiredValidationSummary = true;
+            Fail(I18n.T("Please complete the highlighted required fields."));
             return;
         }
+        showRequiredValidationSummary = false;
         if (!isAdministrator && doctorId != currentDoctorProfileId)
         {
             Fail(I18n.T("A doctor can issue discharge orders only under their own profile."));
@@ -295,7 +581,9 @@
             });
 
             order = savedOrder;
-            Success(I18n.IsBangla ? "রোগীকে চিকিৎসাগতভাবে ছাড়পত্রের জন্য প্রস্তুত করা হয়েছে।" : "Patient marked medically ready for discharge.");
+            validationAttempted = false;
+            showRequiredValidationSummary = false;
+            Success(I18n.IsBangla ? "মেডিকেল ক্লিয়ারেন্স সম্পন্ন হয়েছে। রোগী এখন চূড়ান্ত বিলিংয়ের জন্য প্রস্তুত।" : "Medical clearance completed. Patient is now ready for final billing.");
             await LoadAsync();
         }
         catch (Exception ex)
@@ -349,7 +637,19 @@
         var d = doctors.FirstOrDefault(x => x.ID == id);
         return d is null ? "—" : $"{d.Title} {d.Name}".Trim();
     }
-    private string OrderStatus(long id) => orderStatuses.TryGetValue(id, out var s) ? s : "Not Ready";
+    private string DoctorDisplayName(int? id) => id.HasValue ? $"D{id.Value} - {DoctorName(id)}" : "—";
+    private string BedName(int? id) => id.HasValue && bedNames.TryGetValue(id.Value, out var name) ? name : "Unassigned";
+    private string DepartmentName(int? id) => id.HasValue && departmentNames.TryGetValue(id.Value, out var name) ? name : "No ward";
+    private static int StayDays(PatientAdmission admission) => Math.Max(1, (int)Math.Ceiling((DateTime.Now - (admission.AdmissionDate ?? DateTime.Now)).TotalDays));
+    private string OrderStatus(long id) => orderStatuses.TryGetValue(id, out var status) && status is "Ready" or "Completed" ? status : "Pending";
+    private static string StatusBadgeClass(string? status) => status switch
+    {
+        "Ready" => "badge-success",
+        "Completed" => "badge-info",
+        "Cancelled" => "badge-secondary",
+        _ => "badge-warning"
+    };
     private void Success(string x) { messageClass = "success"; message = x; }
     private void Fail(string x) { messageClass = "danger"; message = x; }
+    public void Dispose() => dotNetRef?.Dispose();
 }

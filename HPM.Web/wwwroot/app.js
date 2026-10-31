@@ -1002,7 +1002,7 @@ window.hpm = {
                 display: block !important;
                 padding: 2mm 0 !important;
             }
-            .a5-memo-sheet {
+            .a5-memo-sheet, .print-a5-sheet {
                 width: 100% !important;
                 max-width: 136mm !important;
                 margin: 0 !important;

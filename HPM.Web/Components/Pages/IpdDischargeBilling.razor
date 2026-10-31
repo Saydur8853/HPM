@@ -20,7 +20,7 @@
                 <span>@I18n.T("Final Billing & Patient Discharge")</span>
             </h1>
             <span class="tickets-count-pill">
-                @FilteredRecentDischarges.Count() @I18n.T("Discharges")
+                @readyAdmissions.Count @I18n.T("Ready for Billing")
             </span>
             @if (!string.IsNullOrWhiteSpace(message))
             {
@@ -122,7 +122,7 @@
                                 <input class="classic-input" value="@I18n.FormatCurrency(totalBedCharges)" disabled />
                             </label>
                             <label>
-                                <span>@I18n.T("Services & Tests")</span>
+                                <span>@I18n.T("Services, Tests & Medicine")</span>
                                 <input class="classic-input" value="@I18n.FormatCurrency(totalServiceCharges)" disabled />
                             </label>
                             <label>
@@ -161,7 +161,11 @@
                                 <span style="font-size: 10.5px; text-transform: uppercase; color: #0e7490; font-weight: 750;">@I18n.T("Balance Due")</span>
                                 <h2 style="margin: 2px 0 0; color: #083344; font-size: 18px; font-weight: 800;">@I18n.FormatCurrency(netPayable)</h2>
                             </div>
-                            @if (selectedAdmission.IsAdmitted == true)
+                            @if (medicalDischargeOrder?.Status == "Ready")
+                            {
+                                <span class="pill pill-success" style="font-size: 11px;">@I18n.T("MEDICALLY CLEARED")</span>
+                            }
+                            else if (selectedAdmission.IsAdmitted == true)
                             {
                                 <span class="pill pill-danger" style="font-size: 11px;">@I18n.T("Pending Clearance")</span>
                             }
@@ -241,13 +245,22 @@
             </div>
         </div>
 
-        <!-- Right Panel: Recent Discharges Queue Card -->
+        <!-- Right Panel: Ready-for-Billing Queue and Recent Discharges -->
         <div class="ipd-queue-card">
             <div class="ipd-queue-top">
-                <h2>@I18n.T("Recent Discharges")</h2>
-                <span class="pill pill-success" style="font-size: 10.5px; padding: 2px 7px;">
-                    @FilteredRecentDischarges.Count() @I18n.T("discharged")
+                <h2>@(rightQueueMode == "Ready" ? I18n.T("Ready for Final Billing") : I18n.T("Recent Discharges"))</h2>
+                <span class="pill @(rightQueueMode == "Ready" ? "pill-warning" : "pill-success")" style="font-size: 10.5px; padding: 2px 7px;">
+                    @(rightQueueMode == "Ready" ? FilteredReadyAdmissions.Count() : FilteredRecentDischarges.Count())
                 </span>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                <button type="button" class="btn btn-sm @(rightQueueMode == "Ready" ? "btn-primary" : "btn-secondary")" @onclick='() => SetRightQueueMode("Ready")'>
+                    @I18n.T("Ready for Billing") (@readyAdmissions.Count)
+                </button>
+                <button type="button" class="btn btn-sm @(rightQueueMode == "Recent" ? "btn-primary" : "btn-secondary")" @onclick='() => SetRightQueueMode("Recent")'>
+                    @I18n.T("Recent Discharges") (@recentDischarges.Count)
+                </button>
             </div>
 
             <!-- Scanner Bar -->
@@ -256,7 +269,7 @@
                     <span class="tickets-scanner-icon"><SearchIcon /></span>
                     <input type="text"
                            class="tickets-scanner-input"
-                           placeholder="@I18n.T("Filter / scan discharge...")"
+                           placeholder="@(rightQueueMode == "Ready" ? I18n.T("Filter ready patient...") : I18n.T("Filter / scan discharge..."))"
                            @bind="recentFilter"
                            @bind:event="oninput" />
                     @if (!string.IsNullOrWhiteSpace(recentFilter))
@@ -268,33 +281,68 @@
 
             <!-- Internal Scrollable Queue List -->
             <div class="tickets-queue-list">
-                @if (!FilteredRecentDischarges.Any())
+                @if (rightQueueMode == "Ready")
                 {
-                    <div class="tickets-queue-empty">
-                        <span style="font-size: 2rem;">🚪</span>
-                        <span>@I18n.T("No recent discharge records found.")</span>
-                    </div>
+                    @if (!FilteredReadyAdmissions.Any())
+                    {
+                        <div class="tickets-queue-empty">
+                            <span style="font-size: 2rem;">✅</span>
+                            <span>@I18n.T("No medically-cleared patient is waiting for final billing.")</span>
+                        </div>
+                    }
+                    @foreach (var admission in FilteredReadyAdmissions)
+                    {
+                        var readyOrder = readyOrders.GetValueOrDefault(admission.ID);
+                        <div class="tickets-queue-item @(selectedAdmission?.ID == admission.ID ? "active" : "")" @onclick="() => SelectReadyAdmissionAsync(admission)">
+                            <span class="tickets-queue-serial" style="min-width: 72px; font-size: 11px;">@admission.RegNo</span>
+                            <div class="tickets-queue-info">
+                                <span class="tickets-queue-name">
+                                    @(patientNames.GetValueOrDefault(admission.PatientID ?? "", "—"))
+                                    <small class="tickets-queue-reg">(@(admission.PatientID ?? "—"))</small>
+                                </span>
+                                <span class="tickets-queue-meta">
+                                    @DoctorName(readyOrder?.DoctorID) &bull; @readyOrder?.OrderedAt.ToString("dd MMM yy hh:mm tt")
+                                </span>
+                            </div>
+                            <div class="tickets-queue-badges">
+                                <span class="pill pill-warning" style="font-size: 10px;">@I18n.T("READY")</span>
+                            </div>
+                            <div class="tickets-queue-actions" @onclick:stopPropagation>
+                                <button class="icon-btn" @onclick="() => SelectReadyAdmissionAsync(admission)" title="@I18n.T("Open for final billing")">→</button>
+                            </div>
+                        </div>
+                    }
                 }
-                @foreach (var d in FilteredRecentDischarges)
+                else
                 {
-                    <div class="tickets-queue-item @(selectedAdmission?.ID == d.ID ? "active" : "")" @onclick="() => SelectDischarged(d)">
-                        <span class="tickets-queue-serial" style="min-width: 65px; font-size: 11px;">#@(d.BillNo.HasValue ? $"B{d.BillNo}" : "—")</span>
-                        <div class="tickets-queue-info">
-                            <span class="tickets-queue-name">
-                                @(patientNames.GetValueOrDefault(d.PatientID ?? "", "—"))
-                                <small class="tickets-queue-reg">(@d.RegNo)</small>
-                            </span>
-                            <span class="tickets-queue-meta">
-                                @d.ReleaseDate?.ToString("dd MMM yy") &bull; @(d.Outcome ?? I18n.T("Discharged"))
-                            </span>
+                    @if (!FilteredRecentDischarges.Any())
+                    {
+                        <div class="tickets-queue-empty">
+                            <span style="font-size: 2rem;">🚪</span>
+                            <span>@I18n.T("No recent discharge records found.")</span>
                         </div>
-                        <div class="tickets-queue-badges">
-                            <span class="pill pill-success" style="font-size: 10px;">@I18n.T("DISCHARGED")</span>
+                    }
+                    @foreach (var d in FilteredRecentDischarges)
+                    {
+                        <div class="tickets-queue-item @(selectedAdmission?.ID == d.ID ? "active" : "")" @onclick="() => SelectDischarged(d)">
+                            <span class="tickets-queue-serial" style="min-width: 65px; font-size: 11px;">#@(d.BillNo.HasValue ? $"B{d.BillNo}" : "—")</span>
+                            <div class="tickets-queue-info">
+                                <span class="tickets-queue-name">
+                                    @(patientNames.GetValueOrDefault(d.PatientID ?? "", "—"))
+                                    <small class="tickets-queue-reg">(@d.RegNo)</small>
+                                </span>
+                                <span class="tickets-queue-meta">
+                                    @d.ReleaseDate?.ToString("dd MMM yy") &bull; @(d.Outcome ?? I18n.T("Discharged"))
+                                </span>
+                            </div>
+                            <div class="tickets-queue-badges">
+                                <span class="pill pill-success" style="font-size: 10px;">@I18n.T("DISCHARGED")</span>
+                            </div>
+                            <div class="tickets-queue-actions" @onclick:stopPropagation>
+                                <button class="icon-btn" @onclick="() => SelectDischarged(d)" title="@I18n.T("View")">👁️</button>
+                            </div>
                         </div>
-                        <div class="tickets-queue-actions" @onclick:stopPropagation>
-                            <button class="icon-btn" @onclick="() => SelectDischarged(d)" title="@I18n.T("View")">👁️</button>
-                        </div>
-                    </div>
+                    }
                 }
             </div>
         </div>
@@ -354,7 +402,7 @@
                 @if (totalServiceCharges > 0)
                 {
                     <tr>
-                        <td>@I18n.T("Total Service Charges")</td>
+                        <td>@I18n.T("Total Services, Diagnostics & Medicine")</td>
                         <td class="num">@I18n.FormatCurrency(totalServiceCharges)</td>
                     </tr>
                 }
@@ -446,7 +494,9 @@
     private PatientAdmission? selectedAdmission;
     private IpdFinalBill? finalBill;
     private IpdMedicalDischargeOrder? medicalDischargeOrder;
+    private List<PatientAdmission> readyAdmissions = [];
     private List<PatientAdmission> recentDischarges = [];
+    private Dictionary<long, IpdMedicalDischargeOrder> readyOrders = [];
     private List<CalculatedBedMovement> bedMovements = [];
     private List<IpdPatientServiceItem> serviceItems = [];
     private List<IpdMoneyReceipt> advanceReceipts = [];
@@ -456,6 +506,7 @@
 
     private string searchQuery = "";
     private string recentFilter = "";
+    private string rightQueueMode = "Ready";
     private string patientName = "";
     private DateTime dischargeDate = DateTime.Now;
     private string dischargeOutcome = "Cured";
@@ -490,6 +541,19 @@
         }
     }
 
+    private IEnumerable<PatientAdmission> FilteredReadyAdmissions
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(recentFilter)) return readyAdmissions;
+            var q = recentFilter.Trim();
+            return readyAdmissions.Where(x =>
+                (x.RegNo?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (x.PatientID?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                patientNames.GetValueOrDefault(x.PatientID ?? "", "").Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
@@ -511,14 +575,37 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         beds = await db.BedCabins.AsNoTracking().ToListAsync();
         doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        readyOrders = await db.IpdMedicalDischargeOrders.AsNoTracking()
+            .Where(x => x.Status == "Ready")
+            .OrderBy(x => x.OrderedAt)
+            .ToDictionaryAsync(x => x.AdmissionID);
+        var readyAdmissionIds = readyOrders.Keys.ToArray();
+        readyAdmissions = readyAdmissionIds.Length == 0
+            ? []
+            : await db.PatientAdmissions.AsNoTracking()
+                .Where(x => x.IsAdmitted == true && readyAdmissionIds.Contains(x.ID))
+                .OrderBy(x => x.AdmissionDate)
+                .ToListAsync();
         recentDischarges = await db.PatientAdmissions.AsNoTracking()
             .Where(x => x.IsAdmitted == false && x.ReleaseDate != null)
             .OrderByDescending(x => x.ReleaseDate)
             .Take(50)
             .ToListAsync();
 
-        var pIds = recentDischarges.Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToArray();
+        var pIds = recentDischarges.Concat(readyAdmissions).Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToArray();
         patientNames = pIds.Length == 0 ? new(StringComparer.OrdinalIgnoreCase) : await db.Registrations.AsNoTracking().Where(x => pIds.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x.Name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void SetRightQueueMode(string mode)
+    {
+        rightQueueMode = mode;
+        recentFilter = string.Empty;
+    }
+
+    private async Task SelectReadyAdmissionAsync(PatientAdmission admission)
+    {
+        searchQuery = admission.RegNo;
+        await SearchAdmissionAsync();
     }
 
     private async Task SearchAdmissionAsync()
@@ -903,6 +990,9 @@
         var services = await db.IpdPatientServiceItems.AsNoTracking()
             .Where(x => x.RegNo == admission.RegNo && x.ServiceDate <= calculationDate)
             .ToListAsync();
+        var patientTransactions = await db.PatientTransactions.AsNoTracking()
+            .Where(x => x.RegNo == admission.RegNo && x.TransDate <= calculationDate)
+            .ToListAsync();
         var extension = await db.AdmissionExtensions.AsNoTracking()
             .FirstOrDefaultAsync(x => x.RegNo == admission.RegNo);
 
@@ -921,7 +1011,8 @@
         }
 
         var bedCharges = movements.Sum(x => x.TotalAmount);
-        var serviceCharges = services.Sum(x => x.Total);
+        var serviceCharges = services.Sum(x => x.Total)
+            + patientTransactions.Sum(x => x.ServiceRate * x.Quantity);
         var hospitalCharges = (extension?.ServiceCharge ?? 0) + (extension?.Food ?? 0);
         var gross = (admission.AdmissionFee ?? 0) + (admission.AmbulanceFee ?? 0)
             + bedCharges + serviceCharges + hospitalCharges;
@@ -978,7 +1069,7 @@
 
     private static string BuildMedicalDischargeNotes(IpdMedicalDischargeOrder order)
     {
-        var parts = new[] { $"Final diagnosis: {order.FinalDiagnosis}", string.IsNullOrWhiteSpace(order.ConditionAtDischarge) ? null : $"Condition: {order.ConditionAtDischarge}", $"Advice: {order.Advice}", string.IsNullOrWhiteSpace(order.FollowUp) ? null : $"Follow-up: {order.FollowUp}" };
+        var parts = new[] { $"Final diagnosis: {order.FinalDiagnosis}", string.IsNullOrWhiteSpace(order.ConditionAtDischarge) ? null : $"Condition: {order.ConditionAtDischarge}", string.IsNullOrWhiteSpace(order.Advice) ? null : $"Advice: {order.Advice}", string.IsNullOrWhiteSpace(order.FollowUp) ? null : $"Follow-up: {order.FollowUp}" };
         var text = string.Join(" | ", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
         return text.Length <= 1000 ? text : text[..1000];
     }
