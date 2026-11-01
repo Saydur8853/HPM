@@ -1,0 +1,1466 @@
+@page "/medical/certificates"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor + "," + RoleNames.Reception + "," + RoleNames.Nurse)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
+@implements IDisposable
+@using System.Security.Claims
+@using System.Text.Json
+@using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>@I18n.T("Hospital Medical Certificates Hub") | @Branding.HospitalName</PageTitle>
+
+<style>
+.cert-page {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px 16px 24px;
+    max-width: 1560px;
+    margin: 0 auto;
+    outline: none;
+}
+.cert-top-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.cert-top-nav-link {
+    color: #0284c7;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    transition: all 0.15s ease;
+}
+.cert-top-nav-link:hover {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* Real-time KPI summary grid */
+.ipd-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+.ipd-kpi-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+.ipd-kpi-info {
+    display: flex;
+    flex-direction: column;
+}
+.ipd-kpi-label {
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.5px;
+}
+.ipd-kpi-val {
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 1.2;
+    margin-top: 2px;
+}
+.ipd-kpi-sub {
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 2px;
+}
+.ipd-kpi-icon {
+    font-size: 26px;
+    opacity: 0.85;
+}
+
+/* Workspace 2-Column Grid */
+.cert-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(360px, 1fr);
+    gap: 14px;
+    align-items: start;
+}
+@@media (max-width: 1024px) {
+    .cert-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.cert-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+    overflow: hidden;
+}
+.cert-card-header {
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.cert-card-header h2 {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.cert-card-body {
+    padding: 14px 16px;
+}
+.cert-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 14px;
+}
+.cert-form-col-full {
+    grid-column: 1 / -1;
+}
+.cert-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.cert-field-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #334155;
+    display: flex;
+    justify-content: space-between;
+}
+.cert-field-label .req {
+    color: #dc2626;
+    margin-left: 2px;
+}
+.cert-tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    padding: 6px 14px 0;
+    overflow-x: auto;
+}
+.cert-tab-btn {
+    padding: 7px 14px;
+    font-size: 11.5px;
+    font-weight: 750;
+    color: #64748b;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: transparent;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+.cert-tab-btn.active {
+    background: #ffffff;
+    color: #0284c7;
+    border-color: #cbd5e1;
+    border-bottom-color: #ffffff;
+    margin-bottom: -1px;
+}
+.cert-type-badge {
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-block;
+}
+.cert-badge-birth { background: #fdf2f8; color: #db2777; border: 1px solid #fbcfe8; }
+.cert-badge-death { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.cert-badge-fitness { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.cert-badge-medical { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+
+/* Patient Suggestion dropdown */
+.cert-patient-suggestions {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    width: 100%;
+    max-height: 280px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.12);
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+}
+.cert-patient-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: left;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.cert-patient-option:hover {
+    background: #f0f9ff;
+}
+.cert-scroll-hint {
+    padding: 6px 10px;
+    text-align: center;
+    background: #f8fafc;
+    border-top: 1px solid #e2e8f0;
+    font-size: 10.5px;
+    color: #0284c7;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Certificate item row */
+.ot-item-row {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+.ot-item-row:hover {
+    background: #f8fafc;
+}
+.ot-item-row.selected {
+    background: #f0f9ff;
+    border-left: 3px solid #0284c7;
+}
+
+/* Print CSS */
+@@media print {
+    body * {
+        visibility: hidden;
+    }
+    #medical-certificate-print, #medical-certificate-print * {
+        visibility: visible;
+    }
+    #medical-certificate-print {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 15mm 20mm;
+        box-sizing: border-box;
+    }
+}
+</style>
+
+<div class="cert-page" @onkeydown="HandleGlobalKeyDown" tabindex="0">
+    <!-- 1. Top Flow Links & Topbar -->
+    <div>
+        <div class="cert-top-nav-links">
+            <span style="color:#64748b; font-weight:700;">@I18n.T("Medical Certificates Flow", "সার্টিফিকেট ফ্লো"):</span>
+            <button type="button" class="cert-top-nav-link" @onclick='() => ChangeType("Birth")' style="@(currentType == "Birth" ? "background:#0284c7; color:#fff;" : "")">👶 @I18n.T("Birth Certificate")</button>
+            <span>&bull;</span>
+            <button type="button" class="cert-top-nav-link" @onclick='() => ChangeType("Death")' style="@(currentType == "Death" ? "background:#0284c7; color:#fff;" : "")">🕯️ @I18n.T("Death Certificate")</button>
+            <span>&bull;</span>
+            <button type="button" class="cert-top-nav-link" @onclick='() => ChangeType("Fitness")' style="@(currentType == "Fitness" ? "background:#0284c7; color:#fff;" : "")">🩺 @I18n.T("Fitness Certificate")</button>
+            <span>&bull;</span>
+            <button type="button" class="cert-top-nav-link" @onclick='() => ChangeType("Medical")' style="@(currentType == "Medical" ? "background:#0284c7; color:#fff;" : "")">📝 @I18n.T("Sick Leave / Medical Certificate")</button>
+            <span>&bull;</span>
+            <a href="/ipd/medical-discharge-orders" class="cert-top-nav-link">🏥 @I18n.T("Discharge Clearance", "ডিসচার্জ ছাড়পত্র")</a>
+        </div>
+
+        <div class="appt-classic-topbar">
+            <div class="appt-top-left">
+                <h1 class="appt-page-title">
+                    <span>📜</span>
+                    <span>@I18n.T("Hospital Medical Certificates Hub", "হাসপাতাল মেডিকেল সার্টিফিকেট রেজিস্ট্রি ও ইস্যু")</span>
+                </h1>
+                <span class="appt-count-pill">
+                    @allCertificates.Count @I18n.T("Total Issued", "মোট ইস্যু")
+                </span>
+                @if (!string.IsNullOrWhiteSpace(message))
+                {
+                    <span class="appt-inline-alert @messageClass">
+                        @(messageClass == "success" ? "✓" : "⚠") @message
+                    </span>
+                }
+            </div>
+
+            <div class="appt-top-actions">
+                <a href="/ipd/medical-discharge-orders" class="btn btn-secondary appt-btn" style="text-decoration:none;" title="@I18n.T("Open IPD Medical Clearance & Discharge Orders")">
+                    🏥 @I18n.T("Discharge Clearance", "ডিসচার্জ ছাড়পত্র")
+                </a>
+                <button type="button" class="btn btn-ghost appt-btn" @onclick="ResetForm" title="@I18n.T("Issue New Certificate (F2 / Esc)")">
+                    + @I18n.T("New Certificate", "নতুন সার্টিফিকেট")
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Real-time KPI Metric Summary Cards -->
+    <div class="ipd-kpi-grid">
+        <div class="ipd-kpi-card" style="border-left: 4px solid #db2777;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Birth Certificates", "জন্ম সনদ")</div>
+                <div class="ipd-kpi-val" style="color: #db2777;">@birthCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Live births registered", "হাসপাতালে নবজাতক")</div>
+            </div>
+            <div class="ipd-kpi-icon">👶</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #475569;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Death Certificates", "মৃত্যু সনদ")</div>
+                <div class="ipd-kpi-val" style="color: #475569;">@deathCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Clinical cause issued", "কারণ সহ সনদ")</div>
+            </div>
+            <div class="ipd-kpi-icon">🕯️</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #10b981;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Fitness Certificates", "ফিটনেস সনদ")</div>
+                <div class="ipd-kpi-val" style="color: #047857;">@fitnessCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Job, travel & sports", "চাকরি ও ভ্রমণ")</div>
+            </div>
+            <div class="ipd-kpi-icon">🩺</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #2563eb;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Sick Leave / Medical", "ছুটি ও অসুস্থতা সনদ")</div>
+                <div class="ipd-kpi-val" style="color: #1d4ed8;">@medicalCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Medical rest certificates", "বিশ্রাম ও ফিটনেস")</div>
+            </div>
+            <div class="ipd-kpi-icon">📝</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #f59e0b;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Certifying Doctors", "সার্টিফাইং চিকিৎসক")</div>
+                <div class="ipd-kpi-val" style="color: #b45309;">@doctors.Count</div>
+                <div class="ipd-kpi-sub">@I18n.T("Registered physicians", "অনুমোদিত চিকিৎসক")</div>
+            </div>
+            <div class="ipd-kpi-icon">🩺</div>
+        </div>
+    </div>
+
+    <!-- 3. Main Workspace -->
+    <div class="cert-grid">
+        <!-- Left: Certificate Generator Form -->
+        <div class="cert-card">
+            <!-- Certificate Type Tabs (All 4 Types Supported!) -->
+            <div class="cert-tab-bar">
+                <button type="button" class="cert-tab-btn @(currentType == "Birth" ? "active" : "")" @onclick='() => ChangeType("Birth")'>
+                    👶 @I18n.T("Birth Certificate", "জন্ম সনদ")
+                </button>
+                <button type="button" class="cert-tab-btn @(currentType == "Death" ? "active" : "")" @onclick='() => ChangeType("Death")'>
+                    🕯️ @I18n.T("Death Certificate", "মৃত্যু সনদ")
+                </button>
+                <button type="button" class="cert-tab-btn @(currentType == "Fitness" ? "active" : "")" @onclick='() => ChangeType("Fitness")'>
+                    🩺 @I18n.T("Medical Fitness Certificate", "ফিটনেস সনদ")
+                </button>
+                <button type="button" class="cert-tab-btn @(currentType == "Medical" ? "active" : "")" @onclick='() => ChangeType("Medical")'>
+                    📝 @I18n.T("Medical Illness & Sick Leave", "চিকিৎসা ও ছুটি সনদ")
+                </button>
+            </div>
+
+            <div class="cert-card-header">
+                <h2>
+                    <span>@(editor.ID == 0 ? "➕ " + I18n.T($"Issue New {GetCertificateTitle(currentType)} Certificate") : $"✏️ {I18n.T($"Edit {editor.CertificateType} Certificate")} #{editor.CertificateNo}")</span>
+                </h2>
+                <div>
+                    @if (editor.ID > 0)
+                    {
+                        <span class="cert-type-badge @GetBadgeClass(editor.CertificateType)">
+                            @editor.CertificateNo
+                        </span>
+                    }
+                </div>
+            </div>
+
+            <div class="cert-card-body">
+                <!-- Patient Search & Selection with Lazy Infinite Scroll -->
+                <div class="cert-field-group" style="margin-bottom: 12px;">
+                    <span class="cert-field-label">
+                        <span>@I18n.T("Select Patient / Registration", "রোগী নির্বাচন করুন") <span class="req">*</span></span>
+                        <span style="color:#64748b; font-weight:600;">@totalPatientsCount @I18n.T("Registered Patients", "জন নিবন্ধিত রোগী")</span>
+                    </span>
+
+                    @if (selectedPatient != null)
+                    {
+                        <div class="appt-patient-verified" style="display:flex; justify-content:space-between; align-items:center; background:#f0f9ff; border:1px solid #bae6fd; padding:8px 12px; border-radius:6px;">
+                            <div style="font-size:11.5px; color:#0f172a;">
+                                <strong>#@selectedPatient.PatientID</strong> &bull; <b style="color:#0284c7;">@selectedPatient.Name</b>
+                                &bull; <span>Age: @PatientAge(selectedPatient)</span>
+                                &bull; <span>Sex: @selectedPatient.Sex</span>
+                                &bull; <span>Phone: @selectedPatient.Contact</span>
+                            </div>
+                            <button type="button" class="btn btn-ghost btn-sm" @onclick="ClearSelectedPatient" style="font-size:11px; padding:2px 8px; color:#0369a1;">
+                                @I18n.T("Change", "পরিবর্তন")
+                            </button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="appt-patient-search-combo" style="position:relative; width:100%;">
+                            <input class="classic-input"
+                                   style="height:32px !important;"
+                                   value="@patientSearchQuery"
+                                   @oninput="HandlePatientSearchInputAsync"
+                                   @onfocus="ShowPatientSuggestionsAsync"
+                                   autocomplete="off"
+                                   placeholder="@I18n.T("Search by Patient ID, Name, Mobile or Reg #...")" />
+                            @if (showPatientDropdown)
+                            {
+                                <div class="tickets-type-dropdown-backdrop" style="position:fixed; inset:0; z-index:110;" @onclick="() => showPatientDropdown = false"></div>
+                                <div class="cert-patient-suggestions" id="cert-patient-suggestions-list">
+                                    @foreach (var p in suggestedRegistrations)
+                                    {
+                                        <button type="button" class="cert-patient-option"
+                                                @onmousedown:preventDefault
+                                                @onclick="() => SelectPatient(p)">
+                                            <span style="font-weight:800; color:#0284c7; min-width:80px;">#@p.PatientID</span>
+                                            <span style="font-weight:700; color:#0f172a; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">@p.Name</span>
+                                            <span style="font-size:11px; color:#64748b; flex-shrink:0;">@p.Sex, @PatientAge(p)</span>
+                                            <span style="font-size:11px; color:#64748b; flex-shrink:0;">📞 @(string.IsNullOrWhiteSpace(p.Contact) ? "—" : p.Contact)</span>
+                                        </button>
+                                    }
+                                    @if (suggestedRegistrations.Count == 0)
+                                    {
+                                        <div style="padding:12px; font-size:11.5px; color:#64748b; text-align:center;">
+                                            @I18n.T("No matching patient registration found", "কোনো রোগী পাওয়া যায়নি")
+                                        </div>
+                                    }
+                                    else if (hasMorePatientSuggestions)
+                                    {
+                                        <div class="cert-scroll-hint"
+                                             @onmousedown:preventDefault
+                                             @onclick="LoadMorePatientsFromJs">
+                                            @if (isLoadingMorePatients)
+                                            {
+                                                <span>⏳ @I18n.T("Loading more...", "আরো লোড হচ্ছে...")</span>
+                                            }
+                                            else
+                                            {
+                                                <span>@I18n.T("Showing") @suggestedRegistrations.Count &bull; @I18n.T("Scroll for more...", "আরো দেখতে স্ক্রোল করুন...")</span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="cert-form-grid">
+                    <!-- Certificate Number -->
+                    <div class="cert-field-group">
+                        <span class="cert-field-label">
+                            <span>@I18n.T("Certificate Registration No.", "সার্টিফিকেট সিরিয়াল নম্বর") <span class="req">*</span></span>
+                        </span>
+                        <input class="classic-input"
+                               style="height:32px !important; font-weight:800; color:#0284c7;"
+                               @bind="editor.CertificateNo" />
+                    </div>
+
+                    <!-- Issue Date -->
+                    <div class="cert-field-group">
+                        <span class="cert-field-label">
+                            <span>@I18n.T("Issue Date", "ইস্যুর তারিখ") <span class="req">*</span></span>
+                        </span>
+                        <input type="datetime-local"
+                               class="classic-input"
+                               style="height:32px !important;"
+                               @bind="editor.IssueDate" />
+                    </div>
+
+                    <!-- Certifying Doctor -->
+                    <div class="cert-field-group cert-form-col-full">
+                        <span class="cert-field-label">
+                            <span>@I18n.T("Certifying Medical Officer / Doctor", "সার্টিফাইং চিকিৎসক") <span class="req">*</span></span>
+                        </span>
+                        <select class="classic-input" style="height:32px !important;" @bind="editor.DoctorID">
+                            <option value="0">-- @I18n.T("Select Doctor") --</option>
+                            @foreach (var doc in doctors)
+                            {
+                                <option value="@doc.ID">@DoctorDisplayName(doc) (@(doc.Degree ?? "Medical Officer"))</option>
+                            }
+                        </select>
+                    </div>
+
+                    @if (currentType == "Birth")
+                    {
+                        <!-- BIRTH CERTIFICATE SPECIFIC FIELDS -->
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Baby's Full Name (or Baby of ...)", "নবজাতকের নাম") <span class="req">*</span></span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.BabyName" placeholder="e.g. Baby of Fahmida Akter (Girl)" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Baby Gender", "লিঙ্গ") <span class="req">*</span></span></span>
+                            <select class="classic-input" style="height:32px !important;" @bind="birthData.Gender">
+                                <option value="Female">Female (কন্যা সন্তান)</option>
+                                <option value="Male">Male (পুত্র সন্তান)</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Date & Time of Birth", "জন্ম তারিখ ও সময়") <span class="req">*</span></span></span>
+                            <input type="datetime-local" class="classic-input" style="height:32px !important;" @bind="birthData.BirthDateTime" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Birth Weight (kg / grams)", "জন্ম ওজন")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.BirthWeight" placeholder="e.g. 3.2 kg (3200 g)" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Delivery Method", "প্রসবের ধরন")</span></span>
+                            <select class="classic-input" style="height:32px !important;" @bind="birthData.DeliveryMethod">
+                                <option value="Normal Vaginal Delivery (NVD)">Normal Vaginal Delivery (NVD)</option>
+                                <option value="Lower Segment Caesarean Section (LSCS)">Lower Segment Caesarean Section (LSCS)</option>
+                                <option value="Instrumental / Vacuum Extraction">Instrumental / Vacuum Extraction</option>
+                            </select>
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Gestational Age", "গর্ভকালীন বয়স")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.GestationalAge" placeholder="e.g. 38 Weeks + 4 Days" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Mother's Name", "মাতার নাম") <span class="req">*</span></span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.MotherName" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Father's Name", "পিতার নাম") <span class="req">*</span></span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.FatherName" />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Permanent / Residence Address", "স্থায়ী / বর্তমান ঠিকানা")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="birthData.ParentsAddress" />
+                        </div>
+                    }
+                    else if (currentType == "Death")
+                    {
+                        <!-- DEATH CERTIFICATE SPECIFIC FIELDS -->
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Date & Time of Death", "মৃত্যুর তারিখ ও সময়") <span class="req">*</span></span></span>
+                            <input type="datetime-local" class="classic-input" style="height:32px !important;" @bind="deathData.DeathDateTime" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Place of Death", "মৃত্যুস্থল")</span></span>
+                            <select class="classic-input" style="height:32px !important;" @bind="deathData.PlaceOfDeath">
+                                <option value="Intensive Care Unit (ICU)">Intensive Care Unit (ICU)</option>
+                                <option value="Coronary Care Unit (CCU)">Coronary Care Unit (CCU)</option>
+                                <option value="Inpatient Ward">Inpatient Ward</option>
+                                <option value="Inpatient Cabin">Inpatient Cabin</option>
+                                <option value="Emergency Department">Emergency Department</option>
+                                <option value="Operation Theatre (OT)">Operation Theatre (OT)</option>
+                                <option value="Brought In Dead (BID)">Brought In Dead (BID)</option>
+                            </select>
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Immediate Cause of Death (Part I-a)", "প্রত্যক্ষ কারণ (Part I-a)") <span class="req">*</span></span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="deathData.ImmediateCause" placeholder="e.g. Cardiorespiratory Arrest, Septic Shock, Acute Heart Failure..." />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Antecedent / Morbid Conditions (Part I-b)", "পূর্ববর্তী কারণ (Part I-b)")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="deathData.AntecedentCause" placeholder="e.g. Severe Pneumonia with ARDS, Multiple Organ Dysfunction Syndrome..." />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Underlying Primary Condition (Part I-c)", "মূল কারণ (Part I-c)")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="deathData.UnderlyingCause" placeholder="e.g. Chronic Kidney Disease Stage 5, Ischaemic Heart Disease, CVA..." />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Other Significant Contributory Conditions (Part II)", "অন্যান্য সহায়ক রোগ (Part II)")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="deathData.ContributoryConditions" placeholder="e.g. Diabetes Mellitus, Essential Hypertension, Chronic Bronchitis..." />
+                        </div>
+                    }
+                    else if (currentType == "Fitness")
+                    {
+                        <!-- FITNESS CERTIFICATE SPECIFIC FIELDS -->
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Certificate Purpose", "সনদের উদ্দেশ্য") <span class="req">*</span></span></span>
+                            <select class="classic-input" style="height:32px !important;" @bind="fitnessData.Purpose">
+                                <option value="Medical Fitness for Employment / Job">Medical Fitness for Employment / Job</option>
+                                <option value="Medical Fitness for Travel / Visa">Medical Fitness for Travel / Visa</option>
+                                <option value="Fitness for Sports / Physical Activity">Fitness for Sports / Physical Activity</option>
+                                <option value="Driving License Medical Fitness">Driving License Medical Fitness</option>
+                                <option value="School / College Admission Fitness">School / College Admission Fitness</option>
+                            </select>
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Physical Exam Findings (BP, Pulse, Ht, Wt)", "শারীরিক পরীক্ষা")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="fitnessData.PhysicalFindings" placeholder="e.g. BP: 120/80 mmHg, Pulse: 74 bpm, Ht: 172cm, Wt: 68kg" />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Identification Marks", "শনাক্তকরণ চিহ্ন")</span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="fitnessData.IdentificationMarks" placeholder="e.g. A small mole on left cheek, scar on right forearm..." />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Medical Certification Statement", "চিকিৎসকের প্রত্যয়ন ও মন্তব্য") <span class="req">*</span></span></span>
+                            <textarea class="classic-input" rows="3" style="min-height:60px;" @bind="fitnessData.CertificationText" placeholder="e.g. I have carefully examined the candidate and found him/her physically and mentally fit to perform duties."></textarea>
+                        </div>
+                    }
+                    else if (currentType == "Medical")
+                    {
+                        <!-- MEDICAL ILLNESS & SICK LEAVE CERTIFICATE SPECIFIC FIELDS -->
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Clinical Diagnosis / Illness", "রোগনির্ণয় / অসুস্থতার বিবরণ") <span class="req">*</span></span></span>
+                            <input class="classic-input" style="height:32px !important;" @bind="medicalData.Diagnosis" placeholder="e.g. Acute Viral Hepatitis, Enteric Fever, Lumbar Disc Prolapse, Post-Op LSCS..." />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Leave Recommended From", "ছুটির তারিখ হতে") <span class="req">*</span></span></span>
+                            <input type="date" class="classic-input" style="height:32px !important;" @bind="medicalData.LeaveFrom" @bind:after="CalculateLeaveDays" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Leave Recommended To", "ছুটির তারিখ পর্যন্ত") <span class="req">*</span></span></span>
+                            <input type="date" class="classic-input" style="height:32px !important;" @bind="medicalData.LeaveTo" @bind:after="CalculateLeaveDays" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Total Days of Medical Rest", "মোট ছুটির দিন")</span></span>
+                            <input type="number" class="classic-input" style="height:32px !important; font-weight:800; color:#0284c7;" @bind="medicalData.TotalDays" />
+                        </div>
+
+                        <div class="cert-field-group">
+                            <span class="cert-field-label"><span>@I18n.T("Fit to Resume Duties On", "কাজে যোগদানের আনুমানিক তারিখ")</span></span>
+                            <input type="date" class="classic-input" style="height:32px !important;" @bind="medicalData.FitResumeDate" />
+                        </div>
+
+                        <div class="cert-field-group cert-form-col-full">
+                            <span class="cert-field-label"><span>@I18n.T("Physician Recommendation & Advice", "চিকিৎসকের পরামর্শ ও সুপারিশ") <span class="req">*</span></span></span>
+                            <textarea class="classic-input" rows="3" style="min-height:60px;" @bind="medicalData.RecommendationText" placeholder="e.g. The patient is advised absolute physical bed rest and is medically unfit to attend official duties during the specified period."></textarea>
+                        </div>
+                    }
+
+                    <!-- Remarks -->
+                    <div class="cert-field-group cert-form-col-full">
+                        <span class="cert-field-label"><span>@I18n.T("General Remarks / Office Note", "মন্তব্য")</span></span>
+                        <input class="classic-input" style="height:32px !important;" @bind="editor.Remarks" placeholder="Any institutional note..." />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Action Buttons -->
+            <div class="appt-form-footer" style="display:flex !important; align-items:center !important; justify-content:space-between !important; padding:9px 16px !important; background:#f8fafc !important; border-top:1px solid #e2e8f0 !important; border-bottom-left-radius:7px; border-bottom-right-radius:7px;">
+                <div class="appt-footer-left-info" style="display:flex; align-items:center; gap:8px;">
+                    @if (editor.ID > 0)
+                    {
+                        <button type="button" class="btn btn-ghost appt-btn" style="color:#dc2626;" @onclick="DeleteAsync" title="@I18n.T("Delete Certificate")">
+                            🗑️ @I18n.T("Delete")
+                        </button>
+                    }
+                    <button type="button" class="btn btn-ghost appt-btn" @onclick="ResetForm" title="@I18n.T("Clear Form (Esc)")">
+                        @I18n.T("Clear / New")
+                    </button>
+                </div>
+
+                <div class="appt-footer-right-actions" style="margin-left:auto !important; display:flex !important; align-items:center !important; gap:8px !important;">
+                    @if (editor.ID > 0)
+                    {
+                        <button type="button" class="btn btn-secondary appt-btn" @onclick="PrintCertificateAsync" title="@I18n.T("Print Official A4 Certificate")">
+                            🖨️ @I18n.T("Print Certificate", "সার্টিফিকেট প্রিন্ট")
+                        </button>
+                    }
+
+                    <button type="button" class="btn btn-primary appt-btn appt-book-btn" @onclick="SaveAsync" disabled="@isSaving" title="@I18n.T("Save and Issue Certificate (Ctrl+Enter / Ctrl+S)")">
+                        @if (isSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width:12px; height:12px; margin-right:4px;"></span>
+                            <span>@I18n.T("Issuing...")</span>
+                        }
+                        else
+                        {
+                            <span>@(editor.ID == 0 ? "✓ " + I18n.T("Issue Certificate", "সার্টিফিকেট ইস্যু করুন") : "✓ " + I18n.T("Update Certificate", "আপডেট করুন"))</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Certificates Archive & Register -->
+        <div class="cert-card">
+            <div class="cert-card-header">
+                <h2>
+                    <span>📋 @I18n.T("Issued Certificates Register", "ইস্যুকৃত সার্টিফিকেট রেজিস্ট্রি")</span>
+                </h2>
+                <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:800; font-size:11px;">
+                    @(filteredCertificates.Count) @I18n.T("Certificates")
+                </span>
+            </div>
+
+            <div style="padding:10px 12px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; flex-direction:column; gap:8px;">
+                <!-- Search input -->
+                <div style="position:relative; width:100%;">
+                    <input class="classic-input"
+                           style="height:30px !important; padding-left:28px !important;"
+                           @bind="listSearchQuery"
+                           @bind:event="oninput"
+                           placeholder="@I18n.T("Search by Patient, Cert #, Reg #, Doctor...")" />
+                    <span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:#94a3b8; pointer-events:none; font-size:12px;">🔍</span>
+                    @if (!string.IsNullOrWhiteSpace(listSearchQuery))
+                    {
+                        <button type="button" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:#94a3b8; cursor:pointer;" @onclick='() => listSearchQuery = ""'>✕</button>
+                    }
+                </div>
+
+                <!-- Type filter & doctor filter -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+                    <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-sm @(typeFilter == "" ? "btn-primary" : "btn-ghost")" style="font-size:10px; padding:2px 7px; height:24px;" @onclick='() => typeFilter = ""'>
+                            @I18n.T("All")
+                        </button>
+                        <button type="button" class="btn btn-sm @(typeFilter == "Birth" ? "btn-primary" : "btn-ghost")" style="font-size:10px; padding:2px 7px; height:24px;" @onclick='() => typeFilter = "Birth"'>
+                            @I18n.T("Birth")
+                        </button>
+                        <button type="button" class="btn btn-sm @(typeFilter == "Death" ? "btn-primary" : "btn-ghost")" style="font-size:10px; padding:2px 7px; height:24px;" @onclick='() => typeFilter = "Death"'>
+                            @I18n.T("Death")
+                        </button>
+                        <button type="button" class="btn btn-sm @(typeFilter == "Fitness" ? "btn-primary" : "btn-ghost")" style="font-size:10px; padding:2px 7px; height:24px;" @onclick='() => typeFilter = "Fitness"'>
+                            @I18n.T("Fitness")
+                        </button>
+                        <button type="button" class="btn btn-sm @(typeFilter == "Medical" ? "btn-primary" : "btn-ghost")" style="font-size:10px; padding:2px 7px; height:24px;" @onclick='() => typeFilter = "Medical"'>
+                            @I18n.T("Medical")
+                        </button>
+                    </div>
+
+                    <select class="classic-input" style="height:24px !important; min-height:24px !important; font-size:10.5px !important; width:auto; padding:0 6px !important;" @bind="doctorFilter">
+                        <option value="0">@I18n.T("All Doctors")</option>
+                        @foreach (var doc in doctors)
+                        {
+                            <option value="@doc.ID">@DoctorDisplayName(doc)</option>
+                        }
+                    </select>
+                </div>
+            </div>
+
+            <!-- List of Certificates -->
+            <div style="max-height: 620px; overflow-y: auto;">
+                @if (!filteredCertificates.Any())
+                {
+                    <div style="padding:32px 16px; text-align:center; color:#64748b; font-size:12px;">
+                        @I18n.T("No medical certificates found matching criteria.")
+                    </div>
+                }
+                else
+                {
+                    @foreach (var item in filteredCertificates)
+                    {
+                        var isSel = editor.ID == item.ID;
+                        var pName = patientNames.GetValueOrDefault(item.PatientID, "—");
+                        <div class="ot-item-row @(isSel ? "selected" : "")" @onclick="() => SelectCertificate(item)">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="font-size:12px; font-weight:800; color:#0f172a;">
+                                    @item.CertificateNo
+                                </span>
+                                <span class="cert-type-badge @GetBadgeClass(item.CertificateType)">
+                                    @item.CertificateType
+                                </span>
+                            </div>
+
+                            <div style="font-size:11px; color:#334155; margin-top:3px; display:flex; justify-content:space-between;">
+                                <span>👤 @pName (#@item.PatientID)</span>
+                                <span>👨‍⚕️ @DoctorName(item.DoctorID)</span>
+                            </div>
+
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                                <div style="font-size:10.5px; color:#64748b;">
+                                    📅 @item.IssueDate.ToString("dd MMM yyyy, hh:mm tt")
+                                </div>
+                                <div style="display:flex; gap:4px;" @onclick:stopPropagation="true">
+                                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px; padding:1px 6px;" @onclick="() => SelectCertificate(item)" title="@I18n.T("Edit Certificate")">
+                                        ✏️ @I18n.T("Edit")
+                                    </button>
+                                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px; padding:1px 6px;" @onclick="() => PrintSpecificCertificateAsync(item)" title="@I18n.T("Print Certificate")">
+                                        🖨️
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden Printable Official A4 Certificate -->
+<div id="medical-certificate-print" style="display:none;">
+    @if (editor.ID > 0)
+    {
+        <div style="padding:40px; font-family:'Times New Roman', serif; max-width:800px; margin:0 auto; color:#0f172a; line-height:1.6; border:8px double #0284c7; min-height:980px; box-sizing:border-box; position:relative;">
+            <div style="text-align:center; border-bottom:2px solid #0284c7; padding-bottom:12px; margin-bottom:24px;">
+                <h1 style="margin:0; font-size:24px; font-weight:900; color:#0284c7; letter-spacing:1px;">@Branding.HospitalName</h1>
+                <div style="font-size:12px; color:#475569; margin-top:3px;">@Branding.Tagline &bull; Medical Records Division</div>
+                <div style="font-size:16px; font-weight:900; text-transform:uppercase; margin-top:16px; letter-spacing:2px; text-decoration:underline;">
+                    @(GetCertificateTitle(editor.CertificateType).ToUpperInvariant()) CERTIFICATE
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:12px; font-weight:700; margin-top:12px;">
+                    <span>Cert. No: <strong>@editor.CertificateNo</strong></span>
+                    <span>Date of Issue: <strong>@editor.IssueDate.ToString("dd MMMM yyyy")</strong></span>
+                </div>
+            </div>
+
+            @if (editor.CertificateType == "Birth")
+            {
+                <div style="font-size:14px; text-align:justify; margin-top:20px;">
+                    <p>This is to officially certify that a <strong>@birthData.Gender</strong> child was born alive in this Hospital on <strong>@birthData.BirthDateTime.ToString("dddd, dd MMMM yyyy at hh:mm tt")</strong>.</p>
+
+                    <table style="width:100%; border-collapse:collapse; margin-top:16px; font-size:13px;">
+                        <tr><td style="padding:5px 0; width:35%;"><strong>Child's Name:</strong></td><td>@(string.IsNullOrWhiteSpace(birthData.BabyName) ? "Baby of " + birthData.MotherName : birthData.BabyName)</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Sex:</strong></td><td>@birthData.Gender</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Mother's Full Name:</strong></td><td>@birthData.MotherName (Patient ID: #@editor.PatientID)</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Father's Full Name:</strong></td><td>@birthData.FatherName</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Birth Weight:</strong></td><td>@birthData.BirthWeight</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Delivery Type:</strong></td><td>@birthData.DeliveryMethod</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Gestational Age:</strong></td><td>@birthData.GestationalAge</td></tr>
+                        <tr><td style="padding:5px 0;"><strong>Permanent Address:</strong></td><td>@(birthData.ParentsAddress ?? "—")</td></tr>
+                    </table>
+
+                    <p style="margin-top:20px;">This certificate is issued from the authentic hospital clinical records.</p>
+                </div>
+            }
+            else if (editor.CertificateType == "Death")
+            {
+                <div style="font-size:14px; text-align:justify; margin-top:20px;">
+                    <p>This is to certify that <strong>@selectedPatient?.Name</strong>, aged <strong>@PatientAge(selectedPatient)</strong>, Gender: <strong>@selectedPatient?.Sex</strong>, Patient ID: <strong>#@editor.PatientID</strong>, resident of <strong>@PatientAddress(selectedPatient)</strong>, expired at this hospital on <strong>@deathData.DeathDateTime.ToString("dddd, dd MMMM yyyy at hh:mm tt")</strong>.</p>
+
+                    <div style="margin-top:16px; border:1px solid #000; padding:12px;">
+                        <div style="font-weight:800; text-decoration:underline; margin-bottom:6px;">MEDICAL CAUSE OF DEATH:</div>
+                        <div style="margin-bottom:6px;"><strong>1. Immediate Cause (Part I-a):</strong> @deathData.ImmediateCause</div>
+                        @if (!string.IsNullOrWhiteSpace(deathData.AntecedentCause))
+                        {
+                            <div style="margin-bottom:6px;"><strong>2. Antecedent Cause (Part I-b):</strong> @deathData.AntecedentCause</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(deathData.UnderlyingCause))
+                        {
+                            <div style="margin-bottom:6px;"><strong>3. Underlying Cause (Part I-c):</strong> @deathData.UnderlyingCause</div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(deathData.ContributoryConditions))
+                        {
+                            <div><strong>4. Other Significant Conditions (Part II):</strong> @deathData.ContributoryConditions</div>
+                        }
+                    </div>
+
+                    <p style="margin-top:14px;"><strong>Place of Death:</strong> @deathData.PlaceOfDeath</p>
+                </div>
+            }
+            else if (editor.CertificateType == "Fitness")
+            {
+                <div style="font-size:14px; text-align:justify; margin-top:20px;">
+                    <p>This is to certify that I have clinically examined <strong>@selectedPatient?.Name</strong>, aged <strong>@PatientAge(selectedPatient)</strong>, Gender: <strong>@selectedPatient?.Sex</strong>, bearing Patient Registration ID: <strong>#@editor.PatientID</strong>, resident of <strong>@PatientAddress(selectedPatient)</strong>.</p>
+
+                    <p><strong>Purpose of Examination:</strong> @fitnessData.Purpose</p>
+
+                    @if (!string.IsNullOrWhiteSpace(fitnessData.PhysicalFindings))
+                    {
+                        <p><strong>Clinical & Physical Findings:</strong> @fitnessData.PhysicalFindings</p>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(fitnessData.IdentificationMarks))
+                    {
+                        <p><strong>Marks of Identification:</strong> @fitnessData.IdentificationMarks</p>
+                    }
+
+                    <div style="margin-top:20px; font-size:14px; font-weight:700; line-height:1.7; background:#f8fafc; padding:14px; border:1px solid #cbd5e1; border-radius:4px;">
+                        @(string.IsNullOrWhiteSpace(fitnessData.CertificationText) ? "Based on my clinical examination and investigations, I find the candidate medically fit." : fitnessData.CertificationText)
+                    </div>
+                </div>
+            }
+            else if (editor.CertificateType == "Medical")
+            {
+                <div style="font-size:14px; text-align:justify; margin-top:20px;">
+                    <p>This is to certify that <strong>@selectedPatient?.Name</strong>, aged <strong>@PatientAge(selectedPatient)</strong>, Gender: <strong>@selectedPatient?.Sex</strong>, Patient Registration ID: <strong>#@editor.PatientID</strong>, resident of <strong>@PatientAddress(selectedPatient)</strong>, was under my professional medical care and treatment.</p>
+
+                    <div style="margin-top:16px; border:1px solid #cbd5e1; background:#f8fafc; padding:14px; border-radius:4px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+                            <tr>
+                                <td style="padding:4px 0; width:35%;"><strong>Clinical Diagnosis / Illness:</strong></td>
+                                <td style="padding:4px 0; font-weight:800; color:#0284c7;">@medicalData.Diagnosis</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 0;"><strong>Period of Medical Leave:</strong></td>
+                                <td style="padding:4px 0;">From <strong>@medicalData.LeaveFrom.ToString("dd MMMM yyyy")</strong> to <strong>@medicalData.LeaveTo.ToString("dd MMMM yyyy")</strong></td>
+                            </tr>
+                            <tr>
+                                <td style="padding:4px 0;"><strong>Total Days Recommended:</strong></td>
+                                <td style="padding:4px 0;"><strong>@medicalData.TotalDays days</strong></td>
+                            </tr>
+                            @if (medicalData.FitResumeDate.HasValue)
+                            {
+                                <tr>
+                                    <td style="padding:4px 0;"><strong>Fit to Resume Duty On:</strong></td>
+                                    <td style="padding:4px 0; font-weight:750;">@medicalData.FitResumeDate.Value.ToString("dd MMMM yyyy")</td>
+                                </tr>
+                            }
+                        </table>
+                    </div>
+
+                    <p style="margin-top:20px; line-height:1.8;">
+                        I consider that a period of absence from duty of <strong>@medicalData.TotalDays days</strong> with effect from <strong>@medicalData.LeaveFrom.ToString("dd MMMM yyyy")</strong> is absolute necessary for the restoration of his/her health.
+                    </p>
+
+                    @if (!string.IsNullOrWhiteSpace(medicalData.RecommendationText))
+                    {
+                        <div style="margin-top:12px; font-size:13px; font-style:italic; color:#334155;">
+                            Note: @medicalData.RecommendationText
+                        </div>
+                    }
+                </div>
+            }
+
+            <!-- Official Signatures -->
+            <div style="position:absolute; bottom:50px; left:40px; right:40px; display:flex; justify-content:space-between; font-size:12px; text-align:center;">
+                <div style="border-top:1px solid #000; width:180px; padding-top:6px;">
+                    Hospital Seal & Verification
+                </div>
+                <div style="border-top:1px solid #000; width:220px; padding-top:6px;">
+                    <strong>@DoctorName(editor.DoctorID)</strong><br />
+                    Certifying Medical Officer / Consultant<br />
+                    BMDC Reg No: Registered Physician
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public string? type { get; set; }
+
+    private MedicalCertificate editor = new() { IssueDate = DateTime.Now };
+    private string currentType = "Birth";
+    private List<MedicalCertificate> allCertificates = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<string, string> patientNames = [];
+
+    private Registration? selectedPatient;
+    private string patientSearchQuery = string.Empty;
+    private bool showPatientDropdown = false;
+    private List<Registration> suggestedRegistrations = [];
+    private bool hasMorePatientSuggestions = false;
+    private bool isLoadingMorePatients = false;
+    private const int PatientBatchSize = 20;
+    private int totalPatientsCount = 0;
+
+    private DotNetObjectReference<MedicalCertificates>? dotNetRef;
+
+    private BirthCertModel birthData = new();
+    private DeathCertModel deathData = new();
+    private FitnessCertModel fitnessData = new();
+    private MedicalCertModel medicalData = new();
+
+    private string listSearchQuery = string.Empty;
+    private string typeFilter = string.Empty;
+    private int doctorFilter = 0;
+
+    private bool isSaving = false;
+    private string? message;
+    private string messageClass = "info";
+
+    private int birthCount => allCertificates.Count(x => x.CertificateType == "Birth");
+    private int deathCount => allCertificates.Count(x => x.CertificateType == "Death");
+    private int fitnessCount => allCertificates.Count(x => x.CertificateType == "Fitness");
+    private int medicalCount => allCertificates.Count(x => x.CertificateType == "Medical");
+
+    private List<MedicalCertificate> filteredCertificates
+    {
+        get
+        {
+            var q = allCertificates.AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(typeFilter))
+                q = q.Where(x => string.Equals(x.CertificateType, typeFilter, StringComparison.OrdinalIgnoreCase));
+
+            if (doctorFilter > 0)
+                q = q.Where(x => x.DoctorID == doctorFilter);
+
+            if (!string.IsNullOrWhiteSpace(listSearchQuery))
+            {
+                var term = listSearchQuery.Trim().ToLowerInvariant();
+                q = q.Where(x => (x.CertificateNo?.ToLowerInvariant().Contains(term) ?? false) ||
+                                 (x.PatientID?.ToLowerInvariant().Contains(term) ?? false) ||
+                                 (x.CertificateType?.ToLowerInvariant().Contains(term) ?? false) ||
+                                 (patientNames.GetValueOrDefault(x.PatientID ?? "", "").ToLowerInvariant().Contains(term)) ||
+                                 (DoctorName(x.DoctorID).ToLowerInvariant().Contains(term)));
+            }
+
+            return q.OrderByDescending(x => x.IssueDate).ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            if (type.Equals("death", StringComparison.OrdinalIgnoreCase)) currentType = "Death";
+            else if (type.Equals("fitness", StringComparison.OrdinalIgnoreCase)) currentType = "Fitness";
+            else if (type.Equals("medical", StringComparison.OrdinalIgnoreCase)) currentType = "Medical";
+            else currentType = "Birth";
+        }
+
+        editor.CertificateType = currentType;
+        await LoadDataAsync();
+        GenerateCertificateNumber();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        dotNetRef ??= DotNetObjectReference.Create(this);
+        if (!showPatientDropdown) return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.initPatientIdScroll", "cert-patient-suggestions-list", dotNetRef, nameof(LoadMorePatientsFromJs));
+        }
+        catch { }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+            totalPatientsCount = await db.Registrations.AsNoTracking().CountAsync();
+
+            allCertificates = await db.MedicalCertificates.AsNoTracking().OrderByDescending(x => x.IssueDate).ToListAsync();
+
+            var pIds = allCertificates.Select(x => x.PatientID).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
+            if (pIds.Count > 0)
+            {
+                var regs = await db.Registrations.AsNoTracking()
+                    .Where(x => pIds.Contains(x.PatientID))
+                    .ToDictionaryAsync(x => x.PatientID, x => x.Name);
+                foreach (var kvp in regs)
+                {
+                    patientNames[kvp.Key] = kvp.Value;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            message = $"Error loading data: {ex.Message}";
+            messageClass = "danger";
+        }
+    }
+
+    private static IQueryable<Registration> BuildPatientSuggestionQuery(HpmDbContext db, string term)
+    {
+        var query = db.Registrations.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(term))
+        {
+            query = query.Where(r => r.PatientID.Contains(term)
+                || r.Name.Contains(term)
+                || (r.Contact != null && r.Contact.Contains(term)));
+        }
+        return query.OrderByDescending(x => x.TransDate).ThenByDescending(x => x.PatientID);
+    }
+
+    private async Task LoadPatientSuggestionsAsync(bool reset)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = BuildPatientSuggestionQuery(db, patientSearchQuery.Trim());
+        var skip = reset ? 0 : suggestedRegistrations.Count;
+        var batch = await query.Skip(skip).Take(PatientBatchSize).ToListAsync();
+
+        foreach (var p in batch)
+        {
+            patientNames[p.PatientID] = p.Name;
+        }
+
+        if (reset)
+        {
+            suggestedRegistrations = batch;
+            try { await JS.InvokeVoidAsync("hpm.resetPatientIdScrollTop", "cert-patient-suggestions-list"); } catch { }
+        }
+        else
+        {
+            suggestedRegistrations.AddRange(batch);
+        }
+
+        hasMorePatientSuggestions = batch.Count == PatientBatchSize;
+        showPatientDropdown = true;
+    }
+
+    private async Task HandlePatientSearchInputAsync(ChangeEventArgs e)
+    {
+        patientSearchQuery = e.Value?.ToString() ?? "";
+        await LoadPatientSuggestionsAsync(reset: true);
+    }
+
+    private async Task ShowPatientSuggestionsAsync()
+    {
+        await LoadPatientSuggestionsAsync(reset: true);
+    }
+
+    [JSInvokable]
+    public async Task LoadMorePatientsFromJs()
+    {
+        if (isLoadingMorePatients || !hasMorePatientSuggestions || !showPatientDropdown) return;
+        isLoadingMorePatients = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            await LoadPatientSuggestionsAsync(reset: false);
+        }
+        catch
+        {
+            hasMorePatientSuggestions = false;
+        }
+        finally
+        {
+            isLoadingMorePatients = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ChangeType(string newType)
+    {
+        currentType = newType;
+        editor.CertificateType = newType;
+        if (editor.ID == 0)
+            GenerateCertificateNumber();
+    }
+
+    private void GenerateCertificateNumber()
+    {
+        var prefix = currentType switch
+        {
+            "Birth" => "BC",
+            "Death" => "DC",
+            "Fitness" => "FC",
+            "Medical" => "MC",
+            _ => "CERT"
+        };
+        var count = allCertificates.Count(x => x.CertificateType == currentType) + 1;
+        editor.CertificateNo = $"{prefix}-{DateTime.Now.Year}-{count:D4}";
+    }
+
+    private void SelectPatient(Registration p)
+    {
+        selectedPatient = p;
+        editor.PatientID = p.PatientID;
+        patientNames[p.PatientID] = p.Name;
+        showPatientDropdown = false;
+        patientSearchQuery = "";
+
+        if (currentType == "Birth")
+        {
+            birthData.MotherName = p.Name;
+            birthData.ParentsAddress = PatientAddress(p);
+        }
+    }
+
+    private void ClearSelectedPatient()
+    {
+        selectedPatient = null;
+        editor.PatientID = "";
+    }
+
+    private async Task SelectCertificate(MedicalCertificate cert)
+    {
+        editor = new MedicalCertificate
+        {
+            ID = cert.ID,
+            CertificateNo = cert.CertificateNo,
+            CertificateType = cert.CertificateType,
+            PatientID = cert.PatientID,
+            RegNo = cert.RegNo,
+            IssueDate = cert.IssueDate,
+            DoctorID = cert.DoctorID,
+            DetailsJson = cert.DetailsJson,
+            Remarks = cert.Remarks,
+            IssuedBy = cert.IssuedBy,
+            CreatedDate = cert.CreatedDate
+        };
+
+        currentType = cert.CertificateType;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        selectedPatient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == cert.PatientID);
+        if (selectedPatient != null) patientNames[selectedPatient.PatientID] = selectedPatient.Name;
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(cert.DetailsJson))
+            {
+                if (currentType == "Birth")
+                    birthData = JsonSerializer.Deserialize<BirthCertModel>(cert.DetailsJson) ?? new();
+                else if (currentType == "Death")
+                    deathData = JsonSerializer.Deserialize<DeathCertModel>(cert.DetailsJson) ?? new();
+                else if (currentType == "Fitness")
+                    fitnessData = JsonSerializer.Deserialize<FitnessCertModel>(cert.DetailsJson) ?? new();
+                else if (currentType == "Medical")
+                    medicalData = JsonSerializer.Deserialize<MedicalCertModel>(cert.DetailsJson) ?? new();
+            }
+        }
+        catch { }
+    }
+
+    private void ResetForm()
+    {
+        editor = new MedicalCertificate { IssueDate = DateTime.Now, CertificateType = currentType };
+        selectedPatient = null;
+        birthData = new();
+        deathData = new();
+        fitnessData = new();
+        medicalData = new();
+        GenerateCertificateNumber();
+        message = null;
+    }
+
+    private void CalculateLeaveDays()
+    {
+        var days = (medicalData.LeaveTo.Date - medicalData.LeaveFrom.Date).Days + 1;
+        medicalData.TotalDays = Math.Max(1, days);
+        medicalData.FitResumeDate = medicalData.LeaveTo.AddDays(1);
+    }
+
+    private async Task HandleGlobalKeyDown(KeyboardEventArgs e)
+    {
+        if ((e.CtrlKey || e.MetaKey) && (e.Key == "s" || e.Key == "S" || e.Key == "Enter"))
+        {
+            await SaveAsync();
+        }
+        else if (e.Key == "Escape" || e.Key == "F2")
+        {
+            ResetForm();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.PatientID))
+        {
+            message = I18n.IsBangla ? "অনুগ্রহ করে একজন রোগী নির্বাচন করুন।" : "Please select a patient.";
+            messageClass = "danger";
+            return;
+        }
+
+        if (editor.DoctorID <= 0)
+        {
+            message = I18n.IsBangla ? "সার্টিফাইং চিকিৎসক নির্বাচন করুন।" : "Please select a certifying doctor.";
+            messageClass = "danger";
+            return;
+        }
+
+        editor.CertificateType = currentType;
+        if (currentType == "Birth")
+            editor.DetailsJson = JsonSerializer.Serialize(birthData);
+        else if (currentType == "Death")
+            editor.DetailsJson = JsonSerializer.Serialize(deathData);
+        else if (currentType == "Fitness")
+            editor.DetailsJson = JsonSerializer.Serialize(fitnessData);
+        else if (currentType == "Medical")
+            editor.DetailsJson = JsonSerializer.Serialize(medicalData);
+
+        isSaving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (editor.ID == 0)
+            {
+                editor.CreatedDate = DateTime.Now;
+                db.MedicalCertificates.Add(editor);
+                await db.SaveChangesAsync();
+                message = I18n.IsBangla ? "মেডিকেল সার্টিফিকেট সফলভাবে ইস্যু করা হয়েছে।" : "Certificate issued successfully.";
+            }
+            else
+            {
+                var existing = await db.MedicalCertificates.FindAsync(editor.ID);
+                if (existing != null)
+                {
+                    existing.CertificateNo = editor.CertificateNo;
+                    existing.CertificateType = editor.CertificateType;
+                    existing.PatientID = editor.PatientID;
+                    existing.DoctorID = editor.DoctorID;
+                    existing.IssueDate = editor.IssueDate;
+                    existing.DetailsJson = editor.DetailsJson;
+                    existing.Remarks = editor.Remarks;
+                    await db.SaveChangesAsync();
+                    message = I18n.IsBangla ? "সার্টিফিকেট সফলভাবে আপডেট করা হয়েছে।" : "Certificate updated successfully.";
+                }
+            }
+
+            messageClass = "success";
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            message = $"Error saving certificate: {ex.Message}";
+            messageClass = "danger";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (editor.ID == 0) return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var item = await db.MedicalCertificates.FindAsync(editor.ID);
+            if (item != null)
+            {
+                db.MedicalCertificates.Remove(item);
+                await db.SaveChangesAsync();
+                message = I18n.IsBangla ? "সার্টিফিকেট মুছে ফেলা হয়েছে।" : "Certificate deleted.";
+                messageClass = "success";
+                ResetForm();
+                await LoadDataAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            message = $"Error deleting: {ex.Message}";
+            messageClass = "danger";
+        }
+    }
+
+    private async Task PrintCertificateAsync() => await JS.InvokeVoidAsync("hpm.printElement", "medical-certificate-print");
+
+    private async Task PrintSpecificCertificateAsync(MedicalCertificate cert)
+    {
+        await SelectCertificate(cert);
+        await Task.Delay(100);
+        await PrintCertificateAsync();
+    }
+
+    private string DoctorName(int? id)
+    {
+        if (!id.HasValue || id.Value <= 0) return "—";
+        var doc = doctors.FirstOrDefault(d => d.ID == id.Value);
+        return doc != null ? DoctorDisplayName(doc) : "—";
+    }
+
+    private static string DoctorDisplayName(DoctorsProfile d)
+    {
+        var title = d.Title?.Trim();
+        var name = d.Name?.Trim() ?? "";
+        return string.IsNullOrWhiteSpace(title) ? name : $"{title} {name}".Trim();
+    }
+
+    private static string GetBadgeClass(string? t) => t switch
+    {
+        "Birth" => "cert-badge-birth",
+        "Death" => "cert-badge-death",
+        "Medical" => "cert-badge-medical",
+        _ => "cert-badge-fitness"
+    };
+
+    private static string GetCertificateTitle(string? t) => t switch
+    {
+        "Birth" => "Birth",
+        "Death" => "Death",
+        "Fitness" => "Medical Fitness",
+        "Medical" => "Medical Illness & Sick Leave",
+        _ => "Medical"
+    };
+
+    private static string PatientAge(Registration? p)
+    {
+        if (p == null || !p.DateOfBirth.HasValue) return "—";
+        var today = DateTime.Today;
+        var birth = p.DateOfBirth.Value;
+        var years = today.Year - birth.Year;
+        if (birth.Date > today.AddYears(-years)) years--;
+        return $"{Math.Max(0, years)} Y";
+    }
+
+    private static string PatientAddress(Registration? p)
+    {
+        if (p == null) return "—";
+        var addr = string.Join(", ", new[] { p.PresentVillage, p.PresentPO, p.PresentPS, p.PresentDistrict }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        return string.IsNullOrWhiteSpace(addr) ? "—" : addr;
+    }
+
+    public void Dispose()
+    {
+        dotNetRef?.Dispose();
+    }
+
+    public class BirthCertModel
+    {
+        public string BabyName { get; set; } = string.Empty;
+        public string Gender { get; set; } = "Female";
+        public DateTime BirthDateTime { get; set; } = DateTime.Now;
+        public string BirthWeight { get; set; } = "3.0 kg";
+        public string DeliveryMethod { get; set; } = "Lower Segment Caesarean Section (LSCS)";
+        public string GestationalAge { get; set; } = "38 Weeks";
+        public string MotherName { get; set; } = string.Empty;
+        public string FatherName { get; set; } = string.Empty;
+        public string? ParentsAddress { get; set; }
+    }
+
+    public class DeathCertModel
+    {
+        public DateTime DeathDateTime { get; set; } = DateTime.Now;
+        public string PlaceOfDeath { get; set; } = "Intensive Care Unit (ICU)";
+        public string ImmediateCause { get; set; } = string.Empty;
+        public string? AntecedentCause { get; set; }
+        public string? UnderlyingCause { get; set; }
+        public string? ContributoryConditions { get; set; }
+    }
+
+    public class FitnessCertModel
+    {
+        public string Purpose { get; set; } = "Medical Fitness for Employment / Job";
+        public string? PhysicalFindings { get; set; } = "BP: 120/80 mmHg, Pulse: 72 bpm, Height: 170cm, Weight: 65kg";
+        public string? IdentificationMarks { get; set; }
+        public string CertificationText { get; set; } = "I have clinically examined the candidate and found him/her physically and mentally fit.";
+    }
+
+    public class MedicalCertModel
+    {
+        public string Diagnosis { get; set; } = string.Empty;
+        public DateTime LeaveFrom { get; set; } = DateTime.Today;
+        public DateTime LeaveTo { get; set; } = DateTime.Today.AddDays(7);
+        public int TotalDays { get; set; } = 8;
+        public DateTime? FitResumeDate { get; set; } = DateTime.Today.AddDays(8);
+        public string RecommendationText { get; set; } = "The patient is advised absolute physical bed rest and is medically unfit to attend official duties.";
+    }
+}

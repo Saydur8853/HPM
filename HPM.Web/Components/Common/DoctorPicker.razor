@@ -31,20 +31,26 @@
             {
                 var cleanName = CleanDoctorName(doctor);
                 var desig = GetDoctorDesignation(doctor);
+                var isSuggested = IsSuggested(doctor.ID);
+                var isSelected = Value == doctor.ID;
                 <button type="button"
-                        class="appt-doctor-clean-option @(Value == doctor.ID ? "selected" : "")"
-                        style="width: 100%; display: grid; grid-template-columns: 55px minmax(130px, 1fr) auto; gap: 8px; align-items: center; padding: 6px 10px; border: none; border-bottom: 1px solid #f1f5f9; background: @(Value == doctor.ID ? "#eff6ff" : "#ffffff"); text-align: left; cursor: pointer; box-sizing: border-box; transition: background 0.12s ease;"
+                        class="appt-doctor-clean-option @(isSelected ? "selected" : "")"
+                        style="width: 100%; display: grid; grid-template-columns: 55px minmax(130px, 1fr) auto; gap: 8px; align-items: center; padding: 6px 10px; border: none; border-bottom: 1px solid #f1f5f9; background: @(isSelected ? "#eff6ff" : (isSuggested ? "#fffdf5" : "#ffffff")); text-align: left; cursor: pointer; box-sizing: border-box; transition: background 0.12s ease;"
                         @onmousedown:preventDefault
                         @onclick="() => SelectAsync(doctor)">
-                    <span style="font-size: 10.5px; font-weight: 800; color: #0284c7; background: #e0f2fe; padding: 1px 5px; border-radius: 4px; text-align: center; white-space: nowrap;">
+                    <span style="font-size: 10.5px; font-weight: 800; color: @(isSuggested ? "#b45309" : "#0284c7"); background: @(isSuggested ? "#fef3c7" : "#e0f2fe"); padding: 1px 5px; border-radius: 4px; text-align: center; white-space: nowrap;">
                         D@(doctor.ID)
                     </span>
-                    <span style="font-size: 11.5px; font-weight: 650; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px;" title="@cleanName">
-                        @if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
+                    <span style="font-size: 11.5px; font-weight: 650; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 5px;" title="@cleanName">
+                        @if (isSuggested)
+                        {
+                            <span style="font-size: 10px; padding: 1px 4px; background: #fef3c7; color: #b45309; border: 1px solid #fde68a; border-radius: 3px; font-weight: 800; flex-shrink: 0; line-height: 1;" title="@I18n.T("Recent", "সম্প্রতি ব্যবহৃত")">⚡</span>
+                        }
+                        else if (doctor.Priority.HasValue && doctor.Priority.Value > 0)
                         {
                             <span style="font-size: 9.5px; padding: 1px 4px; background: #fef3c7; color: #b45309; border-radius: 3px; font-weight: 700; flex-shrink: 0;">⭐ #@doctor.Priority</span>
                         }
-                        @cleanName
+                        <span>@cleanName</span>
                     </span>
                     @if (!string.IsNullOrWhiteSpace(desig))
                     {
@@ -77,6 +83,8 @@
     [Parameter] public EventCallback<int?> ValueChanged { get; set; }
     [Parameter] public string Placeholder { get; set; } = "Search doctor...";
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? CacheKey { get; set; }
+    [Parameter] public IReadOnlyList<int>? SuggestedDoctorIds { get; set; }
 
     private readonly string listId = "doc-picker-list-" + Guid.NewGuid().ToString("N")[..8];
     private DotNetObjectReference<DoctorPicker>? dotNetRef;
@@ -84,6 +92,30 @@
     private bool showSuggestions;
     private int visibleCount = 15;
     private int? lastSyncedValue;
+
+    private List<int> cachedDoctorIds = [];
+
+    private List<int> EffectiveSuggestedIds
+    {
+        get
+        {
+            var list = new List<int>();
+            if (cachedDoctorIds.Count > 0)
+            {
+                list.AddRange(cachedDoctorIds);
+            }
+            if (SuggestedDoctorIds != null)
+            {
+                foreach (var id in SuggestedDoctorIds)
+                {
+                    if (!list.Contains(id)) list.Add(id);
+                }
+            }
+            return list;
+        }
+    }
+
+    private bool IsSuggested(int id) => EffectiveSuggestedIds.Contains(id);
 
     private List<DoctorsProfile> FilteredDoctors
     {
@@ -98,6 +130,13 @@
                 term = string.Empty;
             }
 
+            var suggestedList = EffectiveSuggestedIds;
+            var suggestedMap = new Dictionary<int, int>();
+            for (int i = 0; i < suggestedList.Count; i++)
+            {
+                suggestedMap[suggestedList[i]] = i;
+            }
+
             return Doctors
                 .Where(x => string.IsNullOrWhiteSpace(term)
                     || $"D{x.ID}".Equals(term, StringComparison.OrdinalIgnoreCase)
@@ -105,8 +144,10 @@
                     || CleanDoctorName(x).Contains(term, StringComparison.OrdinalIgnoreCase)
                     || CleanDoctorDegree(x).Contains(term, StringComparison.OrdinalIgnoreCase)
                     || (!string.IsNullOrWhiteSpace(x.Room) && x.Room.Contains(term, StringComparison.OrdinalIgnoreCase)))
-                .OrderByDescending(x => (x.Priority ?? 0) > 0)
+                .OrderBy(x => suggestedMap.TryGetValue(x.ID, out var idx) ? idx : int.MaxValue)
+                .ThenByDescending(x => (x.Priority ?? 0) > 0)
                 .ThenBy(x => x.Priority ?? int.MaxValue)
+                .ThenBy(x => IsInstitution(x) ? 1 : 0)
                 .ThenBy(x => CleanDoctorName(x), StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -122,6 +163,11 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender && !string.IsNullOrWhiteSpace(CacheKey))
+        {
+            await LoadCacheAsync();
+        }
+
         if (showSuggestions && !Disabled)
         {
             dotNetRef ??= DotNetObjectReference.Create(this);
@@ -131,6 +177,25 @@
             }
             catch { }
         }
+    }
+
+    private async Task LoadCacheAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CacheKey)) return;
+        try
+        {
+            var raw = await JS.InvokeAsync<string>("localStorage.getItem", $"hpm_picker_recent_{CacheKey}");
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                var ids = System.Text.Json.JsonSerializer.Deserialize<List<int>>(raw);
+                if (ids != null && ids.Count > 0)
+                {
+                    cachedDoctorIds = ids;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch { }
     }
 
     private async Task HandleInput(ChangeEventArgs e)
@@ -168,6 +233,23 @@
         lastSyncedValue = doctor.ID;
         searchText = $"D{doctor.ID} - {CleanDoctorName(doctor)}";
         showSuggestions = false;
+
+        if (!string.IsNullOrWhiteSpace(CacheKey))
+        {
+            try
+            {
+                cachedDoctorIds.Remove(doctor.ID);
+                cachedDoctorIds.Insert(0, doctor.ID);
+                if (cachedDoctorIds.Count > 6)
+                {
+                    cachedDoctorIds = cachedDoctorIds.Take(6).ToList();
+                }
+                var json = System.Text.Json.JsonSerializer.Serialize(cachedDoctorIds);
+                await JS.InvokeVoidAsync("localStorage.setItem", $"hpm_picker_recent_{CacheKey}", json);
+            }
+            catch { }
+        }
+
         await ValueChanged.InvokeAsync(doctor.ID);
     }
 
@@ -262,6 +344,18 @@
         var room = CleanDoctorRoom(d.Room);
         if (!string.IsNullOrWhiteSpace(room)) parts.Add($"Room {room}");
         return string.Join(" • ", parts);
+    }
+
+    public static bool IsInstitution(DoctorsProfile? d)
+    {
+        if (d is null) return false;
+        var name = d.Name ?? string.Empty;
+        return name.Contains("Hospital", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("HOS", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Clinic", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Diagnostic", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Medical College", StringComparison.OrdinalIgnoreCase)
+            || name.Contains("Dental Care", StringComparison.OrdinalIgnoreCase);
     }
 
     public void Dispose()

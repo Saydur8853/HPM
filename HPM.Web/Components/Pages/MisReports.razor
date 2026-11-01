@@ -1,0 +1,1715 @@
+@page "/reports/mis"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier + "," + RoleNames.Doctor)]
+@rendermode InteractiveServer
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@implements IDisposable
+@using System.Text
+@using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>@I18n.T("Hospital MIS & Operational Governance") | @Branding.HospitalName</PageTitle>
+
+<style>
+.mis-rep-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 12px 18px 48px;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+}
+
+/* 1. Top Header */
+.mis-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.mis-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+.mis-nav-link {
+    color: #0369a1;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+.mis-nav-link:hover {
+    background: #e0f2fe;
+    text-decoration: none;
+}
+.mis-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+}
+.mis-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.mis-sub {
+    font-size: 11.5px;
+    color: #64748b;
+    margin: 2px 0 0;
+}
+
+/* 2. Filter & Controls Card */
+.mis-filter-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+}
+.mis-filter-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.mis-presets-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.preset-btn {
+    padding: 4px 11px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #475569;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.preset-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+.preset-btn.active {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+}
+
+.mis-filter-inputs {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.mis-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 140px;
+}
+.mis-filter-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #475569;
+}
+
+/* Tab Filter Switcher */
+.mis-view-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: #f1f5f9;
+    padding: 3px;
+    border-radius: 7px;
+    overflow-x: auto;
+}
+.mis-view-tab {
+    padding: 5px 12px;
+    font-size: 11.5px;
+    font-weight: 700;
+    border: none;
+    background: transparent;
+    color: #475569;
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: all 0.12s;
+}
+.mis-view-tab:hover {
+    color: #0f172a;
+    background: rgba(255,255,255,0.6);
+}
+.mis-view-tab.active {
+    background: #ffffff;
+    color: #0284c7;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.08);
+}
+
+/* 3. Upgraded KPI Grid */
+.mis-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+}
+@@media (max-width: 1200px) {
+    .mis-kpi-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+@@media (max-width: 640px) {
+    .mis-kpi-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.mis-kpi-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+.mis-kpi-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(15,23,42,0.07);
+}
+.mis-kpi-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+.mis-kpi-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.3px;
+}
+.mis-kpi-icon-pill {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+}
+.mis-kpi-val {
+    font-size: 21px;
+    font-weight: 900;
+    line-height: 1.15;
+    margin-bottom: 2px;
+}
+.mis-kpi-sub {
+    font-size: 10.5px;
+    color: #64748b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 4. Financial Operational Turnover Banner */
+.mis-revenue-banner {
+    background: linear-gradient(135deg, #f8fafc 0%, #f0fdf4 100%);
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.mis-revenue-title {
+    font-size: 12px;
+    font-weight: 800;
+    color: #166534;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.mis-revenue-chips {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.mis-rev-chip {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 4px 9px;
+    display: flex;
+    flex-direction: column;
+    min-width: 95px;
+    text-align: center;
+}
+.mis-rev-chip-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+}
+.mis-rev-chip-val {
+    font-size: 12.5px;
+    font-weight: 850;
+    color: #0f172a;
+}
+.mis-rev-total {
+    background: #059669;
+    color: #ffffff;
+    border: 1px solid #047857;
+    border-radius: 6px;
+    padding: 5px 12px;
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+    text-align: center;
+}
+.mis-rev-total-label {
+    font-size: 9px;
+    font-weight: 750;
+    color: #d1fae5;
+    text-transform: uppercase;
+}
+.mis-rev-total-val {
+    font-size: 15px;
+    font-weight: 900;
+    color: #ffffff;
+}
+
+/* 5. 2-Col Operational Grid */
+.mis-dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@@media (max-width: 990px) {
+    .mis-dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 6. Content Cards */
+.mis-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    display: flex;
+    flex-direction: column;
+}
+.mis-card-header {
+    padding: 9px 14px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.mis-card-title {
+    font-size: 13px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.mis-card-search {
+    position: relative;
+    width: 180px;
+}
+.mis-card-search input {
+    width: 100%;
+    height: 26px !important;
+    padding-left: 22px !important;
+    font-size: 11px !important;
+    border-radius: 4px !important;
+    border: 1px solid #cbd5e1 !important;
+    box-sizing: border-box;
+}
+.mis-card-search span {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+    color: #64748b;
+    pointer-events: none;
+}
+
+/* Tables */
+.mis-table-wrap {
+    overflow-x: auto;
+    width: 100%;
+}
+.mis-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+.mis-table th {
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 800;
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid #cbd5e1;
+    white-space: nowrap;
+}
+.mis-table th.num, .mis-table td.num {
+    text-align: right;
+}
+.mis-table td {
+    padding: 6.5px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+}
+.mis-table tr:hover td {
+    background: #f8fafc;
+}
+
+/* Visual Progress Bars in Tables */
+.mis-prog-track {
+    width: 75px;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 3px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.mis-prog-fill {
+    height: 100%;
+    border-radius: 3px;
+}
+
+/* Metric Strip Inside Cards */
+.mis-metric-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+}
+@@media (max-width: 640px) {
+    .mis-metric-strip {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+.mis-cell {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 5px 8px;
+    text-align: center;
+}
+.mis-cell-label {
+    font-size: 9px;
+    font-weight: 800;
+    color: #64748b;
+    text-transform: uppercase;
+}
+.mis-cell-val {
+    font-size: 13.5px;
+    font-weight: 900;
+    color: #0f172a;
+    margin-top: 1px;
+}
+
+/* Demographics Gender Stacked Bar */
+.mis-gender-bar-card {
+    padding: 10px 14px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+}
+.mis-gender-track {
+    display: flex;
+    height: 10px;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    background: #e2e8f0;
+}
+.mis-gender-segment-male {
+    background: #0284c7;
+    height: 100%;
+    transition: width 0.3s;
+}
+.mis-gender-segment-female {
+    background: #db2777;
+    height: 100%;
+    transition: width 0.3s;
+}
+.mis-gender-segment-other {
+    background: #94a3b8;
+    height: 100%;
+    transition: width 0.3s;
+}
+.mis-gender-legend {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* Sub Tab Switcher Inside Card */
+.mis-card-subtabs {
+    display: flex;
+    gap: 4px;
+}
+.mis-subtab-btn {
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #475569;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.mis-subtab-btn.active {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+}
+
+/* Print Sheet */
+@@media print {
+    body * {
+        visibility: hidden;
+    }
+    #mis-report-print, #mis-report-print * {
+        visibility: visible;
+    }
+    #mis-report-print {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 10mm 14mm;
+        box-sizing: border-box;
+    }
+}
+</style>
+
+<div class="mis-rep-container">
+    <!-- 1. Top Header -->
+    <div class="mis-header">
+        <div>
+            <div class="mis-nav-links">
+                <a href="/reports" class="mis-nav-link">← @I18n.T("Reports Hub", "রিপোর্টস হাব")</a>
+                <span>&bull;</span>
+                <a href="/reports/financial" class="mis-nav-link">💰 @I18n.T("Financial Reports", "ফাইন্যান্সিয়াল রিপোর্ট")</a>
+                <span>&bull;</span>
+                <a href="/ipd/bed-occupancy" class="mis-nav-link">🛏️ @I18n.T("Bed Occupancy View", "বেড অকুপেন্সি ভিউ")</a>
+                <span>&bull;</span>
+                <a href="/ipd/patient-services" class="mis-nav-link">🩺 @I18n.T("Patient Services", "রোগী সেবা চার্জ")</a>
+            </div>
+            <div class="mis-title-row">
+                <h1 class="mis-title">
+                    <span>📊</span>
+                    <span>@I18n.T("Hospital Management Information System (MIS)", "হাসপাতাল ব্যবস্থাপনা ও পরিচালন পরিসংখ্যান (MIS)")</span>
+                </h1>
+                <span class="pill" style="font-size: 11px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 750;">
+                    @fromDate.ToString("dd MMM yyyy") — @toDate.ToString("dd MMM yyyy")
+                </span>
+                @if (isLoading)
+                {
+                    <span style="font-size: 11.5px; color: #0284c7; font-weight: 700;">⏳ @I18n.T("Calculating...", "গণনা হচ্ছে...")</span>
+                }
+            </div>
+            <p class="mis-sub">
+                @I18n.T("Executive hospital analytics: outpatient attendance, bed occupancy rates, surgical procedures, doctor performance, and laboratory metrics.", "সার্বিক হাসপাতাল পরিচালন পরিসংখ্যান: বহির্বিভাগ রোগী প্রবাহ, বেড অকুপেন্সি হার, পরীক্ষা ও ক্লিনিক্যাল কার্যক্রম।")
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+            <button class="btn btn-secondary" style="font-size: 11.5px; height: 32px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;" @onclick='() => PrintReportFormatAsync("A4")'>
+                <span>🖨️</span>
+                <span>@I18n.T("Print A4", "A4 প্রিন্ট")</span>
+            </button>
+            <button class="btn btn-secondary" style="font-size: 11.5px; height: 32px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;" @onclick='() => PrintReportFormatAsync("A5")'>
+                <span>📄</span>
+                <span>@I18n.T("Print A5", "A5 প্রিন্ট")</span>
+            </button>
+            <button class="btn btn-secondary" style="font-size: 11.5px; height: 32px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;" @onclick='() => PrintReportFormatAsync("80mm")'>
+                <span>🧾</span>
+                <span>@I18n.T("80mm Thermal", "৮০মিমি থার্মাল")</span>
+            </button>
+            <button class="btn btn-secondary" style="font-size: 11.5px; height: 32px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;" @onclick="ExportCsvAsync">
+                <span>📥</span>
+                <span>@I18n.T("Export CSV", "সিএসভি এক্সপোর্ট")</span>
+            </button>
+            <button class="btn btn-ghost" style="font-size: 12px; height: 32px; display: inline-flex; align-items: center; gap: 4px;" @onclick="LoadAsync">
+                <span>↻</span>
+                <span>@I18n.T("Refresh", "রিফ্রেশ")</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 2. Date Range Filter & View Selector Card -->
+    <div class="mis-filter-card">
+        <div class="mis-filter-top-row">
+            <div class="mis-presets-bar">
+                <span style="font-size: 11px; font-weight: 800; color: #475569; margin-right: 4px;">@I18n.T("Quick Period", "কুইক পিরিয়ড"):</span>
+                <button type="button" class="preset-btn @(currentPreset == "today" ? "active" : "")" @onclick="SetToday">@I18n.T("Today", "আজ")</button>
+                <button type="button" class="preset-btn @(currentPreset == "yesterday" ? "active" : "")" @onclick="SetYesterday">@I18n.T("Yesterday", "গতকাল")</button>
+                <button type="button" class="preset-btn @(currentPreset == "7days" ? "active" : "")" @onclick="SetLast7Days">@I18n.T("Last 7 Days", "বিগত ৭ দিন")</button>
+                <button type="button" class="preset-btn @(currentPreset == "month" ? "active" : "")" @onclick="SetThisMonth">@I18n.T("This Month", "চলতি মাস")</button>
+                <button type="button" class="preset-btn @(currentPreset == "year" ? "active" : "")" @onclick="SetThisYear">@I18n.T("This Year", "চলতি বছর")</button>
+            </div>
+
+            <!-- View Filter Switcher -->
+            <div class="mis-view-tabs">
+                <button type="button" class="mis-view-tab @(activeViewTab == "All" ? "active" : "")" @onclick='() => activeViewTab = "All"'>
+                    <span>📊</span>
+                    <span>@I18n.T("All Sections", "সার্বিক ড্যাশবোর্ড")</span>
+                </button>
+                <button type="button" class="mis-view-tab @(activeViewTab == "IPD" ? "active" : "")" @onclick='() => activeViewTab = "IPD"'>
+                    <span>🛏️</span>
+                    <span>@I18n.T("Inpatients & Beds", "ইনপেশেন্ট ও বেড")</span>
+                </button>
+                <button type="button" class="mis-view-tab @(activeViewTab == "OPD" ? "active" : "")" @onclick='() => activeViewTab = "OPD"'>
+                    <span>🩺</span>
+                    <span>@I18n.T("OPD & Doctors", "ওপিডি ও ডাক্তার")</span>
+                </button>
+                <button type="button" class="mis-view-tab @(activeViewTab == "Lab" ? "active" : "")" @onclick='() => activeViewTab = "Lab"'>
+                    <span>🔬</span>
+                    <span>@I18n.T("Diagnostics & OT", "ল্যাব ও সার্জারি")</span>
+                </button>
+                <button type="button" class="mis-view-tab @(activeViewTab == "Demo" ? "active" : "")" @onclick='() => activeViewTab = "Demo"'>
+                    <span>👥</span>
+                    <span>@I18n.T("Demographics", "রোগী প্রোফাইল")</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="mis-filter-inputs">
+            <div class="mis-filter-group">
+                <span class="mis-filter-label">@I18n.T("From Date", "শুরুর তারিখ")</span>
+                <input type="date" class="classic-input" value="@fromDate.ToString("yyyy-MM-dd")" @onchange="OnFromDateChanged" style="height: 30px !important; font-size: 12px !important;" />
+            </div>
+            <div class="mis-filter-group">
+                <span class="mis-filter-label">@I18n.T("To Date", "শেষের তারিখ")</span>
+                <input type="date" class="classic-input" value="@toDate.ToString("yyyy-MM-dd")" @onchange="OnToDateChanged" style="height: 30px !important; font-size: 12px !important;" />
+            </div>
+            <button type="button" class="btn btn-primary" style="height: 30px; font-size: 12px; font-weight: 700; padding: 0 16px;" @onclick="LoadAsync">
+                @I18n.T("Generate MIS Analytics", "বিশ্লেষণ তৈরি করুন")
+            </button>
+        </div>
+    </div>
+
+    <!-- 3. Top Executive KPI Metric Cards (6-Grid) -->
+    <div class="mis-kpi-grid">
+        <!-- Card 1: OPD Outpatients -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #0284c7;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("Total Outpatients", "মোট বহির্বিভাগ")</span>
+                <div class="mis-kpi-icon-pill" style="background: #e0f2fe; color: #0369a1;">👥</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #0369a1;">@(opdTicketsCount + appointmentsCount)</div>
+            <div class="mis-kpi-sub">
+                <b>@opdTicketsCount</b> @I18n.T("Tickets") &bull; <b>@appointmentsCount</b> @I18n.T("Appts")
+            </div>
+        </div>
+
+        <!-- Card 2: Emergency -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #ef4444;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("Emergency Cases", "জরুরি রোগী")</span>
+                <div class="mis-kpi-icon-pill" style="background: #fee2e2; color: #dc2626;">🚨</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #dc2626;">@emergencyCasesCount</div>
+            <div class="mis-kpi-sub">@I18n.T("Casualty encounters logged", "জরুরি চিকিৎসা সেবা")</div>
+        </div>
+
+        <!-- Card 3: Inpatient Admissions -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #8b5cf6;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("IPD Admissions", "ভর্তি রোগী")</span>
+                <div class="mis-kpi-icon-pill" style="background: #ede9fe; color: #6d28d9;">🛏️</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #6d28d9;">@ipdAdmissionsCount</div>
+            <div class="mis-kpi-sub">
+                <b>@ipdDischargesCount</b> @I18n.T("Discharges") &bull; <b>@currentlyAdmittedCount</b> @I18n.T("Active")
+            </div>
+        </div>
+
+        <!-- Card 4: Bed Occupancy Rate -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #10b981;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("Bed Occupancy Rate", "বেড অকুপেন্সি হার")</span>
+                <div class="mis-kpi-icon-pill" style="background: #dcfce7; color: #047857;">📊</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #047857;">@currentBedOccupancyRate.ToString("F1")%</div>
+            <div class="mis-kpi-sub">
+                <div class="mis-prog-track" style="width: 50px;">
+                    <div class="mis-prog-fill" style="width: @Math.Min(100, currentBedOccupancyRate)%; background: @(currentBedOccupancyRate >= 85 ? "#dc2626" : currentBedOccupancyRate >= 65 ? "#f59e0b" : "#10b981");"></div>
+                </div>
+                <span><b>@occupiedBedsCount</b> / @totalHospitalBeds @I18n.T("Beds")</span>
+            </div>
+        </div>
+
+        <!-- Card 5: Diagnostic & OT Volume -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #f59e0b;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("Diagnostics & OT", "ল্যাব ও সার্জারি")</span>
+                <div class="mis-kpi-icon-pill" style="background: #fef3c7; color: #b45309;">🔬</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #b45309;">@diagnosticTestsCount</div>
+            <div class="mis-kpi-sub">
+                <b>@otSurgeriesCount</b> @I18n.T("Surgeries") &bull; @diagnosticTestsCount @I18n.T("Tests")
+            </div>
+        </div>
+
+        <!-- Card 6: New Patient Registrations -->
+        <div class="mis-kpi-card" style="border-top: 3.5px solid #06b6d4;">
+            <div class="mis-kpi-top">
+                <span class="mis-kpi-label">@I18n.T("New Registrations", "নতুন রেজি.")</span>
+                <div class="mis-kpi-icon-pill" style="background: #cffafe; color: #0891b2;">🪪</div>
+            </div>
+            <div class="mis-kpi-val" style="color: #0891b2;">@newRegistrationsCount</div>
+            <div class="mis-kpi-sub">
+                <b>♂ @malePatientsCount</b> M &bull; <b>♀ @femalePatientsCount</b> F
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. Financial Operational Turnover Banner -->
+    <div class="mis-revenue-banner">
+        <div class="mis-revenue-title">
+            <span>💳</span>
+            <span>@I18n.T("Hospital Operational Turnover in Period (MIS Summary)", "পিরিয়ডে হাসপাতালের বিভাগীয় টার্নওভার")</span>
+        </div>
+        <div class="mis-revenue-chips">
+            <div class="mis-rev-chip">
+                <span class="mis-rev-chip-label">@I18n.T("OPD Tickets")</span>
+                <span class="mis-rev-chip-val">৳ @opdRevenue.ToString("N0")</span>
+            </div>
+            <div class="mis-rev-chip">
+                <span class="mis-rev-chip-label">@I18n.T("Diagnostics")</span>
+                <span class="mis-rev-chip-val">৳ @diagnosticRevenue.ToString("N0")</span>
+            </div>
+            <div class="mis-rev-chip">
+                <span class="mis-rev-chip-label">@I18n.T("Emergency")</span>
+                <span class="mis-rev-chip-val">৳ @emergencyRevenue.ToString("N0")</span>
+            </div>
+            <div class="mis-rev-chip">
+                <span class="mis-rev-chip-label">@I18n.T("IPD Payments")</span>
+                <span class="mis-rev-chip-val">৳ @ipdRevenue.ToString("N0")</span>
+            </div>
+            <div class="mis-rev-chip">
+                <span class="mis-rev-chip-label">@I18n.T("OT Surgeries")</span>
+                <span class="mis-rev-chip-val">৳ @otRevenue.ToString("N0")</span>
+            </div>
+            <div class="mis-rev-total">
+                <span class="mis-rev-total-label">@I18n.T("Total MIS Revenue")</span>
+                <span class="mis-rev-total-val">৳ @totalMisRevenue.ToString("N0")</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 5. Operational Sections (2-Col Grid) -->
+    <div class="mis-dashboard-grid">
+        @if (activeViewTab == "All" || activeViewTab == "IPD")
+        {
+            <!-- Panel 1: IPD Inpatient Governance & Bed Utilization -->
+            <div class="mis-card" style="@(activeViewTab == "IPD" ? "grid-column: 1 / -1;" : "")">
+                <div class="mis-card-header">
+                    <h3 class="mis-card-title">
+                        <span>🛏️</span>
+                        <span>@I18n.T("Inpatient (IPD) Operational Performance & Bed Governance", "ইনপেশেন্ট ও বেড অকুপেন্সি পরিসংখ্যান")</span>
+                    </h3>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="pill" style="font-size: 10px; background: #e0f2fe; color: #0369a1; font-weight: 750;">
+                            ALOS: @averageLengthOfStayDays.ToString("F1") @I18n.T("Days")
+                        </span>
+                        <div class="mis-card-search">
+                            <span>🔍</span>
+                            <input type="text" placeholder="@I18n.T("Filter ward...", "ওয়ার্ড ফিল্টার...")" @bind="wardFilter" @bind:event="oninput" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mis-metric-strip">
+                    <div class="mis-cell">
+                        <div class="mis-cell-label">@I18n.T("Admissions", "ভর্তি")</div>
+                        <div class="mis-cell-val" style="color: #0284c7;">@ipdAdmissionsCount</div>
+                    </div>
+                    <div class="mis-cell">
+                        <div class="mis-cell-label">@I18n.T("Discharges", "রিলিজ")</div>
+                        <div class="mis-cell-val" style="color: #047857;">@ipdDischargesCount</div>
+                    </div>
+                    <div class="mis-cell">
+                        <div class="mis-cell-label">@I18n.T("Active Inpatients", "বর্তমান রোগী")</div>
+                        <div class="mis-cell-val" style="color: #8b5cf6;">@currentlyAdmittedCount</div>
+                    </div>
+                    <div class="mis-cell">
+                        <div class="mis-cell-label">@I18n.T("Total Beds", "মোট বেড")</div>
+                        <div class="mis-cell-val" style="color: #0f172a;">@totalHospitalBeds</div>
+                    </div>
+                </div>
+
+                <div class="mis-table-wrap">
+                    <table class="mis-table">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("Ward / Bed Category", "ওয়ার্ড / বেড শ্রেণি")</th>
+                                <th class="num">@I18n.T("Total Beds", "মোট বেড")</th>
+                                <th class="num">@I18n.T("Occupied", "ভর্তি")</th>
+                                <th class="num">@I18n.T("Available", "খালি")</th>
+                                <th style="min-width: 140px;">@I18n.T("Utilization", "ব্যবহারের হার")</th>
+                                <th>@I18n.T("Status", "অবস্থা")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var w in FilteredWardOccupancy)
+                            {
+                                var barColor = w.OccupancyRate >= 85 ? "#dc2626" : w.OccupancyRate >= 65 ? "#f59e0b" : "#10b981";
+                                <tr>
+                                    <td style="font-weight: 700; color: #0f172a;">@w.CategoryName</td>
+                                    <td class="num">@w.TotalBeds</td>
+                                    <td class="num" style="font-weight: 750; color: #0284c7;">@w.OccupiedBeds</td>
+                                    <td class="num" style="font-weight: 750; color: #047857;">@w.AvailableBeds</td>
+                                    <td>
+                                        <div class="mis-prog-track">
+                                            <div class="mis-prog-fill" style="width: @Math.Min(100, w.OccupancyRate)%; background: @barColor;"></div>
+                                        </div>
+                                        <span style="font-weight: 800; color: @barColor;">@w.OccupancyRate.ToString("F1")%</span>
+                                    </td>
+                                    <td>
+                                        @if (w.OccupancyRate >= 85)
+                                        {
+                                            <span class="pill pill-danger" style="font-size: 9.5px; padding: 1px 5px;">HIGH DEMAND</span>
+                                        }
+                                        else if (w.OccupancyRate >= 50)
+                                        {
+                                            <span class="pill pill-warning" style="font-size: 9.5px; padding: 1px 5px;">MODERATE</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="pill pill-success" style="font-size: 9.5px; padding: 1px 5px;">AVAILABLE</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                            @if (!FilteredWardOccupancy.Any())
+                            {
+                                <tr>
+                                    <td colspan="6" style="text-align: center; padding: 20px; color: #64748b;">
+                                        @I18n.T("No matching ward occupancy records found.")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+
+        @if (activeViewTab == "All" || activeViewTab == "OPD")
+        {
+            <!-- Panel 2: Outpatient Attendance by Specialty & Doctor Performance -->
+            <div class="mis-card" style="@(activeViewTab == "OPD" ? "grid-column: 1 / -1;" : "")">
+                <div class="mis-card-header">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <h3 class="mis-card-title">
+                            <span>🩺</span>
+                            <span>@I18n.T("Outpatient Consultations & Clinical Specialties", "বিভাগ ও ডাক্তারভিত্তিক রোগী পরামর্শ")</span>
+                        </h3>
+                        <div class="mis-card-subtabs">
+                            <button type="button" class="mis-subtab-btn @(opdSubTab == "dept" ? "active" : "")" @onclick='() => opdSubTab = "dept"'>
+                                @I18n.T("By Department", "বিভাগভিত্তিক") (@departmentConsultationRows.Count)
+                            </button>
+                            <button type="button" class="mis-subtab-btn @(opdSubTab == "doctor" ? "active" : "")" @onclick='() => opdSubTab = "doctor"'>
+                                @I18n.T("By Doctor", "ডাক্তারভিত্তিক") (@doctorConsultationRows.Count)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="mis-card-search">
+                        <span>🔍</span>
+                        <input type="text" placeholder="@I18n.T("Filter...", "ফিল্টার...")" @bind="opdFilter" @bind:event="oninput" />
+                    </div>
+                </div>
+
+                <div class="mis-table-wrap">
+                    @if (opdSubTab == "dept")
+                    {
+                        <table class="mis-table">
+                            <thead>
+                                <tr>
+                                    <th>@I18n.T("Department / Unit", "বিভাগ")</th>
+                                    <th class="num">@I18n.T("Tickets", "টিকিট")</th>
+                                    <th class="num">@I18n.T("Appointments", "অ্যাপয়েন্টমেন্ট")</th>
+                                    <th class="num">@I18n.T("Total Visits", "মোট ভিজিট")</th>
+                                    <th style="min-width: 120px;">@I18n.T("Share", "হার")</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @{ var totalVisits = departmentConsultationRows.Sum(x => x.TotalVisits); }
+                                @foreach (var d in FilteredDepartmentRows)
+                                {
+                                    var share = totalVisits > 0 ? (d.TotalVisits * 100.0 / totalVisits) : 0;
+                                    <tr>
+                                        <td style="font-weight: 700; color: #0f172a;">@d.DepartmentName</td>
+                                        <td class="num">@d.TicketsCount</td>
+                                        <td class="num">@d.ApptsCount</td>
+                                        <td class="num" style="font-weight: 850; color: #0284c7;">@d.TotalVisits</td>
+                                        <td>
+                                            <div class="mis-prog-track">
+                                                <div class="mis-prog-fill" style="width: @Math.Min(100, share)%; background: #0284c7;"></div>
+                                            </div>
+                                            <span style="font-weight: 700; color: #64748b;">@share.ToString("F1")%</span>
+                                        </td>
+                                    </tr>
+                                }
+                                @if (!FilteredDepartmentRows.Any())
+                                {
+                                    <tr>
+                                        <td colspan="5" style="text-align: center; padding: 20px; color: #64748b;">
+                                            @I18n.T("No consultation records found.")
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <table class="mis-table">
+                            <thead>
+                                <tr>
+                                    <th>@I18n.T("Doctor Name & Specialization", "ডাক্তার ও বিভাগ")</th>
+                                    <th>@I18n.T("Department", "বিভাগ")</th>
+                                    <th class="num">@I18n.T("Tickets", "টিকিট")</th>
+                                    <th class="num">@I18n.T("Appts", "অ্যাপয়েন্টমেন্ট")</th>
+                                    <th class="num">@I18n.T("Total Patients", "মোট রোগী")</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var doc in FilteredDoctorRows)
+                                {
+                                    <tr>
+                                        <td>
+                                            <div style="font-weight: 750; color: #0f172a;">@doc.DoctorName</div>
+                                            @if (!string.IsNullOrWhiteSpace(doc.Title))
+                                            {
+                                                <small style="color: #64748b;">@doc.Title</small>
+                                            }
+                                        </td>
+                                        <td><span class="pill" style="font-size: 9.5px; background: #f1f5f9; color: #334155;">@doc.DepartmentName</span></td>
+                                        <td class="num">@doc.TicketsCount</td>
+                                        <td class="num">@doc.ApptsCount</td>
+                                        <td class="num" style="font-weight: 850; color: #0284c7;">@doc.TotalConsultations</td>
+                                    </tr>
+                                }
+                                @if (!FilteredDoctorRows.Any())
+                                {
+                                    <tr>
+                                        <td colspan="5" style="text-align: center; padding: 20px; color: #64748b;">
+                                            @I18n.T("No doctor consultations found.")
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (activeViewTab == "All" || activeViewTab == "Demo")
+        {
+            <!-- Panel 3: Patient Demographics & New Registrations -->
+            <div class="mis-card" style="@(activeViewTab == "Demo" ? "grid-column: 1 / -1;" : "")">
+                <div class="mis-card-header">
+                    <h3 class="mis-card-title">
+                        <span>👥</span>
+                        <span>@I18n.T("Patient Demographics & Catchment Areas", "রোগীদের জনমিতি ও উৎস এলাকা")</span>
+                    </h3>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="pill" style="font-size: 10px; background: #ecfdf5; color: #047857; font-weight: 750;">
+                            @newRegistrationsCount @I18n.T("New Registered")
+                        </span>
+                        <div class="mis-card-search">
+                            <span>🔍</span>
+                            <input type="text" placeholder="@I18n.T("Filter district...", "জেলা ফিল্টার...")" @bind="districtFilter" @bind:event="oninput" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gender Breakdown Visual Stacked Bar -->
+                <div class="mis-gender-bar-card">
+                    @{
+                        var malePct = newRegistrationsCount > 0 ? (malePatientsCount * 100.0 / newRegistrationsCount) : 0;
+                        var femPct = newRegistrationsCount > 0 ? (femalePatientsCount * 100.0 / newRegistrationsCount) : 0;
+                        var othPct = newRegistrationsCount > 0 ? (otherPatientsCount * 100.0 / newRegistrationsCount) : 0;
+                    }
+                    <div class="mis-gender-track">
+                        <div class="mis-gender-segment-male" style="width: @malePct%;" title="Male: @malePatientsCount (@malePct.ToString("F1")%)"></div>
+                        <div class="mis-gender-segment-female" style="width: @femPct%;" title="Female: @femalePatientsCount (@femPct.ToString("F1")%)"></div>
+                        <div class="mis-gender-segment-other" style="width: @othPct%;" title="Other/Child: @otherPatientsCount (@othPct.ToString("F1")%)"></div>
+                    </div>
+                    <div class="mis-gender-legend">
+                        <span style="color: #0284c7;">♂ @I18n.T("Male"): <b>@malePatientsCount</b> (@malePct.ToString("F0")%)</span>
+                        <span style="color: #db2777;">♀ @I18n.T("Female"): <b>@femalePatientsCount</b> (@femPct.ToString("F0")%)</span>
+                        <span style="color: #64748b;">⚪ @I18n.T("Child/Other"): <b>@otherPatientsCount</b> (@othPct.ToString("F0")%)</span>
+                    </div>
+                </div>
+
+                <div class="mis-table-wrap">
+                    <table class="mis-table">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("District / Origin Area", "জেলা / উৎস এলাকা")</th>
+                                <th class="num">@I18n.T("Patient Count", "রোগী সংখ্যা")</th>
+                                <th style="min-width: 120px;">@I18n.T("Percentage Share", "শতাংশ")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var dist in FilteredDistrictRows)
+                            {
+                                var pct = newRegistrationsCount > 0 ? (dist.Count * 100.0 / newRegistrationsCount) : 0;
+                                <tr>
+                                    <td style="font-weight: 700; color: #0f172a;">📍 @dist.District</td>
+                                    <td class="num" style="font-weight: 850; color: #0284c7;">@dist.Count</td>
+                                    <td>
+                                        <div class="mis-prog-track">
+                                            <div class="mis-prog-fill" style="width: @Math.Min(100, pct)%; background: #06b6d4;"></div>
+                                        </div>
+                                        <span style="font-weight: 700; color: #475569;">@pct.ToString("F1")%</span>
+                                    </td>
+                                </tr>
+                            }
+                            @if (!FilteredDistrictRows.Any())
+                            {
+                                <tr>
+                                    <td colspan="3" style="text-align: center; padding: 20px; color: #64748b;">
+                                        @I18n.T("No registration records found.")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+
+        @if (activeViewTab == "All" || activeViewTab == "Lab")
+        {
+            <!-- Panel 4: Diagnostic Laboratory & Top Investigations -->
+            <div class="mis-card" style="@(activeViewTab == "Lab" ? "grid-column: 1 / -1;" : "")">
+                <div class="mis-card-header">
+                    <h3 class="mis-card-title">
+                        <span>🔬</span>
+                        <span>@I18n.T("Top Diagnostic Laboratory Investigations", "শীর্ষ পরিচালিত ল্যাব পরীক্ষা")</span>
+                    </h3>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="pill" style="font-size: 10px; background: #fef3c7; color: #b45309; font-weight: 750;">
+                            @diagnosticTestsCount @I18n.T("Total Tests")
+                        </span>
+                        <div class="mis-card-search">
+                            <span>🔍</span>
+                            <input type="text" placeholder="@I18n.T("Filter test...", "টেস্ট ফিল্টার...")" @bind="testFilter" @bind:event="oninput" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mis-table-wrap">
+                    <table class="mis-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 35px;">#</th>
+                                <th>@I18n.T("Investigation / Procedure Name", "পরীক্ষার নাম")</th>
+                                <th class="num">@I18n.T("Conducted", "সম্পন্ন")</th>
+                                <th style="min-width: 120px;">@I18n.T("Volume Share", "হার")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{
+                                var topMax = topTestRows.Count > 0 ? topTestRows[0].Count : 1;
+                                var rank = 1;
+                            }
+                            @foreach (var test in FilteredTopTests)
+                            {
+                                var pctOfMax = topMax > 0 ? (test.Count * 100.0 / topMax) : 0;
+                                var share = diagnosticTestsCount > 0 ? (test.Count * 100.0 / diagnosticTestsCount) : 0;
+                                <tr>
+                                    <td style="font-weight: 800; color: #64748b;">
+                                        @if (rank == 1) { <span>🥇</span> }
+                                        else if (rank == 2) { <span>🥈</span> }
+                                        else if (rank == 3) { <span>🥉</span> }
+                                        else { <span>#@rank</span> }
+                                        @{ rank++; }
+                                    </td>
+                                    <td style="font-weight: 700; color: #0f172a;">@test.TestName</td>
+                                    <td class="num" style="font-weight: 850; color: #b45309;">@test.Count</td>
+                                    <td>
+                                        <div class="mis-prog-track">
+                                            <div class="mis-prog-fill" style="width: @Math.Min(100, pctOfMax)%; background: #f59e0b;"></div>
+                                        </div>
+                                        <span style="font-weight: 700; color: #64748b;">@share.ToString("F1")%</span>
+                                    </td>
+                                </tr>
+                            }
+                            @if (!FilteredTopTests.Any())
+                            {
+                                <tr>
+                                    <td colspan="4" style="text-align: center; padding: 20px; color: #64748b;">
+                                        @I18n.T("No diagnostic test orders found.")
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- =========================================================================
+     6. Printable A4 Executive MIS Report Sheet
+     ========================================================================= -->
+<div id="mis-report-print" style="display: none;">
+    <PrintDocumentHeader Title="@I18n.T("EXECUTIVE HOSPITAL MIS & OPERATIONAL REPORT", "নির্বাহী হাসপাতাল এমআইএস ও পরিচালন রিপোর্ট")"
+                         Subtitle="@($"{fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")"
+                         DocNo="@($"MIS-{fromDate:yyyyMMdd}-{toDate:yyyyMMdd}")" />
+
+    <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 12px 0;">
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">OUTPATIENTS</div>
+            <div style="font-size: 14px; font-weight: 900; color: #0f172a;">@(opdTicketsCount + appointmentsCount)</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">EMERGENCY</div>
+            <div style="font-size: 14px; font-weight: 900; color: #dc2626;">@emergencyCasesCount</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">ADMISSIONS</div>
+            <div style="font-size: 14px; font-weight: 900; color: #6d28d9;">@ipdAdmissionsCount</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">OCCUPANCY</div>
+            <div style="font-size: 14px; font-weight: 900; color: #047857;">@currentBedOccupancyRate.ToString("F1")%</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">DIAGNOSTICS</div>
+            <div style="font-size: 14px; font-weight: 900; color: #b45309;">@diagnosticTestsCount</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 6px; border-radius: 4px; text-align: center;">
+            <div style="font-size: 8.5px; font-weight: 800; color: #64748b;">TOTAL REVENUE</div>
+            <div style="font-size: 14px; font-weight: 900; color: #059669;">৳@totalMisRevenue.ToString("N0")</div>
+        </div>
+    </div>
+
+    <h4 style="font-size: 11px; margin: 12px 0 4px; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; text-transform: uppercase;">1. Inpatient Ward Occupancy Summary</h4>
+    <table style="width: 100%; border-collapse: collapse; font-size: 10.5px;" border="1" cellpadding="4">
+        <thead>
+            <tr style="background: #f1f5f9;">
+                <th>Ward / Category</th>
+                <th style="text-align: right;">Total Beds</th>
+                <th style="text-align: right;">Occupied</th>
+                <th style="text-align: right;">Available</th>
+                <th style="text-align: right;">Occupancy %</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var w in wardOccupancyRows)
+            {
+                <tr>
+                    <td>@w.CategoryName</td>
+                    <td style="text-align: right;">@w.TotalBeds</td>
+                    <td style="text-align: right;">@w.OccupiedBeds</td>
+                    <td style="text-align: right;">@w.AvailableBeds</td>
+                    <td style="text-align: right; font-weight: 700;">@w.OccupancyRate.ToString("F1")%</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <h4 style="font-size: 11px; margin: 12px 0 4px; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; text-transform: uppercase;">2. Outpatient Consultations by Department</h4>
+    <table style="width: 100%; border-collapse: collapse; font-size: 10.5px;" border="1" cellpadding="4">
+        <thead>
+            <tr style="background: #f1f5f9;">
+                <th>Department</th>
+                <th style="text-align: right;">Tickets</th>
+                <th style="text-align: right;">Appointments</th>
+                <th style="text-align: right;">Total Visits</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var d in departmentConsultationRows)
+            {
+                <tr>
+                    <td>@d.DepartmentName</td>
+                    <td style="text-align: right;">@d.TicketsCount</td>
+                    <td style="text-align: right;">@d.ApptsCount</td>
+                    <td style="text-align: right; font-weight: 700;">@d.TotalVisits</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <h4 style="font-size: 11px; margin: 12px 0 4px; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; text-transform: uppercase;">3. Top Diagnostic Investigations</h4>
+    <table style="width: 100%; border-collapse: collapse; font-size: 10.5px;" border="1" cellpadding="4">
+        <thead>
+            <tr style="background: #f1f5f9;">
+                <th style="width: 30px;">#</th>
+                <th>Investigation Name</th>
+                <th style="text-align: right;">Tests Conducted</th>
+            </tr>
+        </thead>
+        <tbody>
+            @{ var prSl = 1; }
+            @foreach (var t in topTestRows.Take(8))
+            {
+                <tr>
+                    <td>@(prSl++)</td>
+                    <td>@t.TestName</td>
+                    <td style="text-align: right; font-weight: 700;">@t.Count</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div style="display: flex; justify-content: space-between; margin-top: 40px; font-size: 10.5px;">
+        <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">MIS Officer</div>
+        <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Medical Superintendent</div>
+        <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Hospital Director</div>
+    </div>
+</div>
+
+<!-- =========================================================================
+     6B. Printable A5 Executive MIS Report Sheet
+     ========================================================================= -->
+<div id="mis-report-print-a5" class="print-a5-sheet" style="display: none;">
+    <PrintDocumentHeader Title="@I18n.T("HOSPITAL MIS SUMMARY (A5)", "হাসপাতাল এমআইএস সারাংশ")"
+                         Subtitle="@($"{fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")"
+                         DocNo="@($"MIS-{fromDate:yyyyMMdd}")"
+                         Compact="true" />
+
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin: 8px 0;">
+        <div style="border: 1px solid #cbd5e1; padding: 4px; border-radius: 3px; text-align: center;">
+            <div style="font-size: 8px; font-weight: 800; color: #64748b;">OUTPATIENTS</div>
+            <div style="font-size: 12px; font-weight: 900;">@(opdTicketsCount + appointmentsCount)</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 4px; border-radius: 3px; text-align: center;">
+            <div style="font-size: 8px; font-weight: 800; color: #64748b;">EMERGENCY / OT</div>
+            <div style="font-size: 12px; font-weight: 900;">@emergencyCasesCount / @otSurgeriesCount</div>
+        </div>
+        <div style="border: 1px solid #cbd5e1; padding: 4px; border-radius: 3px; text-align: center;">
+            <div style="font-size: 8px; font-weight: 800; color: #64748b;">IPD / OCCUPANCY</div>
+            <div style="font-size: 12px; font-weight: 900;">@ipdAdmissionsCount (@currentBedOccupancyRate.ToString("F0")%)</div>
+        </div>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse; font-size: 9px; margin-top: 6px;" border="1" cellpadding="3">
+        <thead>
+            <tr style="background: #f1f5f9;">
+                <th>Ward / Bed Category</th>
+                <th style="text-align: right;">Beds</th>
+                <th style="text-align: right;">Occ.</th>
+                <th style="text-align: right;">Avail.</th>
+                <th style="text-align: right;">Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var w in wardOccupancyRows)
+            {
+                <tr>
+                    <td>@w.CategoryName</td>
+                    <td style="text-align: right;">@w.TotalBeds</td>
+                    <td style="text-align: right;">@w.OccupiedBeds</td>
+                    <td style="text-align: right;">@w.AvailableBeds</td>
+                    <td style="text-align: right; font-weight: 700;">@w.OccupancyRate.ToString("F0")%</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div style="margin-top: 8px; padding: 5px 8px; background: #f8fafc; border: 1px solid #cbd5e1; display: flex; justify-content: space-between; font-size: 10px; font-weight: 800;">
+        <span>Diagnostics Tests: @diagnosticTestsCount | New Reg: @newRegistrationsCount</span>
+        <span>Total MIS Turnover: ৳@totalMisRevenue.ToString("N0")</span>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; margin-top: 24px; font-size: 9px;">
+        <div style="border-top: 1px solid #94a3b8; width: 100px; text-align: center; padding-top: 3px;">MIS Officer</div>
+        <div style="border-top: 1px solid #94a3b8; width: 110px; text-align: center; padding-top: 3px;">Medical Supt.</div>
+        <div style="border-top: 1px solid #94a3b8; width: 100px; text-align: center; padding-top: 3px;">Director</div>
+    </div>
+</div>
+
+<!-- =========================================================================
+     6C. Printable 80mm Thermal POS MIS Summary Slip
+     ========================================================================= -->
+<div id="mis-report-print-80mm" class="pos-receipt-80mm" style="display: none;">
+    <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 4px; margin-bottom: 6px;">
+        <div style="font-size: 13px; font-weight: 900;">HOSPITAL MIS SUMMARY</div>
+        <div style="font-size: 10px;">@fromDate.ToString("dd/MM/yyyy") - @toDate.ToString("dd/MM/yyyy")</div>
+    </div>
+
+    <div style="font-size: 10.5px; line-height: 1.5;">
+        <div style="display: flex; justify-content: space-between;"><span>OPD Consultations:</span><b>@(opdTicketsCount + appointmentsCount)</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>Emergency Cases:</span><b>@emergencyCasesCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>IPD Admissions:</span><b>@ipdAdmissionsCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>IPD Discharges:</span><b>@ipdDischargesCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>Active Inpatients:</span><b>@currentlyAdmittedCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>Bed Occupancy:</span><b>@occupiedBedsCount / @totalHospitalBeds (@currentBedOccupancyRate.ToString("F0")%)</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>Diagnostic Tests:</span><b>@diagnosticTestsCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>OT Surgeries:</span><b>@otSurgeriesCount</b></div>
+        <div style="display: flex; justify-content: space-between;"><span>New Registrations:</span><b>@newRegistrationsCount (M:@malePatientsCount F:@femalePatientsCount)</b></div>
+    </div>
+
+    <div style="border-top: 1px dashed #000; margin-top: 6px; padding-top: 4px; font-size: 11px; font-weight: 900; display: flex; justify-content: space-between;">
+        <span>MIS TURNOVER:</span>
+        <span>৳@totalMisRevenue.ToString("N0")</span>
+    </div>
+
+    <div style="text-align: center; font-size: 9px; margin-top: 10px; border-top: 1px dashed #000; padding-top: 4px;">
+        Printed: @DateTime.Now.ToString("dd MMM yyyy hh:mm tt")
+    </div>
+</div>
+
+@code {
+    private DateTime fromDate = DateTime.Today;
+    private DateTime toDate = DateTime.Today;
+    private string currentPreset = "today";
+    private string activeViewTab = "All";
+    private string opdSubTab = "dept";
+    private bool isLoading = false;
+
+    // Filter search strings
+    private string wardFilter = "";
+    private string opdFilter = "";
+    private string districtFilter = "";
+    private string testFilter = "";
+
+    // Executive Metrics
+    private int opdTicketsCount;
+    private int appointmentsCount;
+    private int emergencyCasesCount;
+    private int ipdAdmissionsCount;
+    private int ipdDischargesCount;
+    private int currentlyAdmittedCount;
+    private int totalHospitalBeds;
+    private int occupiedBedsCount;
+    private double currentBedOccupancyRate;
+    private double averageLengthOfStayDays;
+    private int diagnosticTestsCount;
+    private int otSurgeriesCount;
+
+    // Financial Throughput
+    private decimal opdRevenue;
+    private decimal diagnosticRevenue;
+    private decimal emergencyRevenue;
+    private decimal ipdRevenue;
+    private decimal otRevenue;
+    private decimal totalMisRevenue;
+
+    // Demographics
+    private int newRegistrationsCount;
+    private int malePatientsCount;
+    private int femalePatientsCount;
+    private int otherPatientsCount;
+
+    // Structured Tables
+    private sealed record WardOccupancyRow(string CategoryName, int TotalBeds, int OccupiedBeds, int AvailableBeds, double OccupancyRate);
+    private List<WardOccupancyRow> wardOccupancyRows = [];
+
+    private sealed record DeptConsultationRow(string DepartmentName, int TicketsCount, int ApptsCount, int TotalVisits);
+    private List<DeptConsultationRow> departmentConsultationRows = [];
+
+    private sealed record DoctorConsultationRow(int DoctorID, string DoctorName, string? Title, string DepartmentName, int TicketsCount, int ApptsCount, int TotalConsultations);
+    private List<DoctorConsultationRow> doctorConsultationRows = [];
+
+    private sealed record DistrictRow(string District, int Count);
+    private List<DistrictRow> districtRows = [];
+
+    private sealed record TopTestRow(string TestName, int Count);
+    private List<TopTestRow> topTestRows = [];
+
+    // Filtered lists
+    private IEnumerable<WardOccupancyRow> FilteredWardOccupancy =>
+        string.IsNullOrWhiteSpace(wardFilter)
+            ? wardOccupancyRows
+            : wardOccupancyRows.Where(x => x.CategoryName.Contains(wardFilter, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<DeptConsultationRow> FilteredDepartmentRows =>
+        string.IsNullOrWhiteSpace(opdFilter)
+            ? departmentConsultationRows
+            : departmentConsultationRows.Where(x => x.DepartmentName.Contains(opdFilter, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<DoctorConsultationRow> FilteredDoctorRows =>
+        string.IsNullOrWhiteSpace(opdFilter)
+            ? doctorConsultationRows
+            : doctorConsultationRows.Where(x => x.DoctorName.Contains(opdFilter, StringComparison.OrdinalIgnoreCase) || x.DepartmentName.Contains(opdFilter, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<DistrictRow> FilteredDistrictRows =>
+        string.IsNullOrWhiteSpace(districtFilter)
+            ? districtRows
+            : districtRows.Where(x => x.District.Contains(districtFilter, StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<TopTestRow> FilteredTopTests =>
+        string.IsNullOrWhiteSpace(testFilter)
+            ? topTestRows
+            : topTestRows.Where(x => x.TestName.Contains(testFilter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await LoadAsync();
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    private void SetToday()
+    {
+        currentPreset = "today";
+        fromDate = DateTime.Today;
+        toDate = DateTime.Today;
+        _ = LoadAsync();
+    }
+
+    private void SetYesterday()
+    {
+        currentPreset = "yesterday";
+        fromDate = DateTime.Today.AddDays(-1);
+        toDate = DateTime.Today.AddDays(-1);
+        _ = LoadAsync();
+    }
+
+    private void SetLast7Days()
+    {
+        currentPreset = "7days";
+        fromDate = DateTime.Today.AddDays(-6);
+        toDate = DateTime.Today;
+        _ = LoadAsync();
+    }
+
+    private void SetThisMonth()
+    {
+        currentPreset = "month";
+        fromDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+        toDate = DateTime.Today;
+        _ = LoadAsync();
+    }
+
+    private void SetThisYear()
+    {
+        currentPreset = "year";
+        fromDate = new DateTime(DateTime.Today.Year, 1, 1);
+        toDate = DateTime.Today;
+        _ = LoadAsync();
+    }
+
+    private void OnFromDateChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var dt))
+        {
+            fromDate = dt;
+            currentPreset = "custom";
+        }
+    }
+
+    private void OnToDateChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var dt))
+        {
+            toDate = dt;
+            currentPreset = "custom";
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        isLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        var start = fromDate.Date;
+        var end = toDate.Date.AddDays(1);
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        // 1. OPD & Appointments
+        var ticketsInPeriod = await db.OPDTickets.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end)
+            .ToListAsync();
+        opdTicketsCount = ticketsInPeriod.Count;
+        opdRevenue = ticketsInPeriod.Sum(x => x.Total);
+
+        var apptsInPeriod = await db.DoctorAppointments.AsNoTracking()
+            .Where(x => x.ApptDate >= start && x.ApptDate < end)
+            .ToListAsync();
+        appointmentsCount = apptsInPeriod.Count;
+
+        emergencyCasesCount = await db.EmergencyMemos.AsNoTracking()
+            .CountAsync(x => x.TransDate >= start && x.TransDate < end && x.ModuleID == 11);
+
+        emergencyRevenue = await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end && x.ModuleID == 11)
+            .SumAsync(x => (decimal?)x.Paid) ?? 0;
+
+        otSurgeriesCount = await db.OTCashMemos.AsNoTracking()
+            .CountAsync(x => x.TransDate >= start && x.TransDate < end);
+
+        otRevenue = await db.OTCashMemos.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end)
+            .SumAsync(x => (decimal?)(x.Total - x.Discount)) ?? 0;
+
+        // 2. IPD Metrics
+        ipdAdmissionsCount = await db.PatientAdmissions.AsNoTracking()
+            .CountAsync(x => x.AdmissionDate >= start && x.AdmissionDate < end);
+
+        var discharges = await db.PatientAdmissions.AsNoTracking()
+            .Where(x => x.ReleaseDate >= start && x.ReleaseDate < end)
+            .ToListAsync();
+
+        ipdDischargesCount = discharges.Count;
+
+        currentlyAdmittedCount = await db.PatientAdmissions.AsNoTracking()
+            .CountAsync(x => x.IsAdmitted == true);
+
+        ipdRevenue = await db.IpdMoneyReceipts.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end)
+            .SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        // Average Length of Stay (ALOS)
+        if (discharges.Count > 0)
+        {
+            var stays = discharges.Select(d => Math.Max(1.0, (d.ReleaseDate!.Value - (d.AdmissionDate ?? d.TransDate ?? d.ReleaseDate.Value)).TotalDays));
+            averageLengthOfStayDays = stays.Average();
+        }
+        else
+        {
+            averageLengthOfStayDays = 1.0;
+        }
+
+        // Bed Occupancy
+        var allBeds = await db.BedCabins.AsNoTracking().ToListAsync();
+        var bedCategories = await db.BedCategories.AsNoTracking().ToListAsync();
+        totalHospitalBeds = allBeds.Count;
+        occupiedBedsCount = allBeds.Count(x => x.Status == "Occupied");
+        currentBedOccupancyRate = totalHospitalBeds > 0 ? (occupiedBedsCount * 100.0 / totalHospitalBeds) : 0;
+
+        wardOccupancyRows = bedCategories.Select(cat =>
+        {
+            var bedsInCat = allBeds.Where(b => b.CategoryID == cat.ID).ToList();
+            var total = bedsInCat.Count;
+            var occ = bedsInCat.Count(b => b.Status == "Occupied");
+            var avail = bedsInCat.Count(b => b.Status == "Available");
+            var rate = total > 0 ? (occ * 100.0 / total) : 0;
+            return new WardOccupancyRow(cat.Name, total, occ, avail, rate);
+        }).OrderByDescending(x => x.TotalBeds).ToList();
+
+        // 3. Department & Doctor Consultations
+        var departments = await db.Departments.AsNoTracking().ToListAsync();
+        var doctors = await db.Doctors.AsNoTracking().ToListAsync();
+        var docDeptIdMap = doctors.ToDictionary(x => x.ID, x => x.Department ?? 0);
+        var deptNameMap = departments.ToDictionary(x => x.ID, x => x.Name ?? "Clinical");
+
+        departmentConsultationRows = departments.Select(dept =>
+        {
+            var tCount = ticketsInPeriod.Count(t => t.DeptID == dept.ID);
+            var aCount = apptsInPeriod.Count(a => docDeptIdMap.TryGetValue(a.DoctorID, out var dId) && dId == dept.ID);
+            return new DeptConsultationRow(dept.Name ?? "Clinical", tCount, aCount, tCount + aCount);
+        }).Where(x => x.TotalVisits > 0).OrderByDescending(x => x.TotalVisits).ToList();
+
+        doctorConsultationRows = doctors.Select(doc =>
+        {
+            var tCount = ticketsInPeriod.Count(t => t.DoctorID == doc.ID);
+            var aCount = apptsInPeriod.Count(a => a.DoctorID == doc.ID);
+            var dName = doc.Department.HasValue && deptNameMap.TryGetValue(doc.Department.Value, out var dn) ? dn : "Clinical";
+            return new DoctorConsultationRow(doc.ID, doc.Name ?? $"Doctor #{doc.ID}", doc.Title, dName, tCount, aCount, tCount + aCount);
+        }).Where(x => x.TotalConsultations > 0).OrderByDescending(x => x.TotalConsultations).ToList();
+
+        // 4. Patient Demographics & Registrations
+        var registrations = await db.Registrations.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end)
+            .ToListAsync();
+
+        newRegistrationsCount = registrations.Count;
+        malePatientsCount = registrations.Count(x => string.Equals(x.Sex, "Male", StringComparison.OrdinalIgnoreCase));
+        femalePatientsCount = registrations.Count(x => string.Equals(x.Sex, "Female", StringComparison.OrdinalIgnoreCase));
+        otherPatientsCount = newRegistrationsCount - (malePatientsCount + femalePatientsCount);
+
+        districtRows = registrations
+            .Where(x => !string.IsNullOrWhiteSpace(x.PresentDistrict) || !string.IsNullOrWhiteSpace(x.PermanentDistrict))
+            .GroupBy(x => !string.IsNullOrWhiteSpace(x.PresentDistrict) ? x.PresentDistrict! : x.PermanentDistrict!)
+            .Select(g => new DistrictRow(g.Key, g.Count()))
+            .OrderByDescending(x => x.Count)
+            .Take(12)
+            .ToList();
+
+        // 5. Diagnostic Tests & Investigations
+        var memoItems = await db.EmergencyMemoItems.AsNoTracking()
+            .Where(x => x.Memo != null && x.Memo.TransDate >= start && x.Memo.TransDate < end && x.Memo.ModuleID != 11)
+            .ToListAsync();
+
+        diagnosticTestsCount = memoItems.Sum(x => x.Quantity);
+
+        diagnosticRevenue = await db.EmergencyMemos.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end && x.ModuleID != 11)
+            .SumAsync(x => (decimal?)x.Paid) ?? 0;
+
+        totalMisRevenue = opdRevenue + diagnosticRevenue + emergencyRevenue + ipdRevenue + otRevenue;
+
+        var services = await db.Services.AsNoTracking().ToListAsync();
+        var serviceMap = services.ToDictionary(x => x.ID, x => x.Name ?? $"Test #{x.ID}");
+
+        topTestRows = memoItems
+            .GroupBy(x => x.TestID)
+            .Select(g => new TopTestRow(serviceMap.TryGetValue(g.Key, out var name) ? name : $"Test #{g.Key}", g.Sum(x => x.Quantity)))
+            .OrderByDescending(x => x.Count)
+            .Take(15)
+            .ToList();
+
+        isLoading = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task PrintReportFormatAsync(string format)
+    {
+        var elementId = format switch
+        {
+            "A5" => "mis-report-print-a5",
+            "80mm" => "mis-report-print-80mm",
+            _ => "mis-report-print"
+        };
+        await JS.InvokeVoidAsync("hpm.printElement", elementId, $"Hospital MIS Report ({format}) - {fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd}");
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Hospital Management Information System (MIS) Report");
+            sb.AppendLine($"Period,{fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd}");
+            sb.AppendLine($"Generated,{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine();
+
+            sb.AppendLine("1. EXECUTIVE METRICS SUMMARY");
+            sb.AppendLine($"Total Outpatients,{opdTicketsCount + appointmentsCount}");
+            sb.AppendLine($"OPD Tickets,{opdTicketsCount}");
+            sb.AppendLine($"Doctor Appointments,{appointmentsCount}");
+            sb.AppendLine($"Emergency Cases,{emergencyCasesCount}");
+            sb.AppendLine($"IPD Admissions,{ipdAdmissionsCount}");
+            sb.AppendLine($"IPD Discharges,{ipdDischargesCount}");
+            sb.AppendLine($"Active Inpatients,{currentlyAdmittedCount}");
+            sb.AppendLine($"Total Beds,{totalHospitalBeds}");
+            sb.AppendLine($"Occupied Beds,{occupiedBedsCount}");
+            sb.AppendLine($"Bed Occupancy Rate,{currentBedOccupancyRate:F1}%");
+            sb.AppendLine($"Average Length of Stay (ALOS),{averageLengthOfStayDays:F1} Days");
+            sb.AppendLine($"Diagnostic Tests Conducted,{diagnosticTestsCount}");
+            sb.AppendLine($"OT Surgeries,{otSurgeriesCount}");
+            sb.AppendLine($"New Registrations,{newRegistrationsCount}");
+            sb.AppendLine($"Male Patients,{malePatientsCount}");
+            sb.AppendLine($"Female Patients,{femalePatientsCount}");
+            sb.AppendLine($"Total Period Revenue,{totalMisRevenue:F2}");
+            sb.AppendLine();
+
+            sb.AppendLine("2. WARD OCCUPANCY BREAKDOWN");
+            sb.AppendLine("Ward / Category,Total Beds,Occupied,Available,Occupancy %");
+            foreach (var w in wardOccupancyRows)
+            {
+                sb.AppendLine($"\"{EscapeCsv(w.CategoryName)}\",{w.TotalBeds},{w.OccupiedBeds},{w.AvailableBeds},{w.OccupancyRate:F1}%");
+            }
+            sb.AppendLine();
+
+            sb.AppendLine("3. OUTPATIENT CONSULTATIONS BY DEPARTMENT");
+            sb.AppendLine("Department,Tickets,Appointments,Total Visits");
+            foreach (var d in departmentConsultationRows)
+            {
+                sb.AppendLine($"\"{EscapeCsv(d.DepartmentName)}\",{d.TicketsCount},{d.ApptsCount},{d.TotalVisits}");
+            }
+            sb.AppendLine();
+
+            sb.AppendLine("4. DOCTOR CONSULTATION PERFORMANCE");
+            sb.AppendLine("Doctor Name,Department,Tickets,Appointments,Total Consultations");
+            foreach (var doc in doctorConsultationRows)
+            {
+                sb.AppendLine($"\"{EscapeCsv(doc.DoctorName)}\",\"{EscapeCsv(doc.DepartmentName)}\",{doc.TicketsCount},{doc.ApptsCount},{doc.TotalConsultations}");
+            }
+            sb.AppendLine();
+
+            sb.AppendLine("5. TOP DIAGNOSTIC INVESTIGATIONS");
+            sb.AppendLine("Rank,Test Name,Tests Conducted");
+            var sl = 1;
+            foreach (var t in topTestRows)
+            {
+                sb.AppendLine($"{sl++},\"{EscapeCsv(t.TestName)}\",{t.Count}");
+            }
+            sb.AppendLine();
+
+            sb.AppendLine("6. PATIENT DEMOGRAPHICS BY DISTRICT");
+            sb.AppendLine("District,Patient Count");
+            foreach (var dst in districtRows)
+            {
+                sb.AppendLine($"\"{EscapeCsv(dst.District)}\",{dst.Count}");
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+            var base64 = Convert.ToBase64String(bytes);
+            var filename = $"Hospital_MIS_Report_{fromDate:yyyyMMdd}_{toDate:yyyyMMdd}.csv";
+            await JS.InvokeVoidAsync("hpm.downloadFile", filename, "text/csv;charset=utf-8", base64);
+        }
+        catch (Exception ex)
+        {
+            await JS.InvokeVoidAsync("alert", $"Export failed: {ex.Message}");
+        }
+    }
+
+    private static string EscapeCsv(string? val) => (val ?? string.Empty).Replace("\"", "\"\"");
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+}

@@ -1,296 +1,359 @@
 @page "/reports"
-@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier)]
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier + "," + RoleNames.Doctor)]
 @rendermode InteractiveServer
-@implements IDisposable
 @inject IDbContextFactory<HpmDbContext> DbFactory
-@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@implements IDisposable
+@using HPM.Web.Data
+@using Microsoft.EntityFrameworkCore
 
-<PageTitle>@I18n.T("Hospital Reports", "OPD Reports") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Reports & Analytics Hub") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Reports & Analytics", "Reporting")</span>
-        <h1>@I18n.T("OPD & Emergency Reports", "OPD & emergency reports")</h1>
-        <p>@I18n.T("Operational and collection summary across the five modules.", "Operational and collection summary across the five modules.")</p>
+<style>
+.rep-hub-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px 20px 48px;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+}
+
+.rep-hub-header {
+    margin-bottom: 20px;
+}
+.rep-hub-title {
+    font-size: 22px;
+    font-weight: 850;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.rep-hub-sub {
+    font-size: 12.5px;
+    color: #64748b;
+    margin: 4px 0 0;
+}
+
+/* Quick Hub Cards Grid */
+.rep-portals-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+@@media (max-width: 960px) {
+    .rep-portals-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.rep-portal-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    text-decoration: none;
+    color: inherit;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.rep-portal-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(15,23,42,0.1);
+    border-color: #0284c7;
+    text-decoration: none;
+}
+
+.portal-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 12px;
+}
+.portal-icon-wrap {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    flex-shrink: 0;
+}
+.portal-info h2 {
+    font-size: 16px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0 0 4px;
+}
+.portal-info p {
+    font-size: 11.5px;
+    color: #64748b;
+    line-height: 1.4;
+    margin: 0;
+}
+.portal-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 12px;
+    border-top: 1px solid #f1f5f9;
+    font-size: 12px;
+    font-weight: 800;
+    color: #0284c7;
+}
+
+/* Today's Pulse Strip */
+.rep-pulse-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+}
+.rep-pulse-header {
+    padding: 12px 18px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.rep-pulse-title {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pulse-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: #e2e8f0;
+}
+@@media (max-width: 800px) {
+    .pulse-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+.pulse-cell {
+    background: #ffffff;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.pulse-cell-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+}
+.pulse-cell-val {
+    font-size: 22px;
+    font-weight: 900;
+    color: #0f172a;
+}
+.pulse-cell-sub {
+    font-size: 11px;
+    color: #94a3b8;
+}
+</style>
+
+<div class="rep-hub-container">
+    <div class="rep-hub-header">
+        <h1 class="rep-hub-title">
+            <span>📊</span>
+            <span>@I18n.T("Hospital Reports & Analytics Portal", "হাসপাতাল রিপোর্ট ও অ্যানালিটিক্স হাব")</span>
+        </h1>
+        <p class="rep-hub-sub">
+            @I18n.T("Select a reporting center below to review hospital revenues, clinical statistics, or audit ledgers.", "হাসপাতালের আয়-ব্যয়, রোগী সেবা ও প্রশাসনিক তথ্যের জন্য নিচের যেকোনো রিপোর্ট বিভাগ নির্বাচন করুন।")
+        </p>
     </div>
-    <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print report", "Print report")</button>
-</div>
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert danger">@message</div>}
 
-<div class="panel">
-    <div class="panel-heading">
-        <div>
-            <h2>@I18n.T("Filter Period", "Filter Period")</h2>
-            <p>@I18n.T("Select date range to calculate metrics and collections.", "Select date range to calculate metrics and collections.")</p>
+    <!-- 3 Big Dedicated Portal Cards -->
+    <div class="rep-portals-grid">
+        <!-- 1. Financial Reports -->
+        <a href="/reports/financial" class="rep-portal-card" style="border-top: 4px solid #0284c7;">
+            <div class="portal-top">
+                <div class="portal-icon-wrap" style="background: #e0f2fe; color: #0284c7;">
+                    💰
+                </div>
+                <div class="portal-info">
+                    <h2>@I18n.T("Financial Reports", "আর্থিক ও রাজস্ব রিপোর্ট")</h2>
+                    <p>@I18n.T("Departmental collection, gross invoiced billings, discount audits, and net cash receipts across OPD, IPD, lab, OT, and pharmacy.", "সকল বিভাগের মোট আয়, বিশেষ ছাড়, আদায়, বকেয়া এবং নগদ ক্যাশ ফ্লো বিবরণী।")</p>
+                </div>
+            </div>
+            <div class="portal-action">
+                <span>@I18n.T("Open Financial Center", "ফাইন্যান্সিয়াল রিপোর্ট খুলুন")</span>
+                <span>→</span>
+            </div>
+        </a>
+
+        <!-- 2. MIS Reports -->
+        <a href="/reports/mis" class="rep-portal-card" style="border-top: 4px solid #10b981;">
+            <div class="portal-top">
+                <div class="portal-icon-wrap" style="background: #d1fae5; color: #059669;">
+                    📊
+                </div>
+                <div class="portal-info">
+                    <h2>@I18n.T("MIS Reports", "ব্যবস্থাপনা ও পরিসংখ্যান (MIS)")</h2>
+                    <p>@I18n.T("Key executive governance: outpatient flow, bed occupancy rates, average length of stay (ALOS), surgical cases, and laboratory metrics.", "রোগী উপস্থিতি, বেড ব্যবহারের হার, গড় অবস্থানকাল ও বিভাগীয় ক্লিনিক্যাল পরিসংখ্যান।")</p>
+                </div>
+            </div>
+            <div class="portal-action" style="color: #059669;">
+                <span>@I18n.T("Open Executive MIS", "এমআইএস পরিসংখ্যান খুলুন")</span>
+                <span>→</span>
+            </div>
+        </a>
+
+        <!-- 3. Accounts & General Ledger -->
+        <a href="/accounts" class="rep-portal-card" style="border-top: 4px solid #8b5cf6;">
+            <div class="portal-top">
+                <div class="portal-icon-wrap" style="background: #ede9fe; color: #7c3aed;">
+                    💳
+                </div>
+                <div class="portal-info">
+                    <h2>@I18n.T("Accounts & General Ledger", "অ্যাকাউন্টস ও সাধারণ লেজার")</h2>
+                    <p>@I18n.T("Cashier day closing, voucher journal, trial balance, and Cash vs General Ledger reconciliation.", "ক্যাশিয়ার শিফট ক্লোজিং, দিনভিত্তিক হ্যান্ডওভার ও অ্যাকাউন্টস লেজার মিলন।")</p>
+                </div>
+            </div>
+            <div class="portal-action" style="color: #7c3aed;">
+                <span>@I18n.T("Open Accounts Center", "অ্যাকাউন্টস লেজার খুলুন")</span>
+                <span>→</span>
+            </div>
+        </a>
+    </div>
+
+    <!-- Today's Live Hospital Pulse Strip -->
+    <div class="rep-pulse-card">
+        <div class="rep-pulse-header">
+            <h3 class="rep-pulse-title">
+                <span>⚡</span>
+                <span>@I18n.T("Today's Live Hospital Operations Pulse", "আজকের লাইভ হাসপাতাল পরিচালন চিত্র")</span>
+            </h3>
+            <span class="pill" style="font-size: 11px; background: #ecfdf5; color: #047857; font-weight: 700;">
+                @DateTime.Today.ToString("dd MMMM yyyy")
+            </span>
         </div>
-    </div>
-    <div class="report-filter">
-        <label><span>@I18n.T("From date", "From date")</span><InputDate @bind-Value="fromDate" /></label>
-        <label><span>@I18n.T("To date", "To date")</span><InputDate @bind-Value="toDate" /></label>
-        <button class="btn btn-primary" @onclick="LoadAsync">@I18n.T("Generate report", "Generate report")</button>
-    </div>
-</div>
 
-<div class="metric-grid report-section">
-    <div class="metric-card accent-blue"><span>@I18n.T("New patients", "New patients")</span><strong>@registrations.Count</strong><small>@I18n.T("Registered in period", "Registered in period")</small></div>
-    <div class="metric-card accent-violet"><span>@I18n.T("Appointments", "Appointments")</span><strong>@appointments.Count</strong><small>@I18n.T("Scheduled consultations", "Scheduled consultations")</small></div>
-    <div class="metric-card accent-amber"><span>@I18n.T("Ticket collection", "Ticket collection")</span><strong>@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</strong><small>@tickets.Count @I18n.T("consultation tickets", "consultation tickets")</small></div>
-    <div class="metric-card accent-red"><span>@I18n.T("Emergency collection", "Emergency collection")</span><strong>@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Paid))</strong><small>@emergencyMemos.Count @I18n.T("emergency memos", "emergency memos")</small></div>
-</div>
+        <div class="pulse-grid">
+            <div class="pulse-cell">
+                <span class="pulse-cell-label">@I18n.T("Today's Collection", "আজকের আদায়")</span>
+                <span class="pulse-cell-val" style="color: #047857;">৳ @todayTotalCollection.ToString("N0")</span>
+                <span class="pulse-cell-sub">@todayMemosCount @I18n.T("receipts recorded today")</span>
+            </div>
 
-<div class="report-section panel">
-    <div class="panel-heading">
-        <div><h2>@I18n.T("Consultation tickets", "Consultation tickets")</h2><p>@tickets.Count @I18n.T("record(s)", "record(s)")</p></div>
-        <strong class="amount">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</strong>
-    </div>
-    <div class="data-table-wrap">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>@I18n.T("Date", "Date")</th>
-                    <th>@I18n.T("Ticket", "Ticket")</th>
-                    <th>@I18n.T("Patient", "Patient")</th>
-                    <th>@I18n.T("Doctor", "Doctor")</th>
-                    <th>@I18n.T("Department", "Department")</th>
-                    <th class="num">@I18n.T("Fee", "Fee")</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach(var t in tickets){
-                    <tr>
-                        <td>@t.TransDate.ToString("dd MMM yyyy")</td>
-                        <td>#@t.ID</td>
-                        <td>@t.Name</td>
-                        <td>@DoctorName(t.DoctorID)</td>
-                        <td>@DepartmentName(t.DeptID)</td>
-                        <td class="num">@I18n.FormatCurrency(t.Total)</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-</div>
+            <div class="pulse-cell">
+                <span class="pulse-cell-label">@I18n.T("OPD Consultations", "ওপিডি কনসালটেশন")</span>
+                <span class="pulse-cell-val" style="color: #0284c7;">@todayOpdCount</span>
+                <span class="pulse-cell-sub">@todayApptsCount @I18n.T("appointments scheduled")</span>
+            </div>
 
-<div class="master-grid report-section">
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Emergency services", "Emergency services")</h2><p>@emergencyMemos.Count @I18n.T("memo(s)", "memo(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Memo", "Memo")</th>
-                        <th>@I18n.T("Patient", "Patient")</th>
-                        <th class="num">@I18n.T("Total", "Total")</th>
-                        <th class="num">@I18n.T("Paid", "Paid")</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var m in emergencyMemos){
-                        <tr>
-                            <td>#@m.ID<br/><small>@m.TransDate.ToString("dd MMM")</small></td>
-                            <td>@m.PatientName</td>
-                            <td class="num">@I18n.FormatCurrency(m.Total)</td>
-                            <td class="num">@I18n.FormatCurrency(m.Paid)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("OT cash memos", "OT cash memos")</h2><p>@otMemos.Count @I18n.T("memo(s)", "memo(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Memo", "Memo")</th>
-                        <th>@I18n.T("Patient", "Patient")</th>
-                        <th class="num">@I18n.T("Total", "Total")</th>
-                        <th class="num">@I18n.T("Net", "Net")</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var m in otMemos){
-                        <tr>
-                            <td>#@m.ID<br/><small>@m.TransDate.ToString("dd MMM")</small></td>
-                            <td>@m.PatientName</td>
-                            <td class="num">@I18n.FormatCurrency(m.Total)</td>
-                            <td class="num">@I18n.FormatCurrency(m.Total-m.Discount)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
+            <div class="pulse-cell">
+                <span class="pulse-cell-label">@I18n.T("Inpatients Admitted", "ভর্তি রোগী")</span>
+                <span class="pulse-cell-val" style="color: #6d28d9;">@activeInpatientsCount</span>
+                <span class="pulse-cell-sub">@todayAdmissionsCount @I18n.T("new admissions today")</span>
+            </div>
 
-<div class="master-grid report-section">
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Patient registrations", "Patient registrations")</h2><p>@registrations.Count @I18n.T("patient(s)", "patient(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("ID", "ID")</th>
-                        <th>@I18n.T("Patient", "Patient")</th>
-                        <th>@I18n.T("Contact", "Contact")</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var p in registrations){
-                        <tr>
-                            <td>@p.PatientID</td>
-                            <td>@p.Name</td>
-                            <td>@p.Contact</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <div class="panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Appointments", "Appointments")</h2><p>@appointments.Count @I18n.T("appointment(s)", "appointment(s)")</p></div></div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Date", "Date")</th>
-                        <th>@I18n.T("Serial", "Serial")</th>
-                        <th>@I18n.T("Patient", "Patient")</th>
-                        <th>@I18n.T("Doctor", "Doctor")</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var a in appointments){
-                        <tr>
-                            <td>@a.ApptDate.ToString("dd MMM")</td>
-                            <td>@a.ApptSLNO.ToString("00")</td>
-                            <td>@a.Name</td>
-                            <td>@DoctorName(a.DoctorID)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<div id="report-print" class="print-document">
-    <div class="print-sheet">
-        <PrintDocumentHeader Title="@I18n.T("OPD & Emergency Summary Report", "OPD & Emergency Summary Report")"
-                             SubTitle="@I18n.T("Hospital Management System", "Hospital Management System")"
-                             DocumentNo="@($"{fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")" />
-        <div class="report-cards">
-            <div class="report-card"><span>@I18n.T("Patients", "Patients")</span><strong>@registrations.Count</strong></div>
-            <div class="report-card"><span>@I18n.T("Appointments", "Appointments")</span><strong>@appointments.Count</strong></div>
-            <div class="report-card"><span>@I18n.T("Tickets", "Tickets")</span><strong>@tickets.Count</strong></div>
-            <div class="report-card"><span>@I18n.T("Emergency memos", "Emergency memos")</span><strong>@emergencyMemos.Count</strong></div>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>@I18n.T("Collection source", "Collection source")</th>
-                    <th class="num">@I18n.T("Records", "Records")</th>
-                    <th class="num">@I18n.T("Gross", "Gross")</th>
-                    <th class="num">@I18n.T("Discount", "Discount")</th>
-                    <th class="num">@I18n.T("Net / Paid", "Net / Paid")</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>@I18n.T("Consultation ticket", "Consultation ticket")</td>
-                    <td class="num">@tickets.Count</td>
-                    <td class="num">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</td>
-                    <td class="num">@I18n.FormatCurrency(0)</td>
-                    <td class="num">@I18n.FormatCurrency(tickets.Sum(x=>x.Total))</td>
-                </tr>
-                <tr>
-                    <td>@I18n.T("Emergency service", "Emergency service")</td>
-                    <td class="num">@emergencyMemos.Count</td>
-                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Total))</td>
-                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Discount))</td>
-                    <td class="num">@I18n.FormatCurrency(emergencyMemos.Sum(x=>x.Paid))</td>
-                </tr>
-                <tr>
-                    <td>@I18n.T("OT cash memo", "OT cash memo")</td>
-                    <td class="num">@otMemos.Count</td>
-                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Total))</td>
-                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Discount))</td>
-                    <td class="num">@I18n.FormatCurrency(otMemos.Sum(x=>x.Total-x.Discount))</td>
-                </tr>
-            </tbody>
-        </table>
-        <div class="print-total">
-            <div class="grand">
-                <span>@I18n.T("Combined net collection", "Combined net collection")</span>
-                <strong>@I18n.FormatCurrency(NetCollection)</strong>
+            <div class="pulse-cell">
+                <span class="pulse-cell-label">@I18n.T("Bed Occupancy", "বেড অকুপেন্সি")</span>
+                <span class="pulse-cell-val" style="color: #b45309;">@occupancyRate.ToString("F1")%</span>
+                <span class="pulse-cell-sub">@occupiedBeds / @totalBeds @I18n.T("beds utilized")</span>
             </div>
         </div>
-        <h3>@I18n.T("Consultation ticket detail", "Consultation ticket detail")</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>@I18n.T("Date", "Date")</th>
-                    <th>@I18n.T("Ticket", "Ticket")</th>
-                    <th>@I18n.T("Patient", "Patient")</th>
-                    <th>@I18n.T("Doctor", "Doctor")</th>
-                    <th class="num">@I18n.T("Fee", "Fee")</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach(var t in tickets){
-                    <tr>
-                        <td>@t.TransDate.ToString("dd MMM")</td>
-                        <td>#@t.ID</td>
-                        <td>@t.Name</td>
-                        <td>@DoctorName(t.DoctorID)</td>
-                        <td class="num">@I18n.FormatCurrency(t.Total)</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-        <PrintDocumentFooter Signatures='new string[] { I18n.T("Prepared By", "Prepared By"), I18n.T("Accounts In-Charge", "Accounts In-Charge"), I18n.T("Authorized Signature", "Authorized signature") }' />
     </div>
 </div>
 
-@code{
-    private DateTime fromDate=DateTime.Today.AddDays(-7); private DateTime toDate=DateTime.Today;
-    private List<Registration> registrations=[];private List<DoctorAppointment> appointments=[];private List<OPDTicket> tickets=[];private List<CashMemoDInvestigation> emergencyMemos=[];private List<CashMemoOT> otMemos=[];private List<DoctorsProfile> doctors=[];private List<Department> departments=[];private string message=string.Empty;
-    private decimal NetCollection=>tickets.Sum(x=>x.Total)+emergencyMemos.Sum(x=>x.Paid)+otMemos.Sum(x=>x.Total-x.Discount);
-    
+@code {
+    [SupplyParameterFromQuery(Name = "type")]
+    public string? ReportType { get; set; }
+
+    private decimal todayTotalCollection;
+    private int todayMemosCount;
+    private int todayOpdCount;
+    private int todayApptsCount;
+    private int activeInpatientsCount;
+    private int todayAdmissionsCount;
+    private int totalBeds;
+    private int occupiedBeds;
+    private double occupancyRate;
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        await using(var db=await DbFactory.CreateDbContextAsync())
+        CheckRedirect();
+        if (string.IsNullOrWhiteSpace(ReportType))
         {
-            doctors=await db.Doctors.AsNoTracking().ToListAsync();
-            departments=await db.Departments.AsNoTracking().ToListAsync();
+            await LoadPulseAsync();
         }
-        await LoadAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        CheckRedirect();
+    }
+
+    private void CheckRedirect()
+    {
+        if (string.Equals(ReportType, "financial", StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo("/reports/financial", replace: true);
+        }
+        else if (string.Equals(ReportType, "mis", StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo("/reports/mis", replace: true);
+        }
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
-    private async Task LoadAsync()
+    private async Task LoadPulseAsync()
     {
-        if(toDate.Date<fromDate.Date){message=I18n.IsBangla ? "শেষের তারিখ শুরুর তারিখের আগের হতে পারে না।" : "To date cannot be earlier than From date.";return;}
-        if((toDate.Date-fromDate.Date).TotalDays>366){message=I18n.IsBangla ? "৩৬৬ দিন বা তার কম সময়ের রিপোর্ট নির্বাচন করুন।" : "Select a report period of 366 days or less.";return;}
-        message=string.Empty;
-        var start=fromDate.Date;var end=toDate.Date.AddDays(1);
-        var registrationsTask=LoadRegistrationsAsync(start,end);
-        var appointmentsTask=LoadAppointmentsAsync(start,end);
-        var ticketsTask=LoadTicketsAsync(start,end);
-        var emergencyTask=LoadEmergencyAsync(start,end);
-        var otTask=LoadOtAsync(start,end);
-        await Task.WhenAll(registrationsTask,appointmentsTask,ticketsTask,emergencyTask,otTask);
-        registrations=await registrationsTask;appointments=await appointmentsTask;tickets=await ticketsTask;emergencyMemos=await emergencyTask;otMemos=await otTask;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var today = DateTime.Today;
+        var tomorrow = today.AddDays(1);
+
+        // 1. Collections today
+        var opdToday = await db.OPDTickets.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+        var emgToday = await db.EmergencyMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+        var otToday = await db.OTCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+        var ipdRcptToday = await db.IpdMoneyReceipts.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+        var pharmToday = await db.PharmacyCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+
+        todayTotalCollection = opdToday.Sum(x => x.Total)
+            + emgToday.Sum(x => x.Paid)
+            + otToday.Sum(x => x.Total - x.Discount)
+            + ipdRcptToday.Sum(x => x.Amount)
+            + pharmToday.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0));
+
+        todayMemosCount = opdToday.Count + emgToday.Count + otToday.Count + ipdRcptToday.Count + pharmToday.Count;
+
+        // 2. OPD & Appts
+        todayOpdCount = opdToday.Count;
+        todayApptsCount = await db.DoctorAppointments.AsNoTracking().CountAsync(x => x.ApptDate >= today && x.ApptDate < tomorrow);
+
+        // 3. IPD & Beds
+        activeInpatientsCount = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.ReleaseDate == null);
+        todayAdmissionsCount = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.AdmissionDate >= today && x.AdmissionDate < tomorrow);
+
+        var beds = await db.BedCabins.AsNoTracking().ToListAsync();
+        totalBeds = beds.Count;
+        occupiedBeds = beds.Count(x => x.Status == "Occupied");
+        occupancyRate = totalBeds > 0 ? (occupiedBeds * 100.0 / totalBeds) : 0;
     }
-    private async Task<List<Registration>> LoadRegistrationsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.Registrations.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.TransDate).ToListAsync();}
-    private async Task<List<DoctorAppointment>> LoadAppointmentsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.DoctorAppointments.AsNoTracking().Where(x=>x.ApptDate>=start&&x.ApptDate<end).OrderBy(x=>x.ApptDate).ThenBy(x=>x.ApptSLNO).ToListAsync();}
-    private async Task<List<OPDTicket>> LoadTicketsAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.OPDTickets.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.ID).ToListAsync();}
-    private async Task<List<CashMemoDInvestigation>> LoadEmergencyAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.EmergencyMemos.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end&&x.ModuleID==11).OrderByDescending(x=>x.ID).ToListAsync();}
-    private async Task<List<CashMemoOT>> LoadOtAsync(DateTime start,DateTime end){await using var db=await DbFactory.CreateDbContextAsync();return await db.OTCashMemos.AsNoTracking().Where(x=>x.TransDate>=start&&x.TransDate<end).OrderByDescending(x=>x.ID).ToListAsync();}
-    private string DoctorName(int id)=>doctors.FirstOrDefault(x=>x.ID==id)?.Name??"—";private string DepartmentName(int id)=>departments.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private Task PrintAsync()=>JS.InvokeVoidAsync("hpm.printElement","report-print",$"OPD Report {fromDate:yyyy-MM-dd} to {toDate:yyyy-MM-dd}").AsTask();
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
 }

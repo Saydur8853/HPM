@@ -53,6 +53,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<PatientPayment> PatientPayments => Set<PatientPayment>();
     public DbSet<CentralCashCollection> CentralCashCollections => Set<CentralCashCollection>();
     public DbSet<IpdPatientServiceItem> IpdPatientServiceItems => Set<IpdPatientServiceItem>();
+    public DbSet<PatientOperation> PatientOperations => Set<PatientOperation>();
+    public DbSet<OperationNote> OperationNotes => Set<OperationNote>();
+    public DbSet<MedicalCertificate> MedicalCertificates => Set<MedicalCertificate>();
     public DbSet<GenericGroup> GenericGroups => Set<GenericGroup>();
     public DbSet<MedicineType> MedicineTypes => Set<MedicineType>();
     public DbSet<SupplierPharmacy> PharmacySuppliers => Set<SupplierPharmacy>();
