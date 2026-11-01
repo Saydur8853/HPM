@@ -55,7 +55,7 @@ var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")
     ?? throw new InvalidOperationException("Connection string 'HpmDatabase' was not found.");
 
 builder.Services.AddDbContextFactory<HpmDbContext>(options =>
-    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(180).EnableRetryOnFailure(5, TimeSpan.FromSeconds(5), null)));
+    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(30).EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
 
 builder.Services.AddIdentity<AppUser, IdentityRole<int>>(options =>
     {

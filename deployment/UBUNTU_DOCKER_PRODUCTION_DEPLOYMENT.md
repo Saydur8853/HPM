@@ -187,7 +187,7 @@ services:
       target: build
     environment:
       ASPNETCORE_ENVIRONMENT: "Production"
-      ConnectionStrings__HpmDatabase: "Server=db,1433;Database=HPM_Web;User ID=HpmApp;Password=${HPM_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True;Connect Timeout=60;Max Pool Size=128;Pooling=true"
+      ConnectionStrings__HpmDatabase: "Server=db,1433;Database=HPM_Web;User ID=HpmApp;Password=${HPM_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True;Connect Timeout=15;Max Pool Size=128;Pooling=true"
     depends_on:
       db:
         condition: service_healthy
@@ -215,7 +215,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: "Production"
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
-      ConnectionStrings__HpmDatabase: "Server=db,1433;Database=HPM_Web;User ID=HpmApp;Password=${HPM_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True;Connect Timeout=60;Max Pool Size=128;Pooling=true"
+      ConnectionStrings__HpmDatabase: "Server=db,1433;Database=HPM_Web;User ID=HpmApp;Password=${HPM_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True;Connect Timeout=15;Max Pool Size=128;Pooling=true"
       AllowedHosts: "${HPM_DOMAIN}"
     depends_on:
       db:
@@ -269,7 +269,9 @@ volumes:
 ```caddyfile
 {$HPM_DOMAIN} {
     encode zstd gzip
-    reverse_proxy app:8080
+    reverse_proxy app:8080 {
+        flush_interval -1
+    }
 }
 ```
 
