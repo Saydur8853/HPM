@@ -125,6 +125,19 @@ public sealed class WorkflowAndModelTests
         var allocation = db.Model.FindEntityType(typeof(PharmacySaleBatchAllocation))!;
         Assert.Contains(allocation.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(PharmacySaleBatchAllocation.CashMemoItemID), nameof(PharmacySaleBatchAllocation.StockBalanceID)]));
+
+        var requisition = db.Model.FindEntityType(typeof(PurchaseRequisition))!;
+        Assert.Equal("Purchase_Requisition", requisition.GetTableName());
+        Assert.Contains(requisition.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(PurchaseRequisition.RequisitionNo)]));
+        Assert.Contains(requisition.GetIndexes(), index =>
+            index.Properties.Select(x => x.Name).SequenceEqual([nameof(PurchaseRequisition.StoreID), nameof(PurchaseRequisition.TransDate)]));
+
+        var requisitionItem = db.Model.FindEntityType(typeof(PurchaseRequisitionItem))!;
+        Assert.Equal("Purchase_Requisition_Sub", requisitionItem.GetTableName());
+        Assert.Contains(requisitionItem.GetIndexes(), index => index.IsUnique
+            && index.Properties.Select(x => x.Name).SequenceEqual([nameof(PurchaseRequisitionItem.RequisitionID), nameof(PurchaseRequisitionItem.SLNO)]));
+
         var appUser = db.Model.FindEntityType(typeof(AppUser))!;
         Assert.NotNull(appUser.FindProperty(nameof(AppUser.MustChangePassword)));
         Assert.Contains(appUser.GetIndexes(), index => index.IsUnique
