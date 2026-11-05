@@ -1,1097 +1,1171 @@
-@page "/masters/doctors"
-@attribute [Authorize(Roles = RoleNames.Administrator)]
-@rendermode InteractiveServer
-@implements IDisposable
-@inject IDbContextFactory<HpmDbContext> DbFactory
-@inject NavigationManager Navigation
-@inject IJSRuntime JS
-@using System.Data
-@using System.Data.Common
-@using System.Text
-@using System.Text.RegularExpressions
-@using Microsoft.EntityFrameworkCore
-@using HPM.Web.Data
-@using HPM.Web.Data.Entities
-
-<PageTitle>@I18n.T("Doctors Directory & Priority Setup") | @Branding.HospitalName</PageTitle>
-
-<style>
-.doc-scroll-hint {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 6px 12px;
-    font-size: 10.5px;
-    font-weight: 600;
-    color: #64748b;
-    background: #f8fafc;
-    border-top: 1px dashed #e2e8f0;
-}
-</style>
-
-<div class="doc-master-page doc-master-classic-fit">
-    <!-- Top Action & Statistics Bar -->
-    <div class="doc-master-header">
-        <div class="doc-master-title-col">
-            <a class="doc-back-link" href="">← @I18n.T("Dashboard", "ড্যাশবোর্ড")</a>
-            <h1 class="doc-master-heading">
-                <span>🩺 @I18n.T("Doctors Directory & Priority Setup")</span>
-            </h1>
-        </div>
-
-        <div class="doc-header-stats">
-            <button type="button"
-                    class="doc-stat-pill @(statusFilter == "All" ? "selected" : "")"
-                    @onclick='() => SetStatusFilter("All")'
-                    title="@I18n.T("Show all doctors")">
-                <span class="stat-label">@I18n.T("Total"):</span>
-                <span class="stat-value">@doctors.Count</span>
-            </button>
-            <button type="button"
-                    class="doc-stat-pill active-pill @(statusFilter == "Active" ? "selected" : "")"
-                    @onclick='() => SetStatusFilter("Active")'
-                    title="@I18n.T("Filter active doctors")">
-                <span class="stat-label">✓ @I18n.T("Active"):</span>
-                <span class="stat-value">@doctors.Count(x => x.IsActive)</span>
-            </button>
-            <button type="button"
-                    class="doc-stat-pill inactive-pill @(statusFilter == "Inactive" ? "selected" : "")"
-                    @onclick='() => SetStatusFilter("Inactive")'
-                    title="@I18n.T("Filter inactive doctors")">
-                <span class="stat-label">✕ @I18n.T("Inactive"):</span>
-                <span class="stat-value">@doctors.Count(x => !x.IsActive)</span>
-            </button>
-            <button type="button"
-                    class="doc-stat-pill priority-pill @(statusFilter == "Prioritized" ? "selected" : "")"
-                    @onclick='() => SetStatusFilter("Prioritized")'
-                    title="@I18n.T("Filter prioritized doctors")">
-                <span class="stat-label">⭐ @I18n.T("Prioritized"):</span>
-                <span class="stat-value">@doctors.Count(x => x.Priority.HasValue && x.Priority > 0)</span>
-            </button>
-            <button type="button" class="btn btn-primary doc-btn doc-btn-add" @onclick="OpenNewDoctor">
-                + @I18n.T("New Doctor")
-            </button>
-            <button type="button" class="btn btn-secondary doc-btn doc-btn-excel" @onclick="ExportExcelAsync" title="@I18n.T("Download Doctors List as Excel (CSV)")">
-                📊 @I18n.T("Excel")
-            </button>
-            <button type="button" class="btn btn-secondary doc-btn doc-btn-print" @onclick="PrintListAsync" title="@I18n.T("Print or Save as PDF")">
-                🖨️ @I18n.T("Print / PDF")
-            </button>
-        </div>
-    </div>
-
-    @if (!string.IsNullOrWhiteSpace(message))
-    {
-        <div class="doc-alert @messageClass">
-            <span>@(messageClass == "success" ? "✓" : "⚠")</span>
-            <span>@message</span>
-            <button type="button" class="doc-alert-close" @onclick='() => message = string.Empty'>✕</button>
-        </div>
-    }
-
-    <!-- Doctors Directory Main Grid -->
-    <div class="doc-master-grid">
-        <div class="doc-card doc-list-card">
-            <!-- Filter Header -->
-            <div class="doc-filter-header">
-                <div class="doc-filter-row">
-                    <div class="doc-search-wrap">
-                        <span class="doc-search-icon"><SearchIcon /></span>
-                        <input type="text"
-                               class="classic-input doc-search-input"
-                               placeholder="@I18n.T("Search doctor ID, name, category, department, room, mobile...")"
-                               @bind="searchQuery"
-                               @bind:event="oninput"
-                               @bind:after="ResetPage" />
-                        @if (!string.IsNullOrWhiteSpace(searchQuery))
-                        {
-                            <button type="button" class="doc-search-clear" @onclick='() => { searchQuery = string.Empty; ResetPage(); }'>✕</button>
-                        }
-                    </div>
-
-                    <div class="doc-dept-filter-wrap">
-                        <select class="classic-input doc-dept-select" @bind="selectedDeptFilter" @bind:after="ResetPage">
-                            <option value="">-- @I18n.T("All Departments") --</option>
-                            @foreach (var d in departments)
-                            {
-                                <option value="@d.ID">@d.Name</option>
-                            }
-                        </select>
-                    </div>
-
-                    <div class="doc-dept-filter-wrap">
-                        <select class="classic-input doc-category-select" @bind="selectedCategoryFilter" @bind:after="ResetPage">
-                            <option value="">-- @I18n.T("All Categories") --</option>
-                            <option value="Permanent">@I18n.T("Permanent Doctor")</option>
-                            <option value="Residential">@I18n.T("Residential Doctor")</option>
-                            <option value="Contractual">@I18n.T("Contractual Doctor")</option>
-                            <option value="Visiting">@I18n.T("Visiting / Guest Doctor")</option>
-                            <option value="Consultant">@I18n.T("Consultant Doctor")</option>
-                            <option value="Temporary">@I18n.T("Temporary Doctor")</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Scope Status Chips -->
-                <div class="doc-status-chips-row">
-                    <div class="doc-status-chips">
-                        <button type="button"
-                                class="doc-chip @(statusFilter == "All" ? "active" : "")"
-                                @onclick='() => SetStatusFilter("All")'>
-                            @I18n.T("All") (@doctors.Count)
-                        </button>
-                        <button type="button"
-                                class="doc-chip active-chip @(statusFilter == "Active" ? "active" : "")"
-                                @onclick='() => SetStatusFilter("Active")'>
-                            ✓ @I18n.T("Active") (@doctors.Count(x => x.IsActive))
-                        </button>
-                        <button type="button"
-                                class="doc-chip inactive-chip @(statusFilter == "Inactive" ? "active" : "")"
-                                @onclick='() => SetStatusFilter("Inactive")'>
-                            ✕ @I18n.T("Inactive") (@doctors.Count(x => !x.IsActive))
-                        </button>
-                        <button type="button"
-                                class="doc-chip priority-chip @(statusFilter == "Prioritized" ? "active" : "")"
-                                @onclick='() => SetStatusFilter("Prioritized")'>
-                            ⭐ @I18n.T("Prioritized") (@doctors.Count(x => x.Priority.HasValue && x.Priority > 0))
-                        </button>
-                    </div>
-
-                    <span class="doc-found-count">
-                        @FilteredDoctors.Count() @I18n.T("found")
-                    </span>
-                </div>
-            </div>
-
-            <!-- Full-Width Doctors Directory Table with Auto Next Page on Scroll -->
-            <div class="doc-table-wrap" id="doctorsTableWrap">
-                <table class="doc-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 75px; text-align: center;">@I18n.T("Priority")</th>
-                            <th>@I18n.T("Doctor Profile")</th>
-                            <th style="width: 200px;">@I18n.T("Department & Room")</th>
-                            <th style="width: 210px;">@I18n.T("Schedule & Off Day")</th>
-                            <th style="width: 170px;">@I18n.T("Contact")</th>
-                            <th style="width: 85px; text-align: center;">@I18n.T("Status")</th>
-                            <th style="width: 75px; text-align: center;">@I18n.T("Action")</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @if (!PagedDoctors.Any())
-                        {
-                            <tr>
-                                <td colspan="7" class="doc-empty-cell">
-                                    <div class="doc-empty-box">
-                                        <span>📋</span>
-                                        <strong>@I18n.T("No doctors match your search or filter.")</strong>
-                                        <p>@I18n.T("Try clearing your search query or switching status filters.")</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        }
-                        @foreach (var doctor in PagedDoctors)
-                        {
-                            var hasDegree = !string.IsNullOrWhiteSpace(CleanDoctorDegree(doctor));
-                            var hasRoom = HasValidRoom(doctor.Room);
-                            var hasDept = HasValidDepartment(doctor.Department);
-                            var hasContact = HasValidContact(doctor.Contact);
-                            var isPrioritized = doctor.Priority.HasValue && doctor.Priority > 0;
-                            var offDays = doctor.OffDay?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
-
-                            <tr class="@(isPrioritized ? "doc-row-prioritized" : "") @(!doctor.IsActive ? "doc-row-inactive" : "")">
-                                <td style="text-align: center;">
-                                    @if (isPrioritized)
-                                    {
-                                        <span class="doc-priority-badge" title="@I18n.T("Serial sort priority for appointments")">
-                                            ⭐ #@doctor.Priority
-                                        </span>
-                                    }
-                                    else
-                                    {
-                                        <span class="doc-priority-none">—</span>
-                                    }
-                                </td>
-                                <td>
-                                    <div class="doc-cell-profile">
-                                        <div class="doc-avatar">
-                                            @GetDoctorInitials(doctor)
-                                        </div>
-                                        <div class="doc-info">
-                                            <div class="doc-name-line">
-                                                <strong class="doc-name">@DoctorDisplayName(doctor)</strong>
-                                                <span class="doc-id-pill">#D@(doctor.ID)</span>
-                                                <span class="doc-cat-tag @GetAttachmentClass(doctor.Attachment)">
-                                                    @DoctorTypeLabel(doctor.Attachment)
-                                                </span>
-                                            </div>
-                                            @if (hasDegree)
-                                            {
-                                                <div class="doc-degree" title="@CleanDoctorDegree(doctor)">
-                                                    🎓 @CleanDoctorDegree(doctor)
-                                                </div>
-                                            }
-                                        </div>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="doc-cell-dept">
-                                        @if (hasDept)
-                                        {
-                                            <span class="doc-dept-badge">
-                                                🏷️ @DepartmentName(doctor.Department)
-                                            </span>
-                                        }
-                                        @if (hasRoom)
-                                        {
-                                            <span class="doc-room-badge" title="@I18n.T("Consultation Chamber")">
-                                                🚪 @I18n.T("Room") @CleanDoctorRoom(doctor.Room)
-                                            </span>
-                                        }
-                                        @if (!hasDept && !hasRoom)
-                                        {
-                                            <span class="doc-muted">—</span>
-                                        }
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="doc-cell-sched">
-                                        @if (!string.IsNullOrWhiteSpace(doctor.ConsultationTime))
-                                        {
-                                            <span class="doc-time-badge" title="@I18n.T("Visiting Hours")">
-                                                🕒 @doctor.ConsultationTime
-                                            </span>
-                                        }
-                                        @if (offDays.Length > 0)
-                                        {
-                                            <div class="doc-offdays-line">
-                                                <span class="doc-off-label">@I18n.T("Off"):</span>
-                                                @foreach (var d in offDays)
-                                                {
-                                                    <span class="doc-off-pill">@d</span>
-                                                }
-                                            </div>
-                                        }
-                                        @if (string.IsNullOrWhiteSpace(doctor.ConsultationTime) && offDays.Length == 0)
-                                        {
-                                            <span class="doc-muted">—</span>
-                                        }
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="doc-cell-contact">
-                                        @if (hasContact)
-                                        {
-                                            <a class="doc-contact-link" href="tel:@doctor.Contact!.Trim()" title="@I18n.T("Click to call")">
-                                                📞 @doctor.Contact.Trim()
-                                            </a>
-                                        }
-                                        @if (!string.IsNullOrWhiteSpace(doctor.Email))
-                                        {
-                                            <span class="doc-email" title="@doctor.Email">
-                                                ✉️ @doctor.Email.Trim()
-                                            </span>
-                                        }
-                                        @if (!hasContact && string.IsNullOrWhiteSpace(doctor.Email))
-                                        {
-                                            <span class="doc-muted">—</span>
-                                        }
-                                    </div>
-                                </td>
-                                <td style="text-align: center;">
-                                    <button type="button"
-                                            class="doc-status-btn @(doctor.IsActive ? "active" : "inactive")"
-                                            @onclick="() => ToggleDoctorActiveAsync(doctor)"
-                                            title="@(doctor.IsActive ? I18n.T("Click to mark Inactive") : I18n.T("Click to mark Active"))">
-                                        @(doctor.IsActive ? "✓ " + I18n.T("Active") : "✕ " + I18n.T("Inactive"))
-                                    </button>
-                                </td>
-                                <td style="text-align: center;">
-                                    <button type="button" class="btn btn-secondary doc-edit-btn" @onclick="() => OpenEditDoctor(doctor)" title="@I18n.T("Edit Doctor")">
-                                        ✏️ @I18n.T("Edit")
-                                    </button>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-
-                @if (isLoadingMore)
-                {
-                    <div class="doc-scroll-hint">
-                        <span>⏳</span>
-                        <span>@I18n.T("Loading more doctors...")</span>
-                    </div>
-                }
-            </div>
-
-            <!-- Pagination Bar (Intact with Auto-Scroll Support) -->
-            <div class="doc-table-footer">
-                <div class="doc-pager-info">
-                    @if (FilteredDoctors.Any())
-                    {
-                        <span>@I18n.T("Showing") 1-@(Math.Min(loadedPages * PageSize, FilteredDoctors.Count())) @I18n.T("of") @FilteredDoctors.Count()</span>
-                    }
-                </div>
-
-                <div class="doc-pager-controls">
-                    <button type="button" class="doc-page-btn" @onclick="GoToFirstPageAsync" disabled="@(loadedPages <= 1)" title="@I18n.T("First Page")">«</button>
-                    <button type="button" class="doc-page-btn" @onclick="GoToPrevPage" disabled="@(loadedPages <= 1)" title="@I18n.T("Previous Page")">‹</button>
-                    <span class="doc-page-indicator">@I18n.T("Page") @loadedPages @I18n.T("of") @PageCount</span>
-                    <button type="button" class="doc-page-btn" @onclick="GoToNextPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Next Page")">›</button>
-                    <button type="button" class="doc-page-btn" @onclick="GoToLastPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Last Page")">»</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ========================================== -->
-    <!-- SLIDE-OVER DRAWER FOR DOCTOR ADD / EDIT   -->
-    <!-- ========================================== -->
-    @if (isDrawerOpen)
-    {
-        <div class="doc-drawer-backdrop" @onclick="CloseDrawer"></div>
-        <div class="doc-drawer-panel" role="dialog" aria-modal="true">
-            <div class="doc-drawer-header">
-                <div class="doc-drawer-title-wrap">
-                    <span class="doc-drawer-icon">@(editor.ID == 0 ? "➕" : "✏️")</span>
-                    <div>
-                        <h2 class="doc-drawer-title">
-                            @(editor.ID == 0 ? I18n.T("Add Consultant Doctor") : $"{I18n.T("Edit Doctor")} #D{editor.ID}")
-                        </h2>
-                        <span class="doc-drawer-sub">
-                            @(editor.ID == 0 ? I18n.T("Create a new doctor profile and chamber schedule") : DoctorDisplayName(editor))
-                        </span>
-                    </div>
-                </div>
-
-                <div class="doc-drawer-header-actions">
-                    @if (editor.ID > 0)
-                    {
-                        <span class="doc-status-badge @(editor.IsActive ? "active" : "inactive")">
-                            @(editor.IsActive ? I18n.T("Active") : I18n.T("Inactive"))
-                        </span>
-                    }
-                    <button type="button" class="doc-drawer-close" @onclick="CloseDrawer" title="@I18n.T("Close")">✕</button>
-                </div>
-            </div>
-
-            <EditForm Model="editor" OnSubmit="SaveAsync" class="doc-drawer-form">
-                <div class="doc-drawer-body">
-                    <!-- Section 1: Doctor Profile -->
-                    <div class="doc-drawer-section">
-                        <div class="doc-section-heading">
-                            <span>👤</span>
-                            <span>@I18n.T("Doctor Profile")</span>
-                        </div>
-                        <div class="doc-row">
-                            <div class="doc-field" style="width: 90px; flex-shrink: 0;">
-                                <label class="doc-label">@I18n.T("Title")</label>
-                                <select class="classic-input" @bind="editor.Title">
-                                    <option value="Dr.">Dr.</option>
-                                    <option value="Prof.">Prof.</option>
-                                    <option value="Assoc. Prof.">Assoc. Prof.</option>
-                                    <option value="Asst. Prof.">Asst. Prof.</option>
-                                    <option value="Brig. Gen.">Brig. Gen.</option>
-                                    <option value="Maj. Gen.">Maj. Gen.</option>
-                                    <option value="Col.">Col.</option>
-                                    <option value="Lt. Col.">Lt. Col.</option>
-                                    <option value="Capt.">Capt.</option>
-                                </select>
-                            </div>
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Full Name") <span class="doc-required">*</span></label>
-                                <InputText class="classic-input doc-input-name" @bind-Value="editor.Name" placeholder="@I18n.T("e.g. Shamim Ahsan")" />
-                            </div>
-                        </div>
-
-                        <div class="doc-row">
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Qualifications & Degrees")</label>
-                                <InputText class="classic-input" @bind-Value="editor.Degree" placeholder="@I18n.T("e.g. MBBS, FCPS (Surgery), MS")" />
-                            </div>
-                            <div class="doc-field" style="width: 170px; flex-shrink: 0;">
-                                <label class="doc-label">@I18n.T("Category / Attachment")</label>
-                                <select class="classic-input" @bind="editor.Attachment">
-                                    <option value="Permanent">@I18n.T("Permanent")</option>
-                                    <option value="Residential">@I18n.T("Residential")</option>
-                                    <option value="Contractual">@I18n.T("Contractual")</option>
-                                    <option value="Visiting">@I18n.T("Visiting / Guest")</option>
-                                    <option value="Consultant">@I18n.T("Consultant")</option>
-                                    <option value="Temporary">@I18n.T("Temporary")</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Section 2: Department & Chamber -->
-                    <div class="doc-drawer-section">
-                        <div class="doc-section-heading">
-                            <span>🏥</span>
-                            <span>@I18n.T("Department & Chamber")</span>
-                        </div>
-                        <div class="doc-row">
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Department")</label>
-                                <select class="classic-input" @bind="editor.Department">
-                                    <option value="">-- @I18n.T("Select Department") --</option>
-                                    @foreach (var d in departments)
-                                    {
-                                        <option value="@d.ID">@d.Name</option>
-                                    }
-                                </select>
-                            </div>
-                            <div class="doc-field" style="width: 140px; flex-shrink: 0;">
-                                <label class="doc-label">@I18n.T("Room / Chamber")</label>
-                                <InputText class="classic-input" @bind-Value="editor.Room" placeholder="@I18n.T("e.g. 204, OPD-B")" />
-                            </div>
-                        </div>
-
-                        <div class="doc-field">
-                            <label class="doc-label">@I18n.T("Chamber Address")</label>
-                            <InputText class="classic-input" @bind-Value="editor.Address" placeholder="@I18n.T("Hospital or branch address")" />
-                        </div>
-                    </div>
-
-                    <!-- Section 3: Consultation Schedule & Off Days -->
-                    <div class="doc-drawer-section">
-                        <div class="doc-section-heading">
-                            <span>🕒</span>
-                            <span>@I18n.T("Consultation Schedule & Off Days")</span>
-                        </div>
-                        <div class="doc-field">
-                            <label class="doc-label">@I18n.T("Visiting Hours / Shift Time")</label>
-                            <InputText class="classic-input" @bind-Value="editor.ConsultationTime" placeholder="@I18n.T("e.g. 05:00 PM - 09:00 PM (Daily)")" />
-                        </div>
-
-                        <div class="doc-field">
-                            <label class="doc-label">@I18n.T("Weekly Off Days")</label>
-                            <div class="doc-days-toggle-wrap">
-                                @foreach (var day in WeekDays)
-                                {
-                                    var isSelected = IsOffDaySelected(day);
-                                    <button type="button"
-                                            class="doc-day-chip @(isSelected ? "selected" : "")"
-                                            @onclick="() => ToggleOffDay(day)">
-                                        @(isSelected ? "✓ " : "")@I18n.T(day)
-                                    </button>
-                                }
-                            </div>
-                            <InputText class="classic-input" style="margin-top: 5px;"
-                                       @bind-Value="editor.OffDay"
-                                       placeholder="@I18n.T("Selected off days (e.g. Friday, Saturday)")" />
-                        </div>
-                    </div>
-
-                    <!-- Section 4: Contact & Priority / Status -->
-                    <div class="doc-drawer-section">
-                        <div class="doc-section-heading">
-                            <span>⚙️</span>
-                            <span>@I18n.T("Contact, Priority & Status")</span>
-                        </div>
-                        <div class="doc-row">
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Contact Mobile")</label>
-                                <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
-                            </div>
-                            <div class="doc-field" style="flex: 1; min-width: 0;">
-                                <label class="doc-label">@I18n.T("Email")</label>
-                                <InputText class="classic-input" @bind-Value="editor.Email" placeholder="doctor@delta.edu.bd" />
-                            </div>
-                        </div>
-
-                        <div class="doc-priority-control-box" style="margin-top: 10px;">
-                            <div class="doc-row" style="align-items: flex-start;">
-                                <div class="doc-field" style="flex: 1; min-width: 0;">
-                                    <label class="doc-label" title="@I18n.T("Appointment Priority Serial")">
-                                        ⭐ @I18n.T("Priority Serial")
-                                    </label>
-                                    <InputNumber class="classic-input doc-priority-input"
-                                                 @bind-Value="editor.Priority"
-                                                 placeholder="@I18n.T("e.g. 1, 2, 3...")"
-                                                 min="1" max="999" />
-                                    <span class="doc-help-text">
-                                        @I18n.T("Appointment search sort order.")
-                                    </span>
-                                </div>
-
-                                <div class="doc-field" style="flex: 1; min-width: 0;">
-                                    <label class="doc-label">@I18n.T("Doctor Status")</label>
-                                    <div class="doc-status-toggle">
-                                        <button type="button"
-                                                class="doc-toggle-btn @(editor.IsActive ? "active" : "")"
-                                                @onclick="() => editor.IsActive = true">
-                                            ✓ @I18n.T("Active")
-                                        </button>
-                                        <button type="button"
-                                                class="doc-toggle-btn @(!editor.IsActive ? "inactive" : "")"
-                                                @onclick="() => editor.IsActive = false">
-                                            ✕ @I18n.T("Inactive")
-                                        </button>
-                                    </div>
-                                    <span class="doc-help-text">
-                                        @(editor.IsActive ? I18n.T("Doctor appears in appointment dropdown.") : I18n.T("Doctor is hidden from appointment booking."))
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Drawer Footer Actions -->
-                <div class="doc-drawer-footer">
-                    <div>
-                        @if (editor.ID > 0)
-                        {
-                            <button class="btn btn-ghost doc-btn" type="button" @onclick="DeleteSelectedAsync" style="color:#dc2626;" title="@I18n.T("Delete Doctor")">
-                                🗑️ @I18n.T("Delete")
-                            </button>
-                        }
-                    </div>
-                    <div style="display: flex; gap: 8px;">
-                        <button class="btn btn-ghost doc-btn" type="button" @onclick="CloseDrawer">
-                            @I18n.T("Cancel")
-                        </button>
-                        <button class="btn btn-primary doc-btn doc-btn-add" type="submit" disabled="@saving">
-                            💾 @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Doctor") : I18n.T("Update Doctor"))
-                        </button>
-                    </div>
-                </div>
-            </EditForm>
-        </div>
-    }
-</div>
-
-@code {
-    private DotNetObjectReference<DoctorsMaster>? dotNetRef;
-    private DoctorsProfile editor = new() { Title = "Dr.", Attachment = "Permanent", EnteredBy = 1, TransDate = DateTime.Now, IsActive = true };
-    private List<DoctorsProfile> doctors = [];
-    private List<Department> departments = [];
-
-    // Filter, search, and progressive auto-loading pagination state
-    private string searchQuery = string.Empty;
-    private string statusFilter = "All";
-    private int? selectedDeptFilter;
-    private string? selectedCategoryFilter;
-    private const int PageSize = 10;
-    private int loadedPages = 1;
-    private bool isLoadingMore = false;
-    private string message = string.Empty;
-    private string messageClass = "success";
-    private bool saving;
-    private bool isDrawerOpen;
-
-    private static readonly string[] WeekDays = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
-    private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
-    private static readonly Regex MultiDotRegex = new(@"\.{2,}", RegexOptions.Compiled);
-    private static readonly Regex LeadingZRegex = new(@"^z{2,}[\s._-]*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    protected override async Task OnInitializedAsync()
-    {
-        I18n.OnLanguageChanged += HandleLanguageChanged;
-        await Branding.LoadAsync();
-        if (string.IsNullOrWhiteSpace(editor.Address))
-        {
-            editor.Address = GetDefaultHospitalAddress();
-        }
-        await LoadAsync();
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            dotNetRef = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("hpm.initTableAutoScroll", "doctorsTableWrap", dotNetRef, nameof(LoadNextPageFromScroll));
-        }
-    }
-
-    [JSInvokable]
-    public async Task LoadNextPageFromScroll()
-    {
-        if (isLoadingMore || loadedPages >= PageCount) return;
-
-        isLoadingMore = true;
-        await InvokeAsync(StateHasChanged);
-        await Task.Delay(100);
-
-        loadedPages++;
-        isLoadingMore = false;
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private async Task GoToFirstPageAsync()
-    {
-        loadedPages = 1;
-        await JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
-    }
-
-    private void GoToPrevPage() => loadedPages = Math.Max(1, loadedPages - 1);
-    private void GoToNextPage() => loadedPages = Math.Min(PageCount, loadedPages + 1);
-    private void GoToLastPage() => loadedPages = PageCount;
-
-    private void ResetPage()
-    {
-        loadedPages = 1;
-        try
-        {
-            _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
-        }
-        catch { }
-    }
-
-    public static string CleanDoctorText(string? input)
-    {
-        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
-        var s = input.Trim();
-        if (s.All(c => c == '.' || c == '-' || c == '_' || char.IsWhiteSpace(c)))
-            return string.Empty;
-
-        s = LeadingZRegex.Replace(s, string.Empty);
-        s = MultiDotRegex.Replace(s, " ");
-        s = s.TrimStart('.', ' ', '-', '_', '\t');
-        s = s.TrimEnd(' ', '\t');
-        return MultiSpaceRegex.Replace(s, " ").Trim();
-    }
-
-    private static string CleanDoctorDegree(DoctorsProfile doc) => CleanDoctorText(doc.Degree);
-    private static string CleanDoctorRoom(string? room) => CleanDoctorText(room);
-
-    public static bool HasValidContact(string? contact)
-    {
-        if (string.IsNullOrWhiteSpace(contact)) return false;
-        var c = contact.Trim();
-        return c != "0" && c != "." && c != ".." && c != "-" && c.Length > 2;
-    }
-
-    public static bool HasValidRoom(string? room)
-    {
-        if (string.IsNullOrWhiteSpace(room)) return false;
-        var r = CleanDoctorRoom(room);
-        return !string.IsNullOrWhiteSpace(r) && r != "0" && r != "." && r != ".." && r != "-";
-    }
-
-    private bool HasValidDepartment(int? deptId) => deptId.HasValue && deptId.Value > 0 && departments.Any(d => d.ID == deptId.Value);
-
-    private static string DoctorDisplayName(DoctorsProfile doctor)
-    {
-        var title = CleanDoctorText(doctor.Title);
-        var name = CleanDoctorText(doctor.Name);
-        if (string.IsNullOrWhiteSpace(title)) return name;
-        if (string.IsNullOrWhiteSpace(name)) return title;
-        if (name.StartsWith(title, StringComparison.OrdinalIgnoreCase))
-            return name;
-        return $"{title} {name}".Trim();
-    }
-
-    private static string GetDoctorInitials(DoctorsProfile doc)
-    {
-        var name = CleanDoctorText(doc.Name);
-        if (string.IsNullOrWhiteSpace(name)) return "DR";
-        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpper();
-        return $"{parts[0][0]}{parts[^1][0]}".ToUpper();
-    }
-
-    private static string DoctorTypeLabel(string? raw)
-    {
-        var norm = (raw ?? string.Empty).Trim();
-        return norm switch
-        {
-            "Permanent" => "Permanent",
-            "Residential" => "Residential",
-            "Contractual" => "Contractual",
-            "Visiting" => "Visiting",
-            "Consultant" => "Consultant",
-            "Temporary" => "Temporary",
-            _ => string.IsNullOrWhiteSpace(norm) ? "Doctor" : norm
-        };
-    }
-
-    private static string GetAttachmentClass(string? attachment) => (attachment?.Trim().ToLowerInvariant()) switch
-    {
-        "permanent" => "cat-permanent",
-        "residential" => "cat-residential",
-        "contractual" => "cat-contractual",
-        "visiting" => "cat-visiting",
-        "consultant" => "cat-consultant",
-        _ => "cat-default"
-    };
-
-    private void SetStatusFilter(string filter)
-    {
-        statusFilter = filter;
-        ResetPage();
-    }
-
-    private IEnumerable<DoctorsProfile> FilteredDoctors
-    {
-        get
-        {
-            var query = doctors.AsEnumerable();
-
-            if (statusFilter == "Active")
-                query = query.Where(x => x.IsActive);
-            else if (statusFilter == "Inactive")
-                query = query.Where(x => !x.IsActive);
-            else if (statusFilter == "Prioritized")
-                query = query.Where(x => x.Priority.HasValue && x.Priority > 0);
-
-            if (selectedDeptFilter.HasValue && selectedDeptFilter > 0)
-                query = query.Where(x => x.Department == selectedDeptFilter.Value);
-
-            if (!string.IsNullOrWhiteSpace(selectedCategoryFilter))
-                query = query.Where(x => string.Equals(x.Attachment?.Trim(), selectedCategoryFilter, StringComparison.OrdinalIgnoreCase));
-
-            if (!string.IsNullOrWhiteSpace(searchQuery))
-            {
-                var q = searchQuery.Trim();
-                query = query.Where(x =>
-                    x.ID.ToString().Contains(q) || ("D" + x.ID).Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    (x.Name != null && x.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
-                    (x.Degree != null && x.Degree.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
-                    (x.Attachment != null && x.Attachment.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
-                    (x.Room != null && x.Room.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
-                    (x.Contact != null && x.Contact.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
-                    (x.Department.HasValue && DepartmentName(x.Department).Contains(q, StringComparison.OrdinalIgnoreCase)));
-            }
-
-            return query
-                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
-                .ThenBy(x => x.Priority ?? 9999)
-                .ThenByDescending(x => x.IsActive)
-                .ThenBy(x => CleanDoctorText(x.Name));
-        }
-    }
-
-    private IEnumerable<DoctorsProfile> PagedDoctors => FilteredDoctors.Take(loadedPages * PageSize);
-    private int PageCount => Math.Max(1, (int)Math.Ceiling(FilteredDoctors.Count() / (double)PageSize));
-
-    private async Task LoadAsync()
-    {
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            doctors = await db.Doctors
-                .AsNoTracking()
-                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
-                .ThenBy(x => x.Priority ?? 9999)
-                .ThenByDescending(x => x.IsActive)
-                .ThenBy(x => x.Name)
-                .ToListAsync();
-
-            departments = await db.Departments
-                .AsNoTracking()
-                .OrderBy(x => x.Name)
-                .ToListAsync();
-        }
-        catch (Exception ex)
-        {
-            messageClass = "danger";
-            message = $"Error loading data: {ex.Message}";
-        }
-    }
-
-    private void OpenNewDoctor()
-    {
-        ResetEditor();
-        isDrawerOpen = true;
-    }
-
-    private void OpenEditDoctor(DoctorsProfile doctor)
-    {
-        Select(doctor);
-        isDrawerOpen = true;
-    }
-
-    private void CloseDrawer() => isDrawerOpen = false;
-
-    private bool IsOffDaySelected(string day)
-    {
-        if (string.IsNullOrWhiteSpace(editor.OffDay)) return false;
-        return editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private void ToggleOffDay(string day)
-    {
-        var current = string.IsNullOrWhiteSpace(editor.OffDay)
-            ? new List<string>()
-            : editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-
-        var existingIndex = current.FindIndex(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
-        if (existingIndex >= 0)
-        {
-            current.RemoveAt(existingIndex);
-        }
-        else
-        {
-            current.Add(day);
-        }
-        editor.OffDay = current.Count > 0 ? string.Join(", ", current) : string.Empty;
-    }
-
-    private async Task SaveAsync()
-    {
-        if (string.IsNullOrWhiteSpace(editor.Name))
-        {
-            messageClass = "danger";
-            message = I18n.IsBangla ? "ডাক্তারের নাম আবশ্যক।" : "Doctor name is required.";
-            return;
-        }
-
-        saving = true;
-        try
-        {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            if (editor.ID == 0)
-            {
-                editor.TransDate = DateTime.Now;
-                editor.EnteredBy = 1;
-                db.Doctors.Add(editor);
-            }
-            else
-            {
-                db.Doctors.Update(editor);
-            }
-            await db.SaveChangesAsync();
-            messageClass = "success";
-            message = I18n.IsBangla ? $"ডাক্তার {DoctorDisplayName(editor)} এর তথ্য সংরক্ষিত হয়েছে।" : $"Doctor {DoctorDisplayName(editor)} saved successfully.";
-            isDrawerOpen = false;
-            ResetEditor();
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            messageClass = "danger";
-            message = $"Error: {ex.Message}";
-        }
-        finally
-        {
-            saving = false;
-        }
-    }
-
-    private async Task ToggleDoctorActiveAsync(DoctorsProfile doc)
-    {
-        try
-        {
-            doc.IsActive = !doc.IsActive;
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var entity = await db.Doctors.FindAsync(doc.ID);
-            if (entity is not null)
-            {
-                entity.IsActive = doc.IsActive;
-                await db.SaveChangesAsync();
-                messageClass = "success";
-                message = $"{DoctorDisplayName(doc)} is now {(doc.IsActive ? "Active" : "Inactive")}.";
-            }
-        }
-        catch (Exception ex)
-        {
-            messageClass = "danger";
-            message = $"Error updating status: {ex.Message}";
-        }
-    }
-
-    private void Select(DoctorsProfile d)
-    {
-        var cleanAddr = CleanDoctorText(d.Address);
-        editor = new DoctorsProfile
-        {
-            ID = d.ID,
-            Name = d.Name,
-            Title = d.Title,
-            Degree = d.Degree,
-            Attachment = d.Attachment,
-            POSerial = d.POSerial,
-            AreaCode = d.AreaCode,
-            Balance = d.Balance,
-            OpeningBalance = d.OpeningBalance,
-            Contact = d.Contact,
-            Email = d.Email,
-            Room = d.Room,
-            Department = d.Department,
-            EnteredBy = d.EnteredBy,
-            TransDate = d.TransDate,
-            Address = !string.IsNullOrWhiteSpace(cleanAddr) ? d.Address : GetDefaultHospitalAddress(),
-            ReferralCategoryID = d.ReferralCategoryID,
-            IsActive = d.IsActive,
-            Priority = d.Priority,
-            ConsultationTime = d.ConsultationTime,
-            OffDay = d.OffDay
-        };
-        message = string.Empty;
-    }
-
-    private async Task DeleteSelectedAsync()
-    {
-        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ডাক্তার {editor.Name} মুছে ফেলতে চান?" : $"Delete doctor {editor.Name}?")) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var id = editor.ID;
-        var inUse = await db.DoctorAppointments.AnyAsync(x => x.DoctorID == id)
-                 || await db.OPDTickets.AnyAsync(x => x.DoctorID == id)
-                 || await db.EmergencyMemos.AnyAsync(x => x.DoctorID == id)
-                 || await db.OTCashMemos.AnyAsync(x => x.DoctorID == id)
-                 || await db.OTCashMemoItems.AnyAsync(x => x.ServiceID == id)
-                 || await db.PatientAdmissions.AnyAsync(x => x.Consultant == id || x.AdmittedBy == id || x.ReferredBy == id);
-
-        if (inUse)
-        {
-            messageClass = "danger";
-            message = I18n.IsBangla ? "এই ডাক্তারের রেফারেন্সে লেনদেনের রেকর্ড রয়েছে এবং মুছে ফেলা যাবে না।" : "This doctor has transactional records and cannot be deleted. You can mark them Inactive instead.";
-            return;
-        }
-
-        var entity = await db.Doctors.FindAsync(id);
-        if (entity is not null)
-        {
-            db.Remove(entity);
-            await db.SaveChangesAsync();
-        }
-        messageClass = "success";
-        message = I18n.IsBangla ? "ডাক্তার মুছে ফেলা হয়েছে।" : "Doctor deleted.";
-        isDrawerOpen = false;
-        ResetEditor();
-        await LoadAsync();
-    }
-
-    private void ResetEditor() => editor = NewDoctor();
-    private DoctorsProfile NewDoctor() => new()
-    {
-        Title = "Dr.",
-        Attachment = "Permanent",
-        Address = GetDefaultHospitalAddress(),
-        EnteredBy = 1,
-        TransDate = DateTime.Now,
-        IsActive = true
-    };
-
-    private string GetDefaultHospitalAddress()
-    {
-        if (!string.IsNullOrWhiteSpace(Branding.HospitalName))
-            return Branding.HospitalName;
-        return "Delta Medical College & Hospital";
-    }
-
-    private string DepartmentName(int? id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
-
-    private async Task ExportExcelAsync()
-    {
-        try
-        {
-            var list = FilteredDoctors.ToList();
-            var sb = new StringBuilder();
-            sb.AppendLine("Priority,Doctor ID,Title,Doctor Name,Category,Degree,Department,Room,Contact Mobile,Email,Chamber Address,Status");
-
-            foreach (var doc in list)
-            {
-                var priorityStr = doc.Priority.HasValue && doc.Priority > 0 ? doc.Priority.Value.ToString() : "";
-                var idStr = doc.ID.ToString();
-                var titleStr = EscapeCsv(CleanDoctorText(doc.Title));
-                var nameStr = EscapeCsv(CleanDoctorText(doc.Name));
-                var catStr = EscapeCsv(DoctorTypeLabel(doc.Attachment));
-                var degreeStr = EscapeCsv(CleanDoctorDegree(doc));
-                var deptStr = EscapeCsv(DepartmentName(doc.Department));
-                var roomStr = EscapeCsv(CleanDoctorRoom(doc.Room));
-                var contactStr = EscapeCsv(HasValidContact(doc.Contact) ? doc.Contact!.Trim() : "");
-                var emailStr = EscapeCsv(doc.Email?.Trim());
-                var addressStr = EscapeCsv(doc.Address?.Trim());
-                var statusStr = doc.IsActive ? "Active" : "Inactive";
-
-                sb.AppendLine($"\"{priorityStr}\",\"{idStr}\",\"{titleStr}\",\"{nameStr}\",\"{catStr}\",\"{degreeStr}\",\"{deptStr}\",\"{roomStr}\",\"{contactStr}\",\"{emailStr}\",\"{addressStr}\",\"{statusStr}\"");
-            }
-
-            var preamble = Encoding.UTF8.GetPreamble();
-            var dataBytes = Encoding.UTF8.GetBytes(sb.ToString());
-            var fullBytes = new byte[preamble.Length + dataBytes.Length];
-            Buffer.BlockCopy(preamble, 0, fullBytes, 0, preamble.Length);
-            Buffer.BlockCopy(dataBytes, 0, fullBytes, preamble.Length, dataBytes.Length);
-
-            var base64 = Convert.ToBase64String(fullBytes);
-            var filename = $"Doctors_Directory_{DateTime.Now:yyyyMMdd_HHmm}.csv";
-            await JS.InvokeVoidAsync("hpm.downloadFile", filename, "text/csv;charset=utf-8", base64);
-        }
-        catch (Exception ex)
-        {
-            messageClass = "danger";
-            message = $"Excel export error: {ex.Message}";
-        }
-    }
-
-    private static string EscapeCsv(string? val)
-    {
-        if (string.IsNullOrEmpty(val)) return string.Empty;
-        return val.Replace("\"", "\"\"");
-    }
-
-    private async Task PrintListAsync()
-    {
-        try
-        {
-            var list = FilteredDoctors.Take(500).ToList();
-            var sb = new StringBuilder();
-            sb.Append("<table><thead><tr>");
-            sb.Append("<th style='width:55px;' class='text-center'>Priority</th>");
-            sb.Append("<th style='width:55px;' class='text-center'>ID</th>");
-            sb.Append("<th>Doctor Name & Qualifications</th>");
-            sb.Append("<th style='width:90px;'>Category</th>");
-            sb.Append("<th style='width:140px;'>Department</th>");
-            sb.Append("<th style='width:70px;'>Room</th>");
-            sb.Append("<th style='width:95px;'>Contact</th>");
-            sb.Append("<th style='width:60px;' class='text-center'>Status</th>");
-            sb.Append("</tr></thead><tbody>");
-
-            foreach (var doc in list)
-            {
-                var priorityStr = doc.Priority.HasValue && doc.Priority > 0 ? $"<span class='priority-star'>⭐ #{doc.Priority}</span>" : "—";
-                var nameDisplay = System.Net.WebUtility.HtmlEncode(DoctorDisplayName(doc));
-                var degree = CleanDoctorDegree(doc);
-                var degreeDisplay = !string.IsNullOrWhiteSpace(degree) ? $"<div style='color:#64748b;font-size:7.5pt;'>{System.Net.WebUtility.HtmlEncode(degree)}</div>" : "";
-                var catClass = GetAttachmentClass(doc.Attachment);
-                var catDisplay = $"<span class='{catClass}'>{System.Net.WebUtility.HtmlEncode(DoctorTypeLabel(doc.Attachment))}</span>";
-                var deptDisplay = System.Net.WebUtility.HtmlEncode(DepartmentName(doc.Department));
-                var room = CleanDoctorRoom(doc.Room);
-                var roomDisplay = !string.IsNullOrWhiteSpace(room) ? $"Room {System.Net.WebUtility.HtmlEncode(room)}" : "—";
-                var contact = HasValidContact(doc.Contact) ? System.Net.WebUtility.HtmlEncode(doc.Contact!.Trim()) : "—";
-                var statusClass = doc.IsActive ? "badge-active" : "badge-inactive";
-                var statusText = doc.IsActive ? "Active" : "Inactive";
-
-                sb.Append("<tr>");
-                sb.Append($"<td class='text-center'>{priorityStr}</td>");
-                sb.Append($"<td class='text-center'><strong>{doc.ID}</strong></td>");
-                sb.Append($"<td><strong>{nameDisplay}</strong>{degreeDisplay}</td>");
-                sb.Append($"<td>{catDisplay}</td>");
-                sb.Append($"<td>{deptDisplay}</td>");
-                sb.Append($"<td>{roomDisplay}</td>");
-                sb.Append($"<td>{contact}</td>");
-                sb.Append($"<td class='text-center'><span class='{statusClass}'>{statusText}</span></td>");
-                sb.Append("</tr>");
-            }
-
-            sb.Append("</tbody></table>");
-
-            var metaText = $"Total Doctors: {FilteredDoctors.Count()} | Scope: {statusFilter} | Filter: {(string.IsNullOrWhiteSpace(searchQuery) ? "All" : searchQuery)}";
-            await JS.InvokeVoidAsync("hpm.printDoctorList", Branding.HospitalName, "Doctors Directory & Priority Schedule", metaText, sb.ToString());
-        }
-        catch (Exception ex)
-        {
-            messageClass = "danger";
-            message = $"Print error: {ex.Message}";
-        }
-    }
-
-    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-
-    public void Dispose()
-    {
-        I18n.OnLanguageChanged -= HandleLanguageChanged;
-        try
-        {
-            _ = JS.InvokeVoidAsync("hpm.disposeTableAutoScroll", "doctorsTableWrap");
-        }
-        catch { }
-        dotNetRef?.Dispose();
-    }
-}
+@page "/masters/doctors"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@implements IDisposable
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@using System.Data
+@using System.Data.Common
+@using System.Text
+@using System.Text.RegularExpressions
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+
+<PageTitle>@I18n.T("Doctors Directory & Priority Setup") | @Branding.HospitalName</PageTitle>
+
+<style>
+.doc-scroll-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #64748b;
+    background: #f8fafc;
+    border-top: 1px dashed #e2e8f0;
+}
+</style>
+
+<div class="doc-master-page doc-master-classic-fit">
+    <!-- Top Action & Statistics Bar -->
+    <div class="doc-master-header">
+        <div class="doc-master-title-col">
+            <a class="doc-back-link" href="">← @I18n.T("Dashboard", "ড্যাশবোর্ড")</a>
+            <h1 class="doc-master-heading">
+                <span>🩺 @I18n.T("Doctors Directory & Priority Setup")</span>
+            </h1>
+        </div>
+
+        <div class="doc-header-stats">
+            <button type="button"
+                    class="doc-stat-pill @(statusFilter == "All" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("All")'
+                    title="@I18n.T("Show all doctors")">
+                <span class="stat-label">@I18n.T("Total"):</span>
+                <span class="stat-value">@doctors.Count</span>
+            </button>
+            <button type="button"
+                    class="doc-stat-pill active-pill @(statusFilter == "Active" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Active")'
+                    title="@I18n.T("Filter active doctors")">
+                <span class="stat-label">✓ @I18n.T("Active"):</span>
+                <span class="stat-value">@doctors.Count(x => x.IsActive)</span>
+            </button>
+            <button type="button"
+                    class="doc-stat-pill inactive-pill @(statusFilter == "Inactive" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Inactive")'
+                    title="@I18n.T("Filter inactive doctors")">
+                <span class="stat-label">✕ @I18n.T("Inactive"):</span>
+                <span class="stat-value">@doctors.Count(x => !x.IsActive)</span>
+            </button>
+            <button type="button"
+                    class="doc-stat-pill priority-pill @(statusFilter == "Prioritized" ? "selected" : "")"
+                    @onclick='() => SetStatusFilter("Prioritized")'
+                    title="@I18n.T("Filter prioritized doctors")">
+                <span class="stat-label">⭐ @I18n.T("Prioritized"):</span>
+                <span class="stat-value">@doctors.Count(x => x.Priority.HasValue && x.Priority > 0)</span>
+            </button>
+            <button type="button" class="btn btn-primary doc-btn doc-btn-add" @onclick="OpenNewDoctor">
+                + @I18n.T("New Doctor")
+            </button>
+            <button type="button" class="btn btn-secondary doc-btn doc-btn-excel" @onclick="ExportExcelAsync" title="@I18n.T("Download Doctors List as Excel (CSV)")">
+                📊 @I18n.T("Excel")
+            </button>
+            <button type="button" class="btn btn-secondary doc-btn doc-btn-print" @onclick="PrintListAsync" title="@I18n.T("Print or Save as PDF")">
+                🖨️ @I18n.T("Print / PDF")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="doc-alert @messageClass">
+            <span>@(messageClass == "success" ? "✓" : "⚠")</span>
+            <span>@message</span>
+            <button type="button" class="doc-alert-close" @onclick='() => message = string.Empty'>✕</button>
+        </div>
+    }
+
+    <!-- Doctors Directory Main Grid -->
+    <div class="doc-master-grid">
+        <div class="doc-card doc-list-card">
+            <!-- Filter Header -->
+            <div class="doc-filter-header">
+                <div class="doc-filter-row">
+                    <div class="doc-search-wrap">
+                        <span class="doc-search-icon"><SearchIcon /></span>
+                        <input type="text"
+                               class="classic-input doc-search-input"
+                               placeholder="@I18n.T("Search doctor ID, name, category, department, room, mobile...")"
+                               @bind="searchQuery"
+                               @bind:event="oninput"
+                               @bind:after="ResetPage" />
+                        @if (!string.IsNullOrWhiteSpace(searchQuery))
+                        {
+                            <button type="button" class="doc-search-clear" @onclick='() => { searchQuery = string.Empty; ResetPage(); }'>✕</button>
+                        }
+                    </div>
+
+                    <div class="doc-dept-filter-wrap">
+                        <select class="classic-input doc-dept-select" @bind="selectedDeptFilter" @bind:after="ResetPage">
+                            <option value="">-- @I18n.T("All Departments") --</option>
+                            @foreach (var d in departments)
+                            {
+                                <option value="@d.ID">@d.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="doc-dept-filter-wrap">
+                        <select class="classic-input doc-category-select" @bind="selectedCategoryFilter" @bind:after="ResetPage">
+                            <option value="">-- @I18n.T("All Categories") --</option>
+                            <option value="Permanent">@I18n.T("Permanent Doctor")</option>
+                            <option value="Residential">@I18n.T("Residential Doctor")</option>
+                            <option value="Contractual">@I18n.T("Contractual Doctor")</option>
+                            <option value="Visiting">@I18n.T("Visiting / Guest Doctor")</option>
+                            <option value="Consultant">@I18n.T("Consultant Doctor")</option>
+                            <option value="Temporary">@I18n.T("Temporary Doctor")</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Scope Status Chips -->
+                <div class="doc-status-chips-row">
+                    <div class="doc-status-chips">
+                        <button type="button"
+                                class="doc-chip @(statusFilter == "All" ? "active" : "")"
+                                @onclick='() => SetStatusFilter("All")'>
+                            @I18n.T("All") (@doctors.Count)
+                        </button>
+                        <button type="button"
+                                class="doc-chip active-chip @(statusFilter == "Active" ? "active" : "")"
+                                @onclick='() => SetStatusFilter("Active")'>
+                            ✓ @I18n.T("Active") (@doctors.Count(x => x.IsActive))
+                        </button>
+                        <button type="button"
+                                class="doc-chip inactive-chip @(statusFilter == "Inactive" ? "active" : "")"
+                                @onclick='() => SetStatusFilter("Inactive")'>
+                            ✕ @I18n.T("Inactive") (@doctors.Count(x => !x.IsActive))
+                        </button>
+                        <button type="button"
+                                class="doc-chip priority-chip @(statusFilter == "Prioritized" ? "active" : "")"
+                                @onclick='() => SetStatusFilter("Prioritized")'>
+                            ⭐ @I18n.T("Prioritized") (@doctors.Count(x => x.Priority.HasValue && x.Priority > 0))
+                        </button>
+                    </div>
+
+                    <span class="doc-found-count">
+                        @FilteredDoctors.Count() @I18n.T("found")
+                    </span>
+                </div>
+            </div>
+
+            <!-- Full-Width Doctors Directory Table with Auto Next Page on Scroll -->
+            <div class="doc-table-wrap" id="doctorsTableWrap">
+                <table class="doc-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 75px; text-align: center;">@I18n.T("Priority")</th>
+                            <th>@I18n.T("Doctor Profile")</th>
+                            <th style="width: 200px;">@I18n.T("Department & Room")</th>
+                            <th style="width: 210px;">@I18n.T("Schedule & Off Day")</th>
+                            <th style="width: 170px;">@I18n.T("Contact")</th>
+                            <th style="width: 85px; text-align: center;">@I18n.T("Status")</th>
+                            <th style="width: 75px; text-align: center;">@I18n.T("Action")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!PagedDoctors.Any())
+                        {
+                            <tr>
+                                <td colspan="7" class="doc-empty-cell">
+                                    <div class="doc-empty-box">
+                                        <span>📋</span>
+                                        <strong>@I18n.T("No doctors match your search or filter.")</strong>
+                                        <p>@I18n.T("Try clearing your search query or switching status filters.")</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var doctor in PagedDoctors)
+                        {
+                            var hasDegree = !string.IsNullOrWhiteSpace(CleanDoctorDegree(doctor));
+                            var hasRoom = HasValidRoom(doctor.Room);
+                            var hasDept = HasValidDepartment(doctor.Department);
+                            var hasContact = HasValidContact(doctor.Contact);
+                            var isPrioritized = doctor.Priority.HasValue && doctor.Priority > 0;
+                            var offDays = doctor.OffDay?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+
+                            <tr class="@(isPrioritized ? "doc-row-prioritized" : "") @(!doctor.IsActive ? "doc-row-inactive" : "")">
+                                <td style="text-align: center;">
+                                    @if (isPrioritized)
+                                    {
+                                        <span class="doc-priority-badge" title="@I18n.T("Serial sort priority for appointments")">
+                                            ⭐ #@doctor.Priority
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="doc-priority-none">—</span>
+                                    }
+                                </td>
+                                <td>
+                                    <div class="doc-cell-profile">
+                                        <div class="doc-avatar">
+                                            @GetDoctorInitials(doctor)
+                                        </div>
+                                        <div class="doc-info">
+                                            <div class="doc-name-line">
+                                                <strong class="doc-name">@DoctorDisplayName(doctor)</strong>
+                                                <span class="doc-id-pill">#D@(doctor.ID)</span>
+                                                <span class="doc-cat-tag @GetAttachmentClass(doctor.Attachment)">
+                                                    @DoctorTypeLabel(doctor.Attachment)
+                                                </span>
+                                            </div>
+                                            @if (hasDegree)
+                                            {
+                                                <div class="doc-degree" title="@CleanDoctorDegree(doctor)">
+                                                    🎓 @CleanDoctorDegree(doctor)
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="doc-cell-dept">
+                                        @if (hasDept)
+                                        {
+                                            <span class="doc-dept-badge">
+                                                🏷️ @DepartmentName(doctor.Department)
+                                            </span>
+                                        }
+                                        <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                                            @if (hasRoom)
+                                            {
+                                                <span class="doc-room-badge" title="@I18n.T("Consultation Chamber")">
+                                                    🚪 @I18n.T("Room") @CleanDoctorRoom(doctor.Room)
+                                                </span>
+                                            }
+                                            @if (doctor.ConsultationFee.HasValue && doctor.ConsultationFee.Value > 0)
+                                            {
+                                                <span class="doc-fee-badge" style="font-size: 10px; font-weight: 800; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 1px 5px; border-radius: 4px; display: inline-flex; align-items: center; gap: 2px;" title="@I18n.T("Regular Consultation Fee")">
+                                                    <span>Reg: ৳</span><span>@doctor.ConsultationFee.Value.ToString("N0")</span>
+                                                </span>
+                                            }
+                                            @if (doctor.OpdConsultationFee.HasValue && doctor.OpdConsultationFee.Value > 0)
+                                            {
+                                                <span class="doc-fee-badge" style="font-size: 10px; font-weight: 800; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; padding: 1px 5px; border-radius: 4px; display: inline-flex; align-items: center; gap: 2px;" title="@I18n.T("OPD Consultation Fee")">
+                                                    <span>OPD: ৳</span><span>@doctor.OpdConsultationFee.Value.ToString("N0")</span>
+                                                </span>
+                                            }
+                                        </div>
+                                        @if (!hasDept && !hasRoom && (!doctor.ConsultationFee.HasValue || doctor.ConsultationFee.Value <= 0) && (!doctor.OpdConsultationFee.HasValue || doctor.OpdConsultationFee.Value <= 0))
+                                        {
+                                            <span class="doc-muted">—</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="doc-cell-sched">
+                                        @if (!string.IsNullOrWhiteSpace(doctor.ConsultationTime))
+                                        {
+                                            <span class="doc-time-badge" title="@I18n.T("Visiting Hours")">
+                                                🕒 @doctor.ConsultationTime
+                                            </span>
+                                        }
+                                        @if (offDays.Length > 0)
+                                        {
+                                            <div class="doc-offdays-line">
+                                                <span class="doc-off-label">@I18n.T("Off"):</span>
+                                                @foreach (var d in offDays)
+                                                {
+                                                    <span class="doc-off-pill">@d</span>
+                                                }
+                                            </div>
+                                        }
+                                        @if (string.IsNullOrWhiteSpace(doctor.ConsultationTime) && offDays.Length == 0)
+                                        {
+                                            <span class="doc-muted">—</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="doc-cell-contact">
+                                        @if (hasContact)
+                                        {
+                                            <a class="doc-contact-link" href="tel:@doctor.Contact!.Trim()" title="@I18n.T("Click to call")">
+                                                📞 @doctor.Contact.Trim()
+                                            </a>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(doctor.Email))
+                                        {
+                                            <span class="doc-email" title="@doctor.Email">
+                                                ✉️ @doctor.Email.Trim()
+                                            </span>
+                                        }
+                                        @if (!hasContact && string.IsNullOrWhiteSpace(doctor.Email))
+                                        {
+                                            <span class="doc-muted">—</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td style="text-align: center;">
+                                    <button type="button"
+                                            class="doc-status-btn @(doctor.IsActive ? "active" : "inactive")"
+                                            @onclick="() => ToggleDoctorActiveAsync(doctor)"
+                                            title="@(doctor.IsActive ? I18n.T("Click to mark Inactive") : I18n.T("Click to mark Active"))">
+                                        @(doctor.IsActive ? "✓ " + I18n.T("Active") : "✕ " + I18n.T("Inactive"))
+                                    </button>
+                                </td>
+                                <td style="text-align: center;">
+                                    <button type="button" class="btn btn-secondary doc-edit-btn" @onclick="() => OpenEditDoctor(doctor)" title="@I18n.T("Edit Doctor")">
+                                        ✏️ @I18n.T("Edit")
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                @if (isLoadingMore)
+                {
+                    <div class="doc-scroll-hint">
+                        <span>⏳</span>
+                        <span>@I18n.T("Loading more doctors...")</span>
+                    </div>
+                }
+            </div>
+
+            <!-- Pagination Bar (Intact with Auto-Scroll Support) -->
+            <div class="doc-table-footer">
+                <div class="doc-pager-info">
+                    @if (FilteredDoctors.Any())
+                    {
+                        <span>@I18n.T("Showing") 1-@(Math.Min(loadedPages * PageSize, FilteredDoctors.Count())) @I18n.T("of") @FilteredDoctors.Count()</span>
+                    }
+                </div>
+
+                <div class="doc-pager-controls">
+                    <button type="button" class="doc-page-btn" @onclick="GoToFirstPageAsync" disabled="@(loadedPages <= 1)" title="@I18n.T("First Page")">«</button>
+                    <button type="button" class="doc-page-btn" @onclick="GoToPrevPage" disabled="@(loadedPages <= 1)" title="@I18n.T("Previous Page")">‹</button>
+                    <span class="doc-page-indicator">@I18n.T("Page") @loadedPages @I18n.T("of") @PageCount</span>
+                    <button type="button" class="doc-page-btn" @onclick="GoToNextPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Next Page")">›</button>
+                    <button type="button" class="doc-page-btn" @onclick="GoToLastPage" disabled="@(loadedPages >= PageCount)" title="@I18n.T("Last Page")">»</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- SLIDE-OVER DRAWER FOR DOCTOR ADD / EDIT   -->
+    <!-- ========================================== -->
+    @if (isDrawerOpen)
+    {
+        <div class="doc-drawer-backdrop" @onclick="CloseDrawer"></div>
+        <div class="doc-drawer-panel" role="dialog" aria-modal="true">
+            <div class="doc-drawer-header">
+                <div class="doc-drawer-title-wrap">
+                    <span class="doc-drawer-icon">@(editor.ID == 0 ? "➕" : "✏️")</span>
+                    <div>
+                        <h2 class="doc-drawer-title">
+                            @(editor.ID == 0 ? I18n.T("Add Consultant Doctor") : $"{I18n.T("Edit Doctor")} #D{editor.ID}")
+                        </h2>
+                        <span class="doc-drawer-sub">
+                            @(editor.ID == 0 ? I18n.T("Create a new doctor profile and chamber schedule") : DoctorDisplayName(editor))
+                        </span>
+                    </div>
+                </div>
+
+                <div class="doc-drawer-header-actions">
+                    @if (editor.ID > 0)
+                    {
+                        <span class="doc-status-badge @(editor.IsActive ? "active" : "inactive")">
+                            @(editor.IsActive ? I18n.T("Active") : I18n.T("Inactive"))
+                        </span>
+                    }
+                    <button type="button" class="doc-drawer-close" @onclick="CloseDrawer" title="@I18n.T("Close")">✕</button>
+                </div>
+            </div>
+
+            <EditForm Model="editor" OnSubmit="SaveAsync" class="doc-drawer-form">
+                <div class="doc-drawer-body">
+                    <!-- Section 1: Doctor Profile -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>👤</span>
+                            <span>@I18n.T("Doctor Profile")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="width: 90px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Title")</label>
+                                <select class="classic-input" @bind="editor.Title">
+                                    <option value="Dr.">Dr.</option>
+                                    <option value="Prof.">Prof.</option>
+                                    <option value="Assoc. Prof.">Assoc. Prof.</option>
+                                    <option value="Asst. Prof.">Asst. Prof.</option>
+                                    <option value="Brig. Gen.">Brig. Gen.</option>
+                                    <option value="Maj. Gen.">Maj. Gen.</option>
+                                    <option value="Col.">Col.</option>
+                                    <option value="Lt. Col.">Lt. Col.</option>
+                                    <option value="Capt.">Capt.</option>
+                                </select>
+                            </div>
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Full Name") <span class="doc-required">*</span></label>
+                                <InputText class="classic-input doc-input-name" @bind-Value="editor.Name" placeholder="@I18n.T("e.g. Shamim Ahsan")" />
+                            </div>
+                        </div>
+
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Qualifications & Degrees")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Degree" placeholder="@I18n.T("e.g. MBBS, FCPS (Surgery), MS")" />
+                            </div>
+                            <div class="doc-field" style="width: 170px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Category / Attachment")</label>
+                                <select class="classic-input" @bind="editor.Attachment">
+                                    <option value="Permanent">@I18n.T("Permanent")</option>
+                                    <option value="Residential">@I18n.T("Residential")</option>
+                                    <option value="Contractual">@I18n.T("Contractual")</option>
+                                    <option value="Visiting">@I18n.T("Visiting / Guest")</option>
+                                    <option value="Consultant">@I18n.T("Consultant")</option>
+                                    <option value="Temporary">@I18n.T("Temporary")</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Department & Chamber -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>🏥</span>
+                            <span>@I18n.T("Department & Chamber")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Department")</label>
+                                <select class="classic-input" @bind="editor.Department">
+                                    <option value="">-- @I18n.T("Select Department") --</option>
+                                    @foreach (var d in departments)
+                                    {
+                                        <option value="@d.ID">@d.Name</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="doc-field" style="width: 140px; flex-shrink: 0;">
+                                <label class="doc-label">@I18n.T("Room / Chamber")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Room" placeholder="@I18n.T("e.g. 204, OPD-B")" />
+                            </div>
+                        </div>
+
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Chamber Address")</label>
+                            <InputText class="classic-input" @bind-Value="editor.Address" placeholder="@I18n.T("Hospital or branch address")" />
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Consultation Schedule & Fees -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>🕒</span>
+                            <span>@I18n.T("Consultation Schedule & Fees")</span>
+                        </div>
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Visiting Hours / Shift Time")</label>
+                            <InputText class="classic-input" @bind-Value="editor.ConsultationTime" placeholder="@I18n.T("e.g. 05:00 PM - 09:00 PM (Daily)")" />
+                        </div>
+
+                        <!-- Two-Column Fee Grid: Regular Consultation Fee & OPD Consultation Fee -->
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+                            <!-- Regular Consultation Fee -->
+                            <div class="doc-field">
+                                <label class="doc-label">
+                                    <span>@I18n.T("Regular Consultation Fee") (@I18n.CurrencySymbol)</span>
+                                </label>
+                                <div class="appt-unit-input-box" style="height: 30px;">
+                                    <span class="appt-unit-addon" style="font-weight: 800; color: #047857;">৳</span>
+                                    <InputNumber class="classic-input appt-unit-input" @bind-Value="editor.ConsultationFee" placeholder="500" min="0" step="50" style="font-weight: 700; color: #0f172a;" />
+                                </div>
+                                <!-- Quick Presets for Regular Fee -->
+                                <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                                    <span style="font-size: 10px; color: #64748b; font-weight: 600;">@I18n.T("Presets"):</span>
+                                    @foreach (var fee in regularPresetFees)
+                                    {
+                                        <button type="button" 
+                                                class="btn btn-link p-0" 
+                                                style="font-size: 10px; font-weight: 700; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 4px; padding: 1px 5px; text-decoration: none;"
+                                                @onclick="() => editor.ConsultationFee = fee"
+                                                title="@I18n.T("Set regular fee to") ৳@fee">
+                                            ৳@fee.ToString("0")
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+
+                            <!-- OPD Consultation Fee -->
+                            <div class="doc-field">
+                                <label class="doc-label">
+                                    <span>@I18n.T("OPD Consultation Fee") (@I18n.CurrencySymbol)</span>
+                                </label>
+                                <div class="appt-unit-input-box" style="height: 30px;">
+                                    <span class="appt-unit-addon" style="font-weight: 800; color: #0284c7;">৳</span>
+                                    <InputNumber class="classic-input appt-unit-input" @bind-Value="editor.OpdConsultationFee" placeholder="100" min="0" step="10" style="font-weight: 700; color: #0f172a;" />
+                                </div>
+                                <!-- Quick Presets for OPD Fee -->
+                                <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 4px;">
+                                    <span style="font-size: 10px; color: #64748b; font-weight: 600;">@I18n.T("Presets"):</span>
+                                    @foreach (var fee in opdPresetFees)
+                                    {
+                                        <button type="button" 
+                                                class="btn btn-link p-0" 
+                                                style="font-size: 10px; font-weight: 700; color: #0369a1; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 1px 5px; text-decoration: none;"
+                                                @onclick="() => editor.OpdConsultationFee = fee"
+                                                title="@I18n.T("Set OPD fee to") ৳@fee">
+                                            ৳@fee.ToString("0")
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="doc-field">
+                            <label class="doc-label">@I18n.T("Weekly Off Days")</label>
+                            <div class="doc-days-toggle-wrap">
+                                @foreach (var day in WeekDays)
+                                {
+                                    var isSelected = IsOffDaySelected(day);
+                                    <button type="button"
+                                            class="doc-day-chip @(isSelected ? "selected" : "")"
+                                            @onclick="() => ToggleOffDay(day)">
+                                        @(isSelected ? "✓ " : "")@I18n.T(day)
+                                    </button>
+                                }
+                            </div>
+                            <InputText class="classic-input" style="margin-top: 5px;"
+                                       @bind-Value="editor.OffDay"
+                                       placeholder="@I18n.T("Selected off days (e.g. Friday, Saturday)")" />
+                        </div>
+                    </div>
+
+                    <!-- Section 4: Contact & Priority / Status -->
+                    <div class="doc-drawer-section">
+                        <div class="doc-section-heading">
+                            <span>⚙️</span>
+                            <span>@I18n.T("Contact, Priority & Status")</span>
+                        </div>
+                        <div class="doc-row">
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Contact Mobile")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Contact" placeholder="017xxxxxxxx" />
+                            </div>
+                            <div class="doc-field" style="flex: 1; min-width: 0;">
+                                <label class="doc-label">@I18n.T("Email")</label>
+                                <InputText class="classic-input" @bind-Value="editor.Email" placeholder="doctor@delta.edu.bd" />
+                            </div>
+                        </div>
+
+                        <div class="doc-priority-control-box" style="margin-top: 10px;">
+                            <div class="doc-row" style="align-items: flex-start;">
+                                <div class="doc-field" style="flex: 1; min-width: 0;">
+                                    <label class="doc-label" title="@I18n.T("Appointment Priority Serial")">
+                                        ⭐ @I18n.T("Priority Serial")
+                                    </label>
+                                    <InputNumber class="classic-input doc-priority-input"
+                                                 @bind-Value="editor.Priority"
+                                                 placeholder="@I18n.T("e.g. 1, 2, 3...")"
+                                                 min="1" max="999" />
+                                    <span class="doc-help-text">
+                                        @I18n.T("Appointment search sort order.")
+                                    </span>
+                                </div>
+
+                                <div class="doc-field" style="flex: 1; min-width: 0;">
+                                    <label class="doc-label">@I18n.T("Doctor Status")</label>
+                                    <div class="doc-status-toggle">
+                                        <button type="button"
+                                                class="doc-toggle-btn @(editor.IsActive ? "active" : "")"
+                                                @onclick="() => editor.IsActive = true">
+                                            ✓ @I18n.T("Active")
+                                        </button>
+                                        <button type="button"
+                                                class="doc-toggle-btn @(!editor.IsActive ? "inactive" : "")"
+                                                @onclick="() => editor.IsActive = false">
+                                            ✕ @I18n.T("Inactive")
+                                        </button>
+                                    </div>
+                                    <span class="doc-help-text">
+                                        @(editor.IsActive ? I18n.T("Doctor appears in appointment dropdown.") : I18n.T("Doctor is hidden from appointment booking."))
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Drawer Footer Actions -->
+                <div class="doc-drawer-footer">
+                    <div>
+                        @if (editor.ID > 0)
+                        {
+                            <button class="btn btn-ghost doc-btn" type="button" @onclick="DeleteSelectedAsync" style="color:#dc2626;" title="@I18n.T("Delete Doctor")">
+                                🗑️ @I18n.T("Delete")
+                            </button>
+                        }
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-ghost doc-btn" type="button" @onclick="CloseDrawer">
+                            @I18n.T("Cancel")
+                        </button>
+                        <button class="btn btn-primary doc-btn doc-btn-add" type="submit" disabled="@saving">
+                            💾 @(saving ? I18n.T("Saving...") : editor.ID == 0 ? I18n.T("Save Doctor") : I18n.T("Update Doctor"))
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+    }
+</div>
+
+@code {
+    private DotNetObjectReference<DoctorsMaster>? dotNetRef;
+    private DoctorsProfile editor = new() { Title = "Dr.", Attachment = "Permanent", EnteredBy = 1, TransDate = DateTime.Now, IsActive = true };
+    private List<DoctorsProfile> doctors = [];
+    private List<Department> departments = [];
+
+    // Filter, search, and progressive auto-loading pagination state
+    private string searchQuery = string.Empty;
+    private string statusFilter = "All";
+    private int? selectedDeptFilter;
+    private string? selectedCategoryFilter;
+    private const int PageSize = 10;
+    private int loadedPages = 1;
+    private bool isLoadingMore = false;
+    private string message = string.Empty;
+    private string messageClass = "success";
+    private bool saving;
+    private bool isDrawerOpen;
+
+    private static readonly string[] WeekDays = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
+    private readonly decimal[] regularPresetFees = [300m, 500m, 600m, 800m, 1000m, 1200m];
+    private readonly decimal[] opdPresetFees = [30m, 50m, 100m, 150m, 200m, 300m];
+    private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static readonly Regex MultiDotRegex = new(@"\.{2,}", RegexOptions.Compiled);
+    private static readonly Regex LeadingZRegex = new(@"^z{2,}[\s._-]*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += HandleLanguageChanged;
+        await Branding.LoadAsync();
+        if (string.IsNullOrWhiteSpace(editor.Address))
+        {
+            editor.Address = GetDefaultHospitalAddress();
+        }
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("hpm.initTableAutoScroll", "doctorsTableWrap", dotNetRef, nameof(LoadNextPageFromScroll));
+        }
+    }
+
+    [JSInvokable]
+    public async Task LoadNextPageFromScroll()
+    {
+        if (isLoadingMore || loadedPages >= PageCount) return;
+
+        isLoadingMore = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(100);
+
+        loadedPages++;
+        isLoadingMore = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task GoToFirstPageAsync()
+    {
+        loadedPages = 1;
+        await JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
+    }
+
+    private void GoToPrevPage() => loadedPages = Math.Max(1, loadedPages - 1);
+    private void GoToNextPage() => loadedPages = Math.Min(PageCount, loadedPages + 1);
+    private void GoToLastPage() => loadedPages = PageCount;
+
+    private void ResetPage()
+    {
+        loadedPages = 1;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.scrollElementToTop", "doctorsTableWrap");
+        }
+        catch { }
+    }
+
+    public static string CleanDoctorText(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+        var s = input.Trim();
+        if (s.All(c => c == '.' || c == '-' || c == '_' || char.IsWhiteSpace(c)))
+            return string.Empty;
+
+        s = LeadingZRegex.Replace(s, string.Empty);
+        s = MultiDotRegex.Replace(s, " ");
+        s = s.TrimStart('.', ' ', '-', '_', '\t');
+        s = s.TrimEnd(' ', '\t');
+        return MultiSpaceRegex.Replace(s, " ").Trim();
+    }
+
+    private static string CleanDoctorDegree(DoctorsProfile doc) => CleanDoctorText(doc.Degree);
+    private static string CleanDoctorRoom(string? room) => CleanDoctorText(room);
+
+    public static bool HasValidContact(string? contact)
+    {
+        if (string.IsNullOrWhiteSpace(contact)) return false;
+        var c = contact.Trim();
+        return c != "0" && c != "." && c != ".." && c != "-" && c.Length > 2;
+    }
+
+    public static bool HasValidRoom(string? room)
+    {
+        if (string.IsNullOrWhiteSpace(room)) return false;
+        var r = CleanDoctorRoom(room);
+        return !string.IsNullOrWhiteSpace(r) && r != "0" && r != "." && r != ".." && r != "-";
+    }
+
+    private bool HasValidDepartment(int? deptId) => deptId.HasValue && deptId.Value > 0 && departments.Any(d => d.ID == deptId.Value);
+
+    private static string DoctorDisplayName(DoctorsProfile doctor)
+    {
+        var title = CleanDoctorText(doctor.Title);
+        var name = CleanDoctorText(doctor.Name);
+        if (string.IsNullOrWhiteSpace(title)) return name;
+        if (string.IsNullOrWhiteSpace(name)) return title;
+        if (name.StartsWith(title, StringComparison.OrdinalIgnoreCase))
+            return name;
+        return $"{title} {name}".Trim();
+    }
+
+    private static string GetDoctorInitials(DoctorsProfile doc)
+    {
+        var name = CleanDoctorText(doc.Name);
+        if (string.IsNullOrWhiteSpace(name)) return "DR";
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1) return parts[0][..Math.Min(2, parts[0].Length)].ToUpper();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpper();
+    }
+
+    private static string DoctorTypeLabel(string? raw)
+    {
+        var norm = (raw ?? string.Empty).Trim();
+        return norm switch
+        {
+            "Permanent" => "Permanent",
+            "Residential" => "Residential",
+            "Contractual" => "Contractual",
+            "Visiting" => "Visiting",
+            "Consultant" => "Consultant",
+            "Temporary" => "Temporary",
+            _ => string.IsNullOrWhiteSpace(norm) ? "Doctor" : norm
+        };
+    }
+
+    private static string GetAttachmentClass(string? attachment) => (attachment?.Trim().ToLowerInvariant()) switch
+    {
+        "permanent" => "cat-permanent",
+        "residential" => "cat-residential",
+        "contractual" => "cat-contractual",
+        "visiting" => "cat-visiting",
+        "consultant" => "cat-consultant",
+        _ => "cat-default"
+    };
+
+    private void SetStatusFilter(string filter)
+    {
+        statusFilter = filter;
+        ResetPage();
+    }
+
+    private IEnumerable<DoctorsProfile> FilteredDoctors
+    {
+        get
+        {
+            var query = doctors.AsEnumerable();
+
+            if (statusFilter == "Active")
+                query = query.Where(x => x.IsActive);
+            else if (statusFilter == "Inactive")
+                query = query.Where(x => !x.IsActive);
+            else if (statusFilter == "Prioritized")
+                query = query.Where(x => x.Priority.HasValue && x.Priority > 0);
+
+            if (selectedDeptFilter.HasValue && selectedDeptFilter > 0)
+                query = query.Where(x => x.Department == selectedDeptFilter.Value);
+
+            if (!string.IsNullOrWhiteSpace(selectedCategoryFilter))
+                query = query.Where(x => string.Equals(x.Attachment?.Trim(), selectedCategoryFilter, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                var q = searchQuery.Trim();
+                query = query.Where(x =>
+                    x.ID.ToString().Contains(q) || ("D" + x.ID).Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    (x.Name != null && x.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Degree != null && x.Degree.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Attachment != null && x.Attachment.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Room != null && x.Room.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Contact != null && x.Contact.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                    (x.Department.HasValue && DepartmentName(x.Department).Contains(q, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            return query
+                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
+                .ThenBy(x => x.Priority ?? 9999)
+                .ThenByDescending(x => x.IsActive)
+                .ThenBy(x => CleanDoctorText(x.Name));
+        }
+    }
+
+    private IEnumerable<DoctorsProfile> PagedDoctors => FilteredDoctors.Take(loadedPages * PageSize);
+    private int PageCount => Math.Max(1, (int)Math.Ceiling(FilteredDoctors.Count() / (double)PageSize));
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            doctors = await db.Doctors
+                .AsNoTracking()
+                .OrderBy(x => x.Priority.HasValue && x.Priority > 0 ? 0 : 1)
+                .ThenBy(x => x.Priority ?? 9999)
+                .ThenByDescending(x => x.IsActive)
+                .ThenBy(x => x.Name)
+                .ToListAsync();
+
+            departments = await db.Departments
+                .AsNoTracking()
+                .OrderBy(x => x.Name)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error loading data: {ex.Message}";
+        }
+    }
+
+    private void OpenNewDoctor()
+    {
+        ResetEditor();
+        isDrawerOpen = true;
+    }
+
+    private void OpenEditDoctor(DoctorsProfile doctor)
+    {
+        Select(doctor);
+        isDrawerOpen = true;
+    }
+
+    private void CloseDrawer() => isDrawerOpen = false;
+
+    private bool IsOffDaySelected(string day)
+    {
+        if (string.IsNullOrWhiteSpace(editor.OffDay)) return false;
+        return editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ToggleOffDay(string day)
+    {
+        var current = string.IsNullOrWhiteSpace(editor.OffDay)
+            ? new List<string>()
+            : editor.OffDay.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        var existingIndex = current.FindIndex(d => string.Equals(d, day, StringComparison.OrdinalIgnoreCase));
+        if (existingIndex >= 0)
+        {
+            current.RemoveAt(existingIndex);
+        }
+        else
+        {
+            current.Add(day);
+        }
+        editor.OffDay = current.Count > 0 ? string.Join(", ", current) : string.Empty;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(editor.Name))
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "ডাক্তারের নাম আবশ্যক।" : "Doctor name is required.";
+            return;
+        }
+
+        saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (editor.ID == 0)
+            {
+                editor.TransDate = DateTime.Now;
+                editor.EnteredBy = 1;
+                db.Doctors.Add(editor);
+            }
+            else
+            {
+                db.Doctors.Update(editor);
+            }
+            await db.SaveChangesAsync();
+            messageClass = "success";
+            message = I18n.IsBangla ? $"ডাক্তার {DoctorDisplayName(editor)} এর তথ্য সংরক্ষিত হয়েছে।" : $"Doctor {DoctorDisplayName(editor)} saved successfully.";
+            isDrawerOpen = false;
+            ResetEditor();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ToggleDoctorActiveAsync(DoctorsProfile doc)
+    {
+        try
+        {
+            doc.IsActive = !doc.IsActive;
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var entity = await db.Doctors.FindAsync(doc.ID);
+            if (entity is not null)
+            {
+                entity.IsActive = doc.IsActive;
+                await db.SaveChangesAsync();
+                messageClass = "success";
+                message = $"{DoctorDisplayName(doc)} is now {(doc.IsActive ? "Active" : "Inactive")}.";
+            }
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Error updating status: {ex.Message}";
+        }
+    }
+
+    private void Select(DoctorsProfile d)
+    {
+        var cleanAddr = CleanDoctorText(d.Address);
+        editor = new DoctorsProfile
+        {
+            ID = d.ID,
+            Name = d.Name,
+            Title = d.Title,
+            Degree = d.Degree,
+            Attachment = d.Attachment,
+            POSerial = d.POSerial,
+            AreaCode = d.AreaCode,
+            Balance = d.Balance,
+            OpeningBalance = d.OpeningBalance,
+            Contact = d.Contact,
+            Email = d.Email,
+            Room = d.Room,
+            Department = d.Department,
+            EnteredBy = d.EnteredBy,
+            TransDate = d.TransDate,
+            Address = !string.IsNullOrWhiteSpace(cleanAddr) ? d.Address : GetDefaultHospitalAddress(),
+            ReferralCategoryID = d.ReferralCategoryID,
+            IsActive = d.IsActive,
+            Priority = d.Priority,
+            ConsultationTime = d.ConsultationTime,
+            OffDay = d.OffDay,
+            ConsultationFee = d.ConsultationFee,
+            OpdConsultationFee = d.OpdConsultationFee
+        };
+        message = string.Empty;
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"ডাক্তার {editor.Name} মুছে ফেলতে চান?" : $"Delete doctor {editor.Name}?")) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var id = editor.ID;
+        var inUse = await db.DoctorAppointments.AnyAsync(x => x.DoctorID == id)
+                 || await db.OPDTickets.AnyAsync(x => x.DoctorID == id)
+                 || await db.EmergencyMemos.AnyAsync(x => x.DoctorID == id)
+                 || await db.OTCashMemos.AnyAsync(x => x.DoctorID == id)
+                 || await db.OTCashMemoItems.AnyAsync(x => x.ServiceID == id)
+                 || await db.PatientAdmissions.AnyAsync(x => x.Consultant == id || x.AdmittedBy == id || x.ReferredBy == id);
+
+        if (inUse)
+        {
+            messageClass = "danger";
+            message = I18n.IsBangla ? "এই ডাক্তারের রেফারেন্সে লেনদেনের রেকর্ড রয়েছে এবং মুছে ফেলা যাবে না।" : "This doctor has transactional records and cannot be deleted. You can mark them Inactive instead.";
+            return;
+        }
+
+        var entity = await db.Doctors.FindAsync(id);
+        if (entity is not null)
+        {
+            db.Remove(entity);
+            await db.SaveChangesAsync();
+        }
+        messageClass = "success";
+        message = I18n.IsBangla ? "ডাক্তার মুছে ফেলা হয়েছে।" : "Doctor deleted.";
+        isDrawerOpen = false;
+        ResetEditor();
+        await LoadAsync();
+    }
+
+    private void ResetEditor() => editor = NewDoctor();
+    private DoctorsProfile NewDoctor() => new()
+    {
+        Title = "Dr.",
+        Attachment = "Permanent",
+        Address = GetDefaultHospitalAddress(),
+        EnteredBy = 1,
+        TransDate = DateTime.Now,
+        IsActive = true,
+        ConsultationFee = 500m,
+        OpdConsultationFee = 100m
+    };
+
+    private string GetDefaultHospitalAddress()
+    {
+        if (!string.IsNullOrWhiteSpace(Branding.HospitalName))
+            return Branding.HospitalName;
+        return "Delta Medical College & Hospital";
+    }
+
+    private string DepartmentName(int? id) => departments.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+
+    private async Task ExportExcelAsync()
+    {
+        try
+        {
+            var list = FilteredDoctors.ToList();
+            var sb = new StringBuilder();
+            sb.AppendLine("Priority,Doctor ID,Title,Doctor Name,Category,Degree,Department,Room,Regular Fee,OPD Fee,Contact Mobile,Email,Chamber Address,Status");
+
+            foreach (var doc in list)
+            {
+                var priorityStr = doc.Priority.HasValue && doc.Priority > 0 ? doc.Priority.Value.ToString() : "";
+                var idStr = doc.ID.ToString();
+                var titleStr = EscapeCsv(CleanDoctorText(doc.Title));
+                var nameStr = EscapeCsv(CleanDoctorText(doc.Name));
+                var catStr = EscapeCsv(DoctorTypeLabel(doc.Attachment));
+                var degreeStr = EscapeCsv(CleanDoctorDegree(doc));
+                var deptStr = EscapeCsv(DepartmentName(doc.Department));
+                var roomStr = EscapeCsv(CleanDoctorRoom(doc.Room));
+                var contactStr = EscapeCsv(HasValidContact(doc.Contact) ? doc.Contact!.Trim() : "");
+                var emailStr = EscapeCsv(doc.Email?.Trim());
+                var addressStr = EscapeCsv(doc.Address?.Trim());
+                var statusStr = doc.IsActive ? "Active" : "Inactive";
+
+                var regFeeStr = doc.ConsultationFee.HasValue && doc.ConsultationFee.Value > 0 ? doc.ConsultationFee.Value.ToString("0.##") : "";
+                var opdFeeStr = doc.OpdConsultationFee.HasValue && doc.OpdConsultationFee.Value > 0 ? doc.OpdConsultationFee.Value.ToString("0.##") : "";
+                sb.AppendLine($"\"{priorityStr}\",\"{idStr}\",\"{titleStr}\",\"{nameStr}\",\"{catStr}\",\"{degreeStr}\",\"{deptStr}\",\"{roomStr}\",\"{regFeeStr}\",\"{opdFeeStr}\",\"{contactStr}\",\"{emailStr}\",\"{addressStr}\",\"{statusStr}\"");
+            }
+
+            var preamble = Encoding.UTF8.GetPreamble();
+            var dataBytes = Encoding.UTF8.GetBytes(sb.ToString());
+            var fullBytes = new byte[preamble.Length + dataBytes.Length];
+            Buffer.BlockCopy(preamble, 0, fullBytes, 0, preamble.Length);
+            Buffer.BlockCopy(dataBytes, 0, fullBytes, preamble.Length, dataBytes.Length);
+
+            var base64 = Convert.ToBase64String(fullBytes);
+            var filename = $"Doctors_Directory_{DateTime.Now:yyyyMMdd_HHmm}.csv";
+            await JS.InvokeVoidAsync("hpm.downloadFile", filename, "text/csv;charset=utf-8", base64);
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Excel export error: {ex.Message}";
+        }
+    }
+
+    private static string EscapeCsv(string? val)
+    {
+        if (string.IsNullOrEmpty(val)) return string.Empty;
+        return val.Replace("\"", "\"\"");
+    }
+
+    private async Task PrintListAsync()
+    {
+        try
+        {
+            var list = FilteredDoctors.Take(500).ToList();
+            var sb = new StringBuilder();
+            sb.Append("<table><thead><tr>");
+            sb.Append("<th style='width:55px;' class='text-center'>Priority</th>");
+            sb.Append("<th style='width:55px;' class='text-center'>ID</th>");
+            sb.Append("<th>Doctor Name & Qualifications</th>");
+            sb.Append("<th style='width:90px;'>Category</th>");
+            sb.Append("<th style='width:140px;'>Department</th>");
+            sb.Append("<th style='width:70px;'>Room</th>");
+            sb.Append("<th style='width:95px;'>Contact</th>");
+            sb.Append("<th style='width:60px;' class='text-center'>Status</th>");
+            sb.Append("</tr></thead><tbody>");
+
+            foreach (var doc in list)
+            {
+                var priorityStr = doc.Priority.HasValue && doc.Priority > 0 ? $"<span class='priority-star'>⭐ #{doc.Priority}</span>" : "—";
+                var nameDisplay = System.Net.WebUtility.HtmlEncode(DoctorDisplayName(doc));
+                var degree = CleanDoctorDegree(doc);
+                var degreeDisplay = !string.IsNullOrWhiteSpace(degree) ? $"<div style='color:#64748b;font-size:7.5pt;'>{System.Net.WebUtility.HtmlEncode(degree)}</div>" : "";
+                var catClass = GetAttachmentClass(doc.Attachment);
+                var catDisplay = $"<span class='{catClass}'>{System.Net.WebUtility.HtmlEncode(DoctorTypeLabel(doc.Attachment))}</span>";
+                var deptDisplay = System.Net.WebUtility.HtmlEncode(DepartmentName(doc.Department));
+                var room = CleanDoctorRoom(doc.Room);
+                var roomDisplay = !string.IsNullOrWhiteSpace(room) ? $"Room {System.Net.WebUtility.HtmlEncode(room)}" : "—";
+                var contact = HasValidContact(doc.Contact) ? System.Net.WebUtility.HtmlEncode(doc.Contact!.Trim()) : "—";
+                var statusClass = doc.IsActive ? "badge-active" : "badge-inactive";
+                var statusText = doc.IsActive ? "Active" : "Inactive";
+
+                sb.Append("<tr>");
+                sb.Append($"<td class='text-center'>{priorityStr}</td>");
+                sb.Append($"<td class='text-center'><strong>{doc.ID}</strong></td>");
+                sb.Append($"<td><strong>{nameDisplay}</strong>{degreeDisplay}</td>");
+                sb.Append($"<td>{catDisplay}</td>");
+                sb.Append($"<td>{deptDisplay}</td>");
+                sb.Append($"<td>{roomDisplay}</td>");
+                sb.Append($"<td>{contact}</td>");
+                sb.Append($"<td class='text-center'><span class='{statusClass}'>{statusText}</span></td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</tbody></table>");
+
+            var metaText = $"Total Doctors: {FilteredDoctors.Count()} | Scope: {statusFilter} | Filter: {(string.IsNullOrWhiteSpace(searchQuery) ? "All" : searchQuery)}";
+            await JS.InvokeVoidAsync("hpm.printDoctorList", Branding.HospitalName, "Doctors Directory & Priority Schedule", metaText, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            messageClass = "danger";
+            message = $"Print error: {ex.Message}";
+        }
+    }
+
+    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try
+        {
+            _ = JS.InvokeVoidAsync("hpm.disposeTableAutoScroll", "doctorsTableWrap");
+        }
+        catch { }
+        dotNetRef?.Dispose();
+    }
+}

@@ -1,6 +1,5 @@
 @page "/appointments"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception)]
-@rendermode InteractiveServer
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
@@ -33,6 +32,15 @@
         </div>
 
         <div class="appt-top-actions">
+            <div class="tickets-print-mode-group" title="@I18n.T("Select appointment slip format")">
+                <button type="button" class="tickets-mode-pill @(appointmentPrintLayout == "POS" ? "active" : "")" @onclick='() => appointmentPrintLayout = "POS"' title="80mm Thermal POS Slip">
+                    🖨️ @I18n.T("80mm POS")
+                </button>
+                <button type="button" class="tickets-mode-pill @(appointmentPrintLayout == "A4" ? "active" : "")" @onclick='() => appointmentPrintLayout = "A4"' title="@I18n.T("Standard appointment slip")">
+                    📄 @I18n.T("A4 Slip")
+                </button>
+            </div>
+
             <div class="appt-date-filter-wrap">
                 <label>@I18n.T("Date"):</label>
                 <div class="appt-date-chips">
@@ -138,7 +146,13 @@
                                                             }
                                                             @item.DisplayName
                                                         </span>
-                                                        <span class="appt-doctor-option-id">ID: D@(doctor.ID)</span>
+                                                        <span class="appt-doctor-option-id">
+                                                            @if (doctor.ConsultationFee.HasValue && doctor.ConsultationFee.Value > 0)
+                                                            {
+                                                                <span style="color: #047857; font-weight: 800; margin-right: 4px;">৳@doctor.ConsultationFee.Value.ToString("0")</span>
+                                                            }
+                                                            ID: D@(doctor.ID)
+                                                        </span>
                                                     </div>
                                                     <div class="appt-doctor-option-sub">
                                                         @item.Degree@if (!string.IsNullOrWhiteSpace(item.DepartmentName)){<text> &bull; @item.DepartmentName</text>}@if(!string.IsNullOrWhiteSpace(item.Room)){<text> &bull; Room @item.Room</text>}
@@ -236,6 +250,10 @@
                                         </div>
                                         <div class="appt-doc-offday-meta">
                                             @I18n.T("Regular Off Day(s)"): <strong style="color: #b91c1c;">@GetDoctorOffDaysDisplay(SelectedDoctor)</strong> &bull; @I18n.T("Appointments cannot be booked on off days.")
+                                            @if (SelectedDoctor.ConsultationFee.HasValue && SelectedDoctor.ConsultationFee.Value > 0)
+                                            {
+                                                <span>&bull; 💵 @I18n.T("Regular Fee"): <strong style="color: #047857;">৳@SelectedDoctor.ConsultationFee.Value.ToString("N0")</strong></span>
+                                            }
                                         </div>
                                     </div>
                                     @{
@@ -280,9 +298,15 @@
                                                 </div>
                                             </div>
                                         </div>
-                                        <span class="appt-doc-sched-badge">
-                                            ✓ @I18n.T("Click Slot to Set Time")
-                                        </span>
+                                        @if (SelectedDoctor.ConsultationFee.HasValue && SelectedDoctor.ConsultationFee.Value > 0)
+                                        {
+                                            <div style="display: flex; align-items: center; flex-shrink: 0; margin-left: 8px;">
+                                                <span class="appt-fee-badge" style="font-size: 11.5px; font-weight: 800; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 3px 10px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;" title="@I18n.T("Regular Consultation Fee")">
+                                                    <span style="white-space: nowrap;">💵 @I18n.T("Regular Fee"):</span>
+                                                    <span style="white-space: nowrap; font-size: 12px; font-weight: 900;">৳@SelectedDoctor.ConsultationFee.Value.ToString("N0")</span>
+                                                </span>
+                                            </div>
+                                        }
                                     </div>
 
                                     <div class="appt-slot-chips-wrap">
@@ -778,6 +802,52 @@
     </aside>
 </div>
 
+<div id="appointment-thermal-print" class="print-document pos-receipt-80mm">
+    <div style="width:76mm; padding:3mm 2mm; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; font-size:11px; line-height:1.3; color:#000; margin:0 auto;">
+        <div style="text-align:center; border-bottom:1.5px dashed #000; padding-bottom:5px; margin-bottom:6px;">
+            <div style="font-size:14px; font-weight:900; text-transform:uppercase;">@Branding.HospitalName</div>
+            @if (!string.IsNullOrWhiteSpace(Branding.Address))
+            {
+                <div style="font-size:9.5px;">@Branding.Address</div>
+            }
+            @if (!string.IsNullOrWhiteSpace(Branding.Phone))
+            {
+                <div style="font-size:9.5px;">Hotline: @Branding.Phone</div>
+            }
+            <div style="display:inline-block; margin-top:4px; padding:2px 8px; border:1px solid #000; border-radius:3px; font-size:10px; font-weight:800;">
+                DOCTOR APPOINTMENT SLIP
+            </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:6px;">
+            <div><strong>Appointment #:</strong> @editor.ID</div>
+            <div style="font-size:9.5px;">@editor.ApptDate.ToString("dd/MM/yy hh:mm tt")</div>
+        </div>
+
+        <div style="text-align:center; border:2px solid #000; border-radius:4px; padding:5px; margin-bottom:7px;">
+            <div style="font-size:9px; font-weight:700; text-transform:uppercase;">Queue Serial</div>
+            <div style="font-size:28px; line-height:1; font-weight:900;">#@editor.ApptSLNO.ToString("00")</div>
+        </div>
+
+        <div style="border-top:1px dashed #666; border-bottom:1px dashed #666; padding:5px 0; font-size:10.5px;">
+            <div><strong>Patient:</strong> @editor.Name</div>
+            <div><strong>Patient ID:</strong> @(string.IsNullOrWhiteSpace(editor.PatientID) ? I18n.T("Walk-in") : editor.PatientID)</div>
+            <div><strong>Age / Sex:</strong> @editor.Age / @(string.IsNullOrWhiteSpace(SelectedPatientSex) ? "-" : SelectedPatientSex)</div>
+            @if (!string.IsNullOrWhiteSpace(editor.ContactNo))
+            {
+                <div><strong>Contact:</strong> @editor.ContactNo</div>
+            }
+            <div style="margin-top:4px;"><strong>Consultant:</strong> @DoctorName(editor.DoctorID)</div>
+            <div><strong>Date &amp; Time:</strong> @editor.ApptDate.ToString("dd MMM yyyy, hh:mm tt")</div>
+        </div>
+
+        <div style="text-align:center; margin-top:7px; padding-top:5px; border-top:1px dashed #666;">
+            <div style="display:flex; justify-content:center;">@((MarkupString)BarcodeQr.GenerateBarcodeSvg($"APT-{editor.ID:00000}", barHeight:22, includeText:true))</div>
+            <div style="font-size:9px; margin-top:3px;">Please arrive at least 15 minutes before your appointment.</div>
+        </div>
+    </div>
+</div>
+
 <div id="appointment-print" class="print-document">
     <div class="print-sheet">
         <PrintDocumentHeader Title="Doctor Appointment Slip"
@@ -925,6 +995,7 @@
     private string statusFilter = "All";
     private bool saving;
     private bool showScheduleDrawer;
+    private string appointmentPrintLayout = "A4";
     private int originalDoctorId;
     private DateTime originalDate;
     private const int QueuePageSize = 8;
@@ -1568,7 +1639,7 @@ private async Task LoadAppointmentsAsync()
         Select(a);
         await InvokeAsync(StateHasChanged);
         await Task.Delay(50);
-        await JS.InvokeVoidAsync("hpm.printElement", "appointment-print", $"Appointment {a.ID}");
+        await PrintAppointmentAsync();
     }
 
     private async Task HandleApptScanKeyDown(KeyboardEventArgs e)
@@ -1690,7 +1761,11 @@ private async Task LoadAppointmentsAsync()
     private void NextQueuePage() => queuePage = Math.Min(QueuePageCount - 1, queuePage + 1);
 
     private Task DeleteSelectedAsync() => DeleteAsync(editor);
-    private Task PrintAppointmentAsync() => JS.InvokeVoidAsync("hpm.printElement", "appointment-print", $"Appointment {editor.ID}").AsTask();
+    private Task PrintAppointmentAsync()
+    {
+        var printId = appointmentPrintLayout == "POS" ? "appointment-thermal-print" : "appointment-print";
+        return JS.InvokeVoidAsync("hpm.printElement", printId, $"Appointment {editor.ID}").AsTask();
+    }
     private Task PrintScheduleAsync() => JS.InvokeVoidAsync("hpm.printElement", "schedule-print", $"Appointments {filterDate:yyyy-MM-dd}").AsTask();
     private static DoctorAppointment NewAppointment() => new() { ApptDate = DateTime.Now, TransDate = DateTime.Now, Status = "Booked" };
     private static readonly Regex MultiSpaceRegex = new(@"\s+", RegexOptions.Compiled);

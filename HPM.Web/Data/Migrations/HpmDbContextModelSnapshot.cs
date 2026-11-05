@@ -1589,6 +1589,11 @@ namespace HPM.Web.Data.Migrations
                     b.Property<decimal?>("Balance")
                         .HasColumnType("numeric(18,0)");
 
+                    b.Property<decimal?>("ConsultationFee")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Consultation_Fee");
+
+
                     b.Property<string>("ConsultationTime")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
@@ -1627,6 +1632,11 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
                         .HasColumnName("Off_Day");
+
+                    b.Property<decimal?>("OpdConsultationFee")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("OPD_Consultation_Fee");
+
 
                     b.Property<decimal?>("OpeningBalance")
                         .HasColumnType("numeric(18,0)")
@@ -2636,6 +2646,66 @@ namespace HPM.Web.Data.Migrations
                     b.ToTable("Legacy_Migration_Run", (string)null);
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.MedicalCertificate", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<string>("CertificateNo")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasColumnName("Certificate_No");
+
+                    b.Property<string>("CertificateType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Certificate_Type");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Created_Date");
+
+                    b.Property<string>("DetailsJson")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("Details_Json");
+
+                    b.Property<int>("DoctorID")
+                        .HasColumnType("int")
+                        .HasColumnName("Doctor_ID");
+
+                    b.Property<DateTime>("IssueDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Issue_Date");
+
+                    b.Property<int>("IssuedBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Issued_By");
+
+                    b.Property<string>("PatientID")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Patient_ID");
+
+                    b.Property<string>("RegNo")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Reg_No");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Medical_Certificate");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.MedicineReceivingChallan", b =>
                 {
                     b.Property<long>("ID")
@@ -3133,6 +3203,120 @@ namespace HPM.Web.Data.Migrations
                     b.ToTable("OPD_Ticket", (string)null);
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.OperationNote", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("AnaesthesiaType")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Anaesthesia_Type");
+
+                    b.Property<int?>("AnaesthetistID")
+                        .HasColumnType("int")
+                        .HasColumnName("Anaesthetist_ID");
+
+                    b.Property<int?>("Assistant1ID")
+                        .HasColumnType("int")
+                        .HasColumnName("Assistant1_ID");
+
+                    b.Property<int?>("Assistant2ID")
+                        .HasColumnType("int")
+                        .HasColumnName("Assistant2_ID");
+
+                    b.Property<int?>("Assistant3ID")
+                        .HasColumnType("int")
+                        .HasColumnName("Assistant3_ID");
+
+                    b.Property<string>("BloodLossEstimate")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Blood_Loss_Estimate");
+
+                    b.Property<string>("DrainsPacks")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Drains_Packs");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<string>("Incision")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Indication")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("OperationDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Operation_Date");
+
+                    b.Property<long?>("OperationID")
+                        .HasColumnType("bigint")
+                        .HasColumnName("Operation_ID");
+
+                    b.Property<string>("OperationName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)")
+                        .HasColumnName("Operation_Name");
+
+                    b.Property<string>("PatientID")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Patient_ID");
+
+                    b.Property<string>("PostOpDiagnosis")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Post_Op_Diagnosis");
+
+                    b.Property<string>("PostOpOrders")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)")
+                        .HasColumnName("Post_Op_Orders");
+
+                    b.Property<string>("PreOpDiagnosis")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Pre_Op_Diagnosis");
+
+                    b.Property<string>("ProcedureAndFindings")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("Procedure_And_Findings");
+
+                    b.Property<string>("RegNo")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Reg_No");
+
+                    b.Property<string>("SpecimenBiopsy")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Specimen_Biopsy");
+
+                    b.Property<int>("SurgeonID")
+                        .HasColumnType("int")
+                        .HasColumnName("Surgeon_ID");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Operation_Note");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.PathologyGroupHead", b =>
                 {
                     b.Property<int>("ID")
@@ -3441,6 +3625,85 @@ namespace HPM.Web.Data.Migrations
                         {
                             t.HasCheckConstraint("CK_Patient_Encounter_Status", "[Status] IN ('Waiting','InConsultation','Completed','Cancelled','NoShow')");
                         });
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.PatientOperation", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<string>("AnaesthesiaType")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Anaesthesia_Type");
+
+                    b.Property<int?>("AnasthetistID")
+                        .HasColumnType("int")
+                        .HasColumnName("Anasthetist_ID");
+
+                    b.Property<string>("AssistantDoctorIDs")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Assistant_Doctor_IDs");
+
+                    b.Property<string>("Drug")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("EnteredBy")
+                        .HasColumnType("int")
+                        .HasColumnName("Entered_By");
+
+                    b.Property<DateTime>("OperationDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Operation_Date");
+
+                    b.Property<int>("OperatorID")
+                        .HasColumnType("int")
+                        .HasColumnName("Operator_ID");
+
+                    b.Property<string>("PatientID")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Patient_ID");
+
+                    b.Property<string>("ProcedureName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)")
+                        .HasColumnName("Procedure_Name");
+
+                    b.Property<string>("RegNo")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasColumnName("Reg_No");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("TheatreRoom")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Theatre_Room");
+
+                    b.Property<DateTime>("TransDate")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Trans_Date");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Patient_Operation");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.PatientPackageTransaction", b =>
@@ -4132,6 +4395,10 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnName("Trans_Date");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("RequisitionNo")
+                        .IsUnique();
+
 
                     b.HasIndex("StoreID", "TransDate");
 

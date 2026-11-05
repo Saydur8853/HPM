@@ -1,18 +1,15 @@
 @page "/masters/ipd"
 @attribute [Authorize(Roles = RoleNames.Administrator)]
-@rendermode InteractiveServer
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>@I18n.T("IPD & Bed Masters") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <a class="back-link" href="">&larr; @I18n.T("Dashboard", "ড্যাশবোর্ড")</a>
-        <h1>@I18n.T("IPD & Bed Masters", "আইপিডি ও বেড ব্যবস্থাপনা")</h1>
-        <p>@I18n.T("Configure hospital departments, ward categories, bed matrix and pricing.", "হাসপাতালের বিভাগ, ওয়ার্ড ক্যাটাগরি, বেড বিন্যাস ও চার্জসমূহ পরিচালনা করুন।")</p>
-    </div>
+<div class="page-heading" style="margin-bottom: 20px;">
+    <a class="back-link" href="">&larr; @I18n.T("Dashboard", "ড্যাশবোর্ড")</a>
+    <h1>@I18n.T("IPD & Bed Masters", "আইপিডি ও বেড ব্যবস্থাপনা")</h1>
+    <p>@I18n.T("Configure hospital departments, ward categories, bed matrix and pricing.", "হাসপাতালের বিভাগ, ওয়ার্ড ক্যাটাগরি, বেড বিন্যাস ও চার্জসমূহ পরিচালনা করুন।")</p>
 </div>
 
 @if (!string.IsNullOrWhiteSpace(message))
@@ -22,35 +19,14 @@
     </div>
 }
 
-<!-- Top KPI Summary Cards -->
-<div class="metric-grid">
-    <div class="metric-card accent-blue">
-        <span>@I18n.T("Total Beds & Cabins", "মোট বেড ও কেবিন")</span>
-        <strong>@beds.Count</strong>
-        <small>@categories.Count @I18n.T("Categories") &bull; @departments.Count @I18n.T("Departments")</small>
-    </div>
-    <div class="metric-card accent-green">
-        <span>@I18n.T("Available Beds", "ফাঁকা বেড (উপলব্ধ)")</span>
-        <strong>@AvailableBedsCount</strong>
-        <small>@I18n.T("Ready for immediate admission", "রোগী ভর্তির জন্য প্রস্তুত")</small>
-    </div>
-    <div class="metric-card accent-red">
-        <span>@I18n.T("Occupied Beds", "ভর্তি রোগী রয়েছে")</span>
-        <strong>@OccupiedBedsCount</strong>
-        <small>@OccupancyRate% @I18n.T("Occupancy Rate", "অকুপেন্সি রেট")</small>
-    </div>
-    <div class="metric-card accent-amber">
-        <span>@I18n.T("Cleaning & Maintenance", "পরিচ্ছন্নতা ও রক্ষণাবেক্ষণ")</span>
-        <strong>@CleaningMaintenanceCount</strong>
-        <small>@CleaningBedsCount @I18n.T("Cleaning") &bull; @MaintenanceBedsCount @I18n.T("Maintenance")</small>
-    </div>
-</div>
-
 <!-- Navigation Tabs -->
 <div class="ipd-tabs-nav">
     <button type="button" class="ipd-tab-btn @(activeTab == "beds" ? "active" : "")" @onclick='() => SetTab("beds")'>
         <span>🛏️ @I18n.T("Beds & Cabins", "বেড ও কেবিনসমূহ")</span>
         <span class="ipd-tab-count">@beds.Count</span>
+    </button>
+    <button type="button" class="ipd-tab-btn @(activeTab == "bulk" ? "active" : "")" @onclick='() => SetTab("bulk")'>
+        <span>⚡ @I18n.T("Bulk Bed Generator", "একসাথে বহু বেড তৈরি")</span>
     </button>
     <button type="button" class="ipd-tab-btn @(activeTab == "categories" ? "active" : "")" @onclick='() => SetTab("categories")'>
         <span>🏷️ @I18n.T("Categories & Pricing", "ক্যাটাগরি ও মূল্য তালিকা")</span>
@@ -59,9 +35,6 @@
     <button type="button" class="ipd-tab-btn @(activeTab == "departments" ? "active" : "")" @onclick='() => SetTab("departments")'>
         <span>🏢 @I18n.T("IPD Departments", "আইপিডি বিভাগসমূহ")</span>
         <span class="ipd-tab-count">@departments.Count</span>
-    </button>
-    <button type="button" class="ipd-tab-btn @(activeTab == "bulk" ? "active" : "")" @onclick='() => SetTab("bulk")'>
-        <span>⚡ @I18n.T("Bulk Bed Generator", "একসাথে বহু বেড তৈরি")</span>
     </button>
 </div>
 
@@ -77,14 +50,25 @@
             <div class="ipd-search-box">
                 <input type="text"
                        class="classic-input"
+                       style="height: 32px; font-size: 12px; border-radius: 6px;"
                        placeholder="@I18n.T("Search bed, category, patient...", "বেড, ক্যাটাগরি বা রোগী খুঁজুন...")"
                        @bind="bedSearchQuery"
                        @bind:event="oninput" />
             </div>
 
+            <!-- Department Filter -->
+            <select class="classic-input" style="max-width: 175px; height: 32px; font-size: 12px; font-weight: 650; border-radius: 6px;" @bind="selectedDepartmentFilter">
+                <option value="0">🏢 @I18n.T("All Departments", "সকল বিভাগ")</option>
+                @foreach (var dept in departments)
+                {
+                    var deptBedCount = beds.Count(b => categories.Any(c => c.ID == b.CategoryID && c.IpdDepartmentID == dept.ID));
+                    <option value="@dept.ID">@dept.Name (@deptBedCount)</option>
+                }
+            </select>
+
             <!-- Category Filter -->
-            <select class="classic-input" style="max-width: 200px;" @bind="selectedCategoryFilter">
-                <option value="0">@I18n.T("All Categories", "সকল ক্যাটাগরি") (@beds.Count)</option>
+            <select class="classic-input" style="max-width: 195px; height: 32px; font-size: 12px; font-weight: 650; border-radius: 6px;" @bind="selectedCategoryFilter">
+                <option value="0">🏷️ @I18n.T("All Categories", "সকল ক্যাটাগরি") (@beds.Count)</option>
                 @foreach (var cat in categories)
                 {
                     var catBedCount = beds.Count(b => b.CategoryID == cat.ID);
@@ -124,8 +108,8 @@
             </div>
 
             <!-- Add Bed Button -->
-            <button type="button" class="btn btn-primary" @onclick="OpenAddBedDrawer">
-                + @I18n.T("Add Bed/Cabin", "নতুন বেড যোগ করুন")
+            <button type="button" class="btn btn-primary" style="height: 32px; font-size: 12px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: 6px;" @onclick="OpenAddBedDrawer">
+                <span>+</span> @I18n.T("Add Bed/Cabin", "নতুন বেড")
             </button>
         </div>
     </div>
@@ -133,7 +117,7 @@
     <!-- Bed List / Grid Display -->
     @if (FilteredBeds.Count == 0)
     {
-        <div class="panel" style="text-align: center; padding: 40px; color: #64748b;">
+        <div class="panel" style="text-align: center; padding: 40px; color: #64748b; border-radius: 12px;">
             <p style="font-size: 16px; font-weight: 700; margin-bottom: 8px;">@I18n.T("No beds found matching the criteria.", "কোনো বেড বা কেবিন পাওয়া যায়নি।")</p>
             <button type="button" class="btn btn-outline" @onclick="ResetBedFilters">@I18n.T("Clear Filters", "ফিল্টার রিসেট করুন")</button>
         </div>
@@ -170,14 +154,14 @@
                         {
                             <div class="bed-patient-box">
                                 <div class="bed-patient-name">
-                                    <span>👤 @patInfo.PatientName</span>
+                                    <span>👤 <span style="font-weight: 700; color: #0284c7;">(@patInfo.PatientID)</span> @patInfo.PatientName</span>
                                     @if (!string.IsNullOrEmpty(patInfo.Gender))
                                     {
                                         <span style="font-size: 11px; opacity: 0.85;">(@patInfo.Gender)</span>
                                     }
                                 </div>
                                 <div class="bed-patient-meta">
-                                    <div><b>@I18n.T("Reg No"):</b> @patInfo.RegNo &bull; <b>@I18n.T("PID"):</b> @patInfo.PatientID</div>
+                                    <div><b>@I18n.T("Reg No"):</b> @patInfo.RegNo</div>
                                     @if (patInfo.AdmissionDate.HasValue)
                                     {
                                         <div><b>@I18n.T("Admitted"):</b> @patInfo.AdmissionDate.Value.ToString("dd-MMM-yyyy")</div>
@@ -191,20 +175,28 @@
                         }
                         else if (!item.IsAllocated)
                         {
-                            <div style="padding: 12px 0 6px; font-size: 12px; color: #64748b;">
+                            <div style="padding: 10px 0 4px; font-size: 12px; color: #64748b;">
                                 @if (effectiveStatus == BedStatuses.Available)
                                 {
-                                    <div style="color: #059669; font-weight: 700;">
-                                        ✓ @I18n.T("Ready for patient admission", "ভর্তির জন্য সম্পূর্ণরূপে প্রস্তুত")
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <div style="color: #059669; font-weight: 700; font-size: 12px;">
+                                            ✓ @I18n.T("Ready for admission", "ভর্তির জন্য প্রস্তুত")
+                                        </div>
+                                        <a href="/ipd/admissions?bedId=@item.ID" class="btn btn-sm btn-outline-primary" style="font-size: 11px; font-weight: 700; padding: 2px 8px; text-decoration: none; border-radius: 4px;">
+                                            + @I18n.T("Admit", "ভর্তি")
+                                        </a>
                                     </div>
-                                    <div style="font-size: 11px; color: #64748b; margin-top: 3px;">
-                                        @I18n.T("Rate"): @I18n.FormatCurrency(cat?.Rate ?? 0) / @I18n.T("day")
+                                    <div style="font-size: 11.5px; color: #475569;">
+                                        @I18n.T("Rate"): <b style="color: #047857; font-size: 12.5px;">৳@I18n.FormatCurrency(cat?.Rate ?? 0)</b> / @I18n.T("day")
                                     </div>
                                 }
                                 else if (effectiveStatus == BedStatuses.Cleaning)
                                 {
                                     <div style="color: #d97706; font-weight: 700;">
                                         🧹 @I18n.T("Under housekeeping / sanitization", "হাউজকিপিং ও পরিচ্ছন্নতা চলছে")
+                                    </div>
+                                    <div style="font-size: 11px; color: #64748b; margin-top: 3px;">
+                                        @I18n.T("Click Ready below once cleaned")
                                     </div>
                                 }
                                 else if (effectiveStatus == BedStatuses.Maintenance)
@@ -240,6 +232,12 @@
                                         ⚙️
                                     </button>
                                 }
+                            }
+                            else if (hasPatient && patInfo != null)
+                            {
+                                <a href="/ipd/admissions?regNo=@patInfo.RegNo" class="bed-quick-status-btn" style="color: #0284c7; text-decoration: none;" title="@I18n.T("View Admission Record")">
+                                    👁️ @I18n.T("View")
+                                </a>
                             }
                         </div>
 
@@ -296,9 +294,10 @@
                                 <td>
                                     @if (item.IsAllocated && hasPatient && patInfo != null)
                                     {
-                                        <div>
-                                            <b>@patInfo.PatientName</b>
-                                            <span style="font-size: 11px; color: #64748b;">(Reg: @patInfo.RegNo)</span>
+                                        <div style="line-height: 1.35;">
+                                            <span style="font-weight: 700; color: #0284c7; font-size: 12px;">(@patInfo.PatientID)</span>
+                                            <b style="color: #0f172a; margin-left: 3px;">@patInfo.PatientName</b>
+                                            <span style="font-size: 11.5px; color: #64748b; margin-left: 3px;">(Reg: @patInfo.RegNo)</span>
                                         </div>
                                     }
                                     else
@@ -323,7 +322,120 @@
 }
 
 <!-- ==========================================
-     TAB 2: CATEGORIES & PRICING
+     TAB 2: BULK BED GENERATOR
+     ========================================== -->
+@if (activeTab == "bulk")
+{
+    <div class="panel form-panel" style="max-width: 800px; margin: 0 auto;">
+        <div class="panel-heading">
+            <div>
+                <h2>⚡ @I18n.T("Bulk Bed & Cabin Generator", "একসাথে একাধিক বেড তৈরি করুন")</h2>
+                <p>@I18n.T("Quickly generate a sequence of beds (e.g. Bed-101 to Bed-120 or Cabin-01 to Cabin-10) with one click.", "এক ক্লিকে ধারাবাহিকভাবে বহু বেড বা কেবিন তৈরি করুন।")</p>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <label class="span-2">
+                <span>@I18n.T("Target Bed Category *", "বেড ক্যাটাগরি *")</span>
+                <select class="classic-input" @bind="bulkCategoryId">
+                    <option value="0">@I18n.T("Select Category", "ক্যাটাগরি নির্বাচন করুন")</option>
+                    @foreach (var cat in categories)
+                    {
+                        <option value="@cat.ID">@cat.Name (@DepartmentName(cat.IpdDepartmentID))</option>
+                    }
+                </select>
+            </label>
+
+            <label>
+                <span>@I18n.T("Name Prefix", "নামের প্রিফিক্স")</span>
+                <input type="text" class="classic-input" @bind="bulkPrefix" placeholder="e.g. Bed-, Cabin-, ICU-" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Name Suffix (Optional)", "সাফিক্স (ঐচ্ছিক)")</span>
+                <input type="text" class="classic-input" @bind="bulkSuffix" placeholder="e.g. -A, -East" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Start Number", "শুরুর নম্বর")</span>
+                <input type="number" class="classic-input" @bind="bulkStart" min="1" max="9999" />
+            </label>
+
+            <label>
+                <span>@I18n.T("End Number", "শেষ নম্বর")</span>
+                <input type="number" class="classic-input" @bind="bulkEnd" min="1" max="9999" />
+            </label>
+
+            <label>
+                <span>@I18n.T("Zero Padding", "শূন্য প্যাডিং")</span>
+                <select class="classic-input" @bind="bulkZeroPad">
+                    <option value="0">@I18n.T("No Padding (1, 2, 3...)")</option>
+                    <option value="2">@I18n.T("2 Digits (01, 02, 03...)")</option>
+                    <option value="3">@I18n.T("3 Digits (001, 002, 003...)")</option>
+                    <option value="4">@I18n.T("4 Digits (0001, 0002...)")</option>
+                </select>
+            </label>
+
+            <label>
+                <span>@I18n.T("Initial Status", "প্রাথমিক অবস্থা")</span>
+                <select class="classic-input" @bind="bulkStatus">
+                    <option value="@BedStatuses.Available">🟢 @I18n.T("Available", "ফাঁকা (প্রস্তুত)")</option>
+                    <option value="@BedStatuses.Cleaning">🟡 @I18n.T("Cleaning", "পরিচ্ছন্নতা চলছে")</option>
+                    <option value="@BedStatuses.Maintenance">⚙️ @I18n.T("Maintenance", "রক্ষণাবেক্ষণ")</option>
+                </select>
+            </label>
+        </div>
+
+        <!-- Live Preview -->
+        @{
+            var previewList = GetBulkPreview();
+            var newCount = previewList.Count(x => !x.Exists);
+            var dupCount = previewList.Count(x => x.Exists);
+        }
+
+        <div class="bulk-preview-wrap">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 800; font-size: 13px; color: #0f172a;">
+                    🔍 @I18n.T("Live Preview", "প্রিভিউ:") (@previewList.Count @I18n.T("total"))
+                </span>
+                <div style="font-size: 12px;">
+                    <span style="color: #059669; font-weight: 700;">✅ @newCount @I18n.T("Ready to create")</span>
+                    @if (dupCount > 0)
+                    {
+                        <span style="color: #e11d48; font-weight: 700; margin-left: 10px;">⚠️ @dupCount @I18n.T("Already exist (skipped)")</span>
+                    }
+                </div>
+            </div>
+
+            @if (previewList.Count > 0)
+            {
+                <div class="bulk-chips-container">
+                    @foreach (var p in previewList)
+                    {
+                        <span class="bulk-bed-chip @(p.Exists ? "is-dup" : "is-new")" title="@(p.Exists ? I18n.T("Already exists") : I18n.T("New bed"))">
+                            @(p.Exists ? "⚠️" : "✓") @p.Name
+                        </span>
+                    }
+                </div>
+            }
+            else
+            {
+                <p style="font-size: 12px; color: #64748b; margin-top: 8px;">
+                    @I18n.T("Set valid start and end numbers (maximum 100 at a time) to see preview.", "সঠিক শুরু ও শেষ নম্বর নির্ধারণ করুন (একবারে সর্বোচ্চ ১০০টি)।")
+                </p>
+            }
+        </div>
+
+        <div class="form-actions" style="margin-top: 20px;">
+            <button type="button" class="btn btn-primary" disabled="@(newCount == 0 || bulkCategoryId <= 0)" @onclick="GenerateBedsAsync">
+                ⚡ @I18n.T("Generate") @newCount @I18n.T("Beds Now", "টি বেড এক ক্লিকে তৈরি করুন")
+            </button>
+        </div>
+    </div>
+}
+
+<!-- ==========================================
+     TAB 3: CATEGORIES & PRICING
      ========================================== -->
 @if (activeTab == "categories")
 {
@@ -464,7 +576,7 @@
 }
 
 <!-- ==========================================
-     TAB 3: IPD DEPARTMENTS
+     TAB 4: IPD DEPARTMENTS
      ========================================== -->
 @if (activeTab == "departments")
 {
@@ -532,118 +644,7 @@
     </div>
 }
 
-<!-- ==========================================
-     TAB 4: BULK BED GENERATOR
-     ========================================== -->
-@if (activeTab == "bulk")
-{
-    <div class="panel form-panel" style="max-width: 800px; margin: 0 auto;">
-        <div class="panel-heading">
-            <div>
-                <h2>⚡ @I18n.T("Bulk Bed & Cabin Generator", "একসাথে একাধিক বেড তৈরি করুন")</h2>
-                <p>@I18n.T("Quickly generate a sequence of beds (e.g. Bed-101 to Bed-120 or Cabin-01 to Cabin-10) with one click.", "এক ক্লিকে ধারাবাহিকভাবে বহু বেড বা কেবিন তৈরি করুন।")</p>
-            </div>
-        </div>
 
-        <div class="form-grid">
-            <label class="span-2">
-                <span>@I18n.T("Target Bed Category *", "বেড ক্যাটাগরি *")</span>
-                <select class="classic-input" @bind="bulkCategoryId">
-                    <option value="0">@I18n.T("Select Category", "ক্যাটাগরি নির্বাচন করুন")</option>
-                    @foreach (var cat in categories)
-                    {
-                        <option value="@cat.ID">@cat.Name (@DepartmentName(cat.IpdDepartmentID))</option>
-                    }
-                </select>
-            </label>
-
-            <label>
-                <span>@I18n.T("Name Prefix", "নামের প্রিফিক্স")</span>
-                <input type="text" class="classic-input" @bind="bulkPrefix" placeholder="e.g. Bed-, Cabin-, ICU-" />
-            </label>
-
-            <label>
-                <span>@I18n.T("Name Suffix (Optional)", "সাফিক্স (ঐচ্ছিক)")</span>
-                <input type="text" class="classic-input" @bind="bulkSuffix" placeholder="e.g. -A, -East" />
-            </label>
-
-            <label>
-                <span>@I18n.T("Start Number", "শুরুর নম্বর")</span>
-                <input type="number" class="classic-input" @bind="bulkStart" min="1" max="9999" />
-            </label>
-
-            <label>
-                <span>@I18n.T("End Number", "শেষ নম্বর")</span>
-                <input type="number" class="classic-input" @bind="bulkEnd" min="1" max="9999" />
-            </label>
-
-            <label>
-                <span>@I18n.T("Zero Padding", "শূন্য প্যাডিং")</span>
-                <select class="classic-input" @bind="bulkZeroPad">
-                    <option value="0">@I18n.T("No Padding (1, 2, 3...)")</option>
-                    <option value="2">@I18n.T("2 Digits (01, 02, 03...)")</option>
-                    <option value="3">@I18n.T("3 Digits (001, 002, 003...)")</option>
-                    <option value="4">@I18n.T("4 Digits (0001, 0002...)")</option>
-                </select>
-            </label>
-
-            <label>
-                <span>@I18n.T("Initial Status", "প্রাথমিক অবস্থা")</span>
-                <select class="classic-input" @bind="bulkStatus">
-                    <option value="@BedStatuses.Available">🟢 @I18n.T("Available", "ফাঁকা (প্রস্তুত)")</option>
-                    <option value="@BedStatuses.Cleaning">🟡 @I18n.T("Cleaning", "পরিচ্ছন্নতা চলছে")</option>
-                    <option value="@BedStatuses.Maintenance">⚙️ @I18n.T("Maintenance", "রক্ষণাবেক্ষণ")</option>
-                </select>
-            </label>
-        </div>
-
-        <!-- Live Preview -->
-        @{
-            var previewList = GetBulkPreview();
-            var newCount = previewList.Count(x => !x.Exists);
-            var dupCount = previewList.Count(x => x.Exists);
-        }
-
-        <div class="bulk-preview-wrap">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 800; font-size: 13px; color: #0f172a;">
-                    🔍 @I18n.T("Live Preview", "প্রিভিউ:") (@previewList.Count @I18n.T("total"))
-                </span>
-                <div style="font-size: 12px;">
-                    <span style="color: #059669; font-weight: 700;">✅ @newCount @I18n.T("Ready to create")</span>
-                    @if (dupCount > 0)
-                    {
-                        <span style="color: #e11d48; font-weight: 700; margin-left: 10px;">⚠️ @dupCount @I18n.T("Already exist (skipped)")</span>
-                    }
-                </div>
-            </div>
-
-            @if (previewList.Count > 0)
-            {
-                <div class="bulk-chips-container">
-                    @foreach (var p in previewList)
-                    {
-                        <span class="bulk-bed-chip @(p.Exists ? "is-dup" : "is-new")" title="@(p.Exists ? I18n.T("Already exists") : I18n.T("New bed"))">
-                            @(p.Exists ? "⚠️" : "✓") @p.Name
-                        </span>
-                    }
-                </div>
-            }
-            else
-            {
-                <p style="font-size: 12px; color: #64748b; margin-top: 8px;">
-                    @I18n.T("Set valid start and end numbers (maximum 100 at a time) to see preview.", "সঠিক শুরু ও শেষ নম্বর নির্ধারণ করুন (একবারে সর্বোচ্চ ১০০টি)।")
-                </p>
-            }
-        </div>
-
-        <div class="form-actions" style="margin-top: 20px;">
-            <button type="button" class="btn btn-primary" disabled="@(newCount == 0 || bulkCategoryId <= 0)" @onclick="GenerateBedsAsync">
-                ⚡ @I18n.T("Generate") @newCount @I18n.T("Beds Now", "টি বেড এক ক্লিকে তৈরি করুন")
-            </button>
-        </div>
-    </div>
-}
 
 <!-- ==========================================
      DRAWER / MODAL: ADD / EDIT SINGLE BED
@@ -721,6 +722,7 @@
     private string activeTab = "beds";
     private string bedViewMode = "grid";
     private string bedSearchQuery = string.Empty;
+    private int selectedDepartmentFilter = 0;
     private int selectedCategoryFilter = 0;
     private string selectedStatusFilter = "All";
 
@@ -759,13 +761,11 @@
 
     private Dictionary<int, AdmittedPatientInfo> activeAdmissions = new();
 
-    // KPI computed properties
+    // Bed Counts for Status Filters
     private int OccupiedBedsCount => beds.Count(b => b.IsAllocated);
     private int AvailableBedsCount => beds.Count(b => !b.IsAllocated && (b.Status == BedStatuses.Available || string.IsNullOrEmpty(b.Status)));
     private int CleaningBedsCount => beds.Count(b => !b.IsAllocated && b.Status == BedStatuses.Cleaning);
     private int MaintenanceBedsCount => beds.Count(b => !b.IsAllocated && b.Status == BedStatuses.Maintenance);
-    private int CleaningMaintenanceCount => CleaningBedsCount + MaintenanceBedsCount;
-    private double OccupancyRate => beds.Count == 0 ? 0 : Math.Round((double)OccupiedBedsCount / beds.Count * 100, 1);
 
     // Filtered Beds
     private List<BedCabin> FilteredBeds
@@ -773,6 +773,12 @@
         get
         {
             var q = beds.AsEnumerable();
+
+            if (selectedDepartmentFilter > 0)
+            {
+                var catIdsInDept = categories.Where(c => c.IpdDepartmentID == selectedDepartmentFilter).Select(c => c.ID).ToHashSet();
+                q = q.Where(b => catIdsInDept.Contains(b.CategoryID));
+            }
 
             if (selectedCategoryFilter > 0)
             {
@@ -828,9 +834,11 @@
         message = string.Empty;
     }
 
+
     private void ResetBedFilters()
     {
         bedSearchQuery = string.Empty;
+        selectedDepartmentFilter = 0;
         selectedCategoryFilter = 0;
         selectedStatusFilter = "All";
     }

@@ -28,6 +28,10 @@ public static class ModuleAccess
     public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.Cashier];
     public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
     public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Cashier];
+    public static readonly string[] OperationList = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.OTOperator, RoleNames.Nurse];
+    public static readonly string[] OtNotes = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.OTOperator];
+    public static readonly string[] NurseDesk = [RoleNames.Administrator, RoleNames.Nurse, RoleNames.Doctor, RoleNames.Reception];
+    public static readonly string[] MedicalCertificates = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.Reception, RoleNames.Nurse];
     public static readonly string[] PatientDocuments =
     [
         RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier, RoleNames.Doctor,
@@ -38,7 +42,7 @@ public static class ModuleAccess
     public static readonly string[] IpdGroup = Union(IpdAdmissions, IpdOccupancy, IpdMoneyReceipts, IpdPatientServices, IpdBilling, IpdMedicalDischarge);
     public static readonly string[] DiagnosticGroup = Union(DiagnosticBilling, DiagnosticWorklist, DiagnosticResults);
     public static readonly string[] DoctorGroup = Union(DoctorQueue, PharmacyPrescriptions, AdministratorOnly);
-    public static readonly string[] MedicalGroup = Union(DoctorQueue, PharmacyPrescriptions, DiagnosticBilling, OtCashMemos);
+    public static readonly string[] MedicalGroup = Union(DoctorQueue, PharmacyPrescriptions, DiagnosticBilling, OtCashMemos, OperationList, OtNotes, NurseDesk, MedicalCertificates);
     public static readonly string[] PharmacyGroup = Union(PharmacyPos, PharmacyPurchases, PharmacyReturns, PharmacyPrescriptions, PharmacyStock);
 
     public static bool CanView(ClaimsPrincipal user, IReadOnlyList<string> roles) =>

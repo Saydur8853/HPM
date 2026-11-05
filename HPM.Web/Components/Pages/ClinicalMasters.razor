@@ -1,91 +1,1029 @@
 @page "/masters/clinical"
+@page "/masters/departments"
+@page "/masters/opd-ticket-types"
 @attribute [Authorize(Roles = RoleNames.Administrator)]
-@rendermode InteractiveServer
 @implements IDisposable
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
+@using Microsoft.EntityFrameworkCore
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Clinical Departments & Ticket Types") | @Branding.HospitalName</PageTitle>
+<PageTitle>@(activeSection == "departments" ? I18n.T("Department Setup", "ডিপার্টমেন্ট সেটআপ") : I18n.T("OPD Ticket Type and Fee", "ওপিডি টিকিট টাইপ ও ফি")) | @Branding.HospitalName</PageTitle>
 
-<div class="diagnostic-classic-fit">
-    <div class="diagnostic-classic-topbar">
-        <div class="tickets-top-left">
-            <h1 class="tickets-page-title"><span>🏷️</span><span>@I18n.T("Clinical Departments & Ticket Types")</span></h1>
-            <div class="diagnostic-mode-toggle" role="tablist">
-                <button type="button" class="mode-toggle-btn @(activeSection == "departments" ? "active" : "")" @onclick='() => SwitchSection("departments")'>🏥 @I18n.T("Departments")</button>
-                <button type="button" class="mode-toggle-btn @(activeSection == "ticket-types" ? "active" : "")" @onclick='() => SwitchSection("ticket-types")'>🎫 @I18n.T("OPD Ticket Types")</button>
+<style>
+/* Scoped styles for Clinical Setup & OPD Masters */
+.clinical-masters-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    gap: 8px;
+    padding: 0;
+}
+
+/* Top Action & Section Switcher Bar */
+.cm-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 6px 14px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    flex-shrink: 0;
+}
+
+.cm-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+}
+
+.cm-page-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.cm-page-icon {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.cm-page-title {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    white-space: nowrap;
+    letter-spacing: -0.01em;
+}
+
+/* Segmented Section Switcher Tabs */
+.cm-section-tabs {
+    display: inline-flex;
+    align-items: center;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    padding: 2px;
+    gap: 2px;
+}
+
+.cm-section-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #475569;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.cm-section-tab:hover {
+    color: #0f172a;
+    background: rgba(255, 255, 255, 0.6);
+}
+
+.cm-section-tab.active {
+    background: #ffffff;
+    color: #0284c7;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.cm-tab-badge {
+    font-size: 10px;
+    font-weight: 800;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.cm-section-tab.active .cm-tab-badge {
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+/* Quick Status Filters */
+.cm-status-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.cm-filter-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.cm-filter-pill:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+}
+
+.cm-filter-pill.active {
+    background: #e0f2fe;
+    border-color: #7dd3fc;
+    color: #0369a1;
+}
+
+.cm-filter-pill.active-green.active {
+    background: #ecfdf5;
+    border-color: #6ee7b7;
+    color: #047857;
+}
+
+/* Alert Notification */
+.cm-alert {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 6px;
+    line-height: 1.2;
+}
+
+.cm-alert.success {
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+}
+
+.cm-alert.danger {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+}
+
+.cm-alert-close {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 4px;
+}
+
+.cm-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* Main Workspace Grid (370px Form + Rest for Directory) */
+.cm-workspace {
+    display: grid;
+    grid-template-columns: 370px minmax(0, 1fr);
+    gap: 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+@@media (max-width: 992px) {
+    .cm-workspace {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+}
+
+/* Form Card */
+.cm-form-card {
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    min-height: 0;
+    overflow: hidden;
+}
+
+.cm-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    flex-shrink: 0;
+}
+
+.cm-card-header h2 {
+    font-size: 12.5px;
+    font-weight: 800;
+    color: #1e293b;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cm-card-badge {
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+}
+
+.cm-card-badge.editing {
+    background: #e0f2fe;
+    color: #0369a1;
+    border-color: #bae6fd;
+}
+
+.cm-form-body {
+    padding: 14px 14px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.cm-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cm-field-label {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.cm-field-label .req {
+    color: #ef4444;
+    margin-left: 2px;
+}
+
+.cm-field-hint {
+    font-size: 10.5px;
+    color: #64748b;
+    margin-top: 2px;
+}
+
+/* Preset Fee Chips */
+.cm-preset-chips {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.cm-preset-chip {
+    padding: 2px 7px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #0369a1;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.cm-preset-chip:hover {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* Segmented Active Status Selector */
+.cm-status-selector {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 3px;
+}
+
+.cm-status-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    font-weight: 700;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: transparent;
+    color: #64748b;
+}
+
+.cm-status-btn.selected-active {
+    background: #ecfdf5;
+    border-color: #10b981;
+    color: #047857;
+    box-shadow: 0 1px 2px rgba(16, 185, 129, 0.12);
+}
+
+.cm-status-btn.selected-inactive {
+    background: #ffffff;
+    border-color: #cbd5e1;
+    color: #475569;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Contextual Info Box */
+.cm-info-box {
+    background: #f8fafc;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #475569;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.cm-info-box strong {
+    color: #1e293b;
+}
+
+/* Form Footer */
+.cm-form-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-top: 1px solid #e2e8f0;
+    flex-shrink: 0;
+}
+
+/* Directory / Table Card */
+.cm-list-card {
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    min-height: 0;
+    overflow: hidden;
+}
+
+.cm-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    flex-shrink: 0;
+}
+
+.cm-search-combo {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.cm-search-input-wrap {
+    position: relative;
+    width: 200px;
+}
+
+.cm-search-input {
+    width: 100%;
+    height: 28px;
+    padding: 0 22px 0 9px;
+    font-size: 11.5px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    box-sizing: border-box;
+}
+
+.cm-search-input:focus {
+    border-color: #0284c7;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.12);
+}
+
+.cm-search-clear {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0;
+    line-height: 1;
+}
+
+.cm-search-clear:hover {
+    color: #475569;
+}
+
+.cm-search-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    padding: 0 !important;
+    background: #0284c7 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    flex-shrink: 0 !important;
+    transition: background 0.15s ease !important;
+}
+
+.cm-search-btn:hover {
+    background: #0369a1 !important;
+}
+
+.cm-search-btn .hpm-search-icon {
+    width: 14px !important;
+    height: 14px !important;
+    stroke: #ffffff !important;
+    stroke-width: 2.5 !important;
+    display: block !important;
+    margin: 0 !important;
+}
+
+.cm-refresh-btn {
+    height: 28px !important;
+    padding: 0 8px !important;
+    font-size: 11px !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    background: #f8fafc !important;
+    color: #475569 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.cm-refresh-btn:hover {
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+.cm-table-container {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.cm-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+
+.cm-table th {
+    position: sticky;
+    top: 0;
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 800;
+    text-align: left;
+    padding: 7px 10px;
+    border-bottom: 1px solid #cbd5e1;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.cm-table th.num {
+    text-align: right;
+}
+
+.cm-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #1e293b;
+    vertical-align: middle;
+}
+
+.cm-table tr {
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+}
+
+.cm-table tr:hover {
+    background-color: #f8fafc;
+}
+
+.cm-table tr.selected-row {
+    background-color: #f0f9ff !important;
+    border-left: 3px solid #0284c7;
+}
+
+.cm-row-edit-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #0369a1;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.cm-row-edit-btn:hover {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+.cm-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: #94a3b8;
+    text-align: center;
+    gap: 8px;
+}
+
+.cm-empty-state .icon {
+    font-size: 32px;
+}
+</style>
+
+<div class="diagnostic-classic-fit clinical-masters-page">
+    <!-- Top Action & Section Switcher Bar -->
+    <header class="cm-topbar">
+        <div class="cm-topbar-left">
+            <div class="cm-page-title-wrap">
+                <span class="cm-page-icon">@(activeSection == "departments" ? "🏥" : "🎫")</span>
+                <h1 class="cm-page-title">
+                    @(activeSection == "departments" 
+                        ? I18n.T("Department Setup", "ডিপার্টমেন্ট সেটআপ") 
+                        : I18n.T("OPD Ticket Type and Fee", "ওপিডি টিকিট টাইপ ও ফি"))
+                </h1>
+                <span class="cm-tab-badge" style="background: @(activeSection == "departments" ? "#e0f2fe" : "#fef3c7"); color: @(activeSection == "departments" ? "#0369a1" : "#92400e"); font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px;">
+                    @(activeSection == "departments" 
+                        ? $"{departments.Count} {I18n.T("Departments", "ডিপার্টমেন্ট")}" 
+                        : $"{ticketTypes.Count} {I18n.T("Ticket Types", "টিকিট টাইপ")}")
+                </span>
             </div>
-            <span class="tickets-count-pill">@FilteredCount @I18n.T("Records")</span>
-            @if (!string.IsNullOrWhiteSpace(message)) { <span class="tickets-inline-alert @messageClass">@message</span> }
-        </div>
-        <div class="tickets-top-actions">
-            <input class="classic-input" style="width:210px" @bind="search" @bind:event="oninput" placeholder="@I18n.T("Search name or ID...")" />
-            <button class="btn btn-secondary tickets-btn" type="button" @onclick="() => Reset()">+ @I18n.T("New")</button>
-            <NavLink class="btn btn-ghost tickets-btn" href="">← @I18n.T("Dashboard", "ড্যাশবোর্ড")</NavLink>
-        </div>
-    </div>
 
-    <div class="diagnostic-classic-workspace">
-        <section class="diagnostic-form-card" style="flex:1">
-            <div class="diagnostic-card-header">
-                <h2>@(IsEditing ? I18n.T("Edit Record") : I18n.T("New Record"))</h2>
-                @if (IsEditing) { <span class="diagnostic-badge">ID #@EditingId</span> }
+            <!-- Quick Status Filter Pills -->
+            <div class="cm-status-filters" role="group" aria-label="Status filters">
+                <button type="button" 
+                        class="cm-filter-pill @(statusFilter == "All" ? "active" : "")" 
+                        @onclick='() => SetStatusFilter("All")' 
+                        title="@I18n.T("Show all records")">
+                    @I18n.T("All") (@TotalSectionCount)
+                </button>
+                <button type="button" 
+                        class="cm-filter-pill active-green @(statusFilter == "Active" ? "active" : "")" 
+                        @onclick='() => SetStatusFilter("Active")' 
+                        title="@I18n.T("Show active records")">
+                    ✓ @I18n.T("Active") (@ActiveSectionCount)
+                </button>
+                <button type="button" 
+                        class="cm-filter-pill @(statusFilter == "Inactive" ? "active" : "")" 
+                        @onclick='() => SetStatusFilter("Inactive")' 
+                        title="@I18n.T("Show inactive records")">
+                    ⏸ @I18n.T("Inactive") (@InactiveSectionCount)
+                </button>
             </div>
-            <div class="diagnostic-form-body" style="padding:14px 16px">
+
+            @if (!string.IsNullOrWhiteSpace(message))
+            {
+                <span class="cm-alert @messageClass" role="alert">
+                    <span>@(messageClass == "success" ? "✓" : "⚠")</span>
+                    <span>@message</span>
+                    <button type="button" class="cm-alert-close" @onclick="() => message = string.Empty">✕</button>
+                </span>
+            }
+        </div>
+
+        <div class="cm-topbar-actions">
+            <button type="button" class="btn btn-secondary tickets-btn" @onclick="() => Reset()" title="@I18n.T("Create new entry")">
+                + @I18n.T("New")
+            </button>
+            <NavLink class="btn btn-ghost tickets-btn" href="" title="@I18n.T("Back to Dashboard")">
+                ← @I18n.T("Dashboard", "ড্যাশবোর্ড")
+            </NavLink>
+        </div>
+    </header>
+
+    <!-- Main Workspace (Left Form Card + Right Data Grid) -->
+    <div class="cm-workspace">
+        <!-- Left Panel: Add / Edit Form Card -->
+        <section class="cm-form-card" aria-label="@I18n.T("Master Entry Form")">
+            <div class="cm-card-header">
+                <h2>
+                    <span>@(IsEditing ? "✏️" : "➕")</span>
+                    <span>
+                        @if (activeSection == "departments")
+                        {
+                            @(IsEditing ? I18n.T("Edit Department") : I18n.T("New Clinical Department"))
+                        }
+                        else
+                        {
+                            @(IsEditing ? I18n.T("Edit Ticket Type") : I18n.T("New OPD Ticket Type"))
+                        }
+                    </span>
+                </h2>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <span class="cm-card-badge @(IsEditing ? "editing" : "")">
+                        @(IsEditing ? $"ID #{EditingId}" : "NEW")
+                    </span>
+                    @if (IsEditing)
+                    {
+                        <button type="button" class="btn btn-link p-0" style="font-size: 11px; text-decoration: none; color: #0284c7; font-weight: 700;" @onclick="() => Reset()" title="@I18n.T("Cancel edit mode")">
+                            (@I18n.T("Cancel"))
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <div class="cm-form-body">
                 @if (activeSection == "departments")
                 {
-                    <div style="display:flex;flex-direction:column;gap:12px">
-                        <label><span>@I18n.T("Department Name") *</span><input class="classic-input" maxlength="50" @bind="department.Name" placeholder="e.g. Cardiology, Medicine, Pediatrics" /></label>
-                        <label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" @bind="department.IsActive" /><span>@I18n.T("Active and available for new doctors and OPD tickets")</span></label>
+                    <!-- Department Name -->
+                    <div class="cm-field-group">
+                        <label class="cm-field-label">
+                            <span>@I18n.T("Department Name")<span class="req">*</span></span>
+                        </label>
+                        <input class="classic-input"
+                               maxlength="50"
+                               @bind="department.Name"
+                               placeholder="@I18n.T("e.g. Cardiology, Orthopedics, Pediatrics")"
+                               style="height: 32px; font-weight: 600;" />
+                        <span class="cm-field-hint">
+                            @I18n.T("Clinical specialty or ward unit name used across OPD and doctor scheduling.")
+                        </span>
+                    </div>
+
+                    <!-- Department Status Toggle -->
+                    <div class="cm-field-group">
+                        <label class="cm-field-label">
+                            <span>@I18n.T("Department Status")</span>
+                        </label>
+                        <div class="cm-status-selector">
+                            <button type="button" 
+                                    class="cm-status-btn @(department.IsActive ? "selected-active" : "")" 
+                                    @onclick="() => department.IsActive = true">
+                                ✓ @I18n.T("Active")
+                            </button>
+                            <button type="button" 
+                                    class="cm-status-btn @(!department.IsActive ? "selected-inactive" : "")" 
+                                    @onclick="() => department.IsActive = false">
+                                ⏸ @I18n.T("Inactive")
+                            </button>
+                        </div>
+                        <span class="cm-field-hint">
+                            @(department.IsActive 
+                                ? I18n.T("Active: Available for doctor assignments and OPD tickets.") 
+                                : I18n.T("Inactive: Hidden from new doctor registrations and ticket creation."))
+                        </span>
+                    </div>
+
+                    <!-- System Info / Usage Stats Box -->
+                    <div class="cm-info-box">
+                        <div>
+                            <strong>👨‍⚕️ @I18n.T("Assigned Doctors"):</strong>
+                            <span>@(IsEditing && doctorCountByDept.TryGetValue(department.ID, out var dCount) ? $"{dCount} {I18n.T("Doctors registered")}" : I18n.T("Linked during doctor profile creation"))</span>
+                        </div>
+                        <div style="font-size: 10.5px; color: #64748b;">
+                            ℹ️ @I18n.T("Departments with linked doctors or patient visits cannot be deleted to maintain clinical audit trails.")
+                        </div>
                     </div>
                 }
                 else
                 {
-                    <div style="display:flex;flex-direction:column;gap:12px">
-                        <label><span>@I18n.T("Ticket Type Name") *</span><input class="classic-input" maxlength="50" @bind="ticketType.Name" placeholder="e.g. New Patient, Follow-up, Emergency" /></label>
-                        <label><span>@I18n.T("Consultation Fee") (@I18n.CurrencySymbol) *</span><input type="number" class="classic-input" min="0" step="0.01" @bind="ticketType.Amount" /></label>
-                        <label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" @bind="ticketType.IsActive" /><span>@I18n.T("Active and available for new OPD tickets")</span></label>
+                    <!-- Ticket Type Name -->
+                    <div class="cm-field-group">
+                        <label class="cm-field-label">
+                            <span>@I18n.T("Ticket Type Name")<span class="req">*</span></span>
+                        </label>
+                        <input class="classic-input"
+                               maxlength="50"
+                               @bind="ticketType.Name"
+                               placeholder="@I18n.T("e.g. Regular Consultation, Follow-up, Emergency")"
+                               style="height: 32px; font-weight: 600;" />
+                        <span class="cm-field-hint">
+                            @I18n.T("OPD ticket classification shown on tickets, receipts, and collection reports.")
+                        </span>
+                    </div>
+
+                    <!-- Consultation Fee with Currency Addon & Preset Chips -->
+                    <div class="cm-field-group">
+                        <label class="cm-field-label">
+                            <span>@I18n.T("Consultation Fee")<span class="req">*</span></span>
+                            <span style="font-weight: 700; color: #0284c7;">@I18n.FormatCurrency(ticketType.Amount)</span>
+                        </label>
+                        <div class="appt-unit-input-box" style="height: 32px;">
+                            <span class="appt-unit-addon" style="font-weight: 800; color: #0284c7;">৳</span>
+                            <input type="number"
+                                   class="classic-input appt-unit-input"
+                                   min="0"
+                                   step="10"
+                                   @bind="ticketType.Amount"
+                                   placeholder="50"
+                                   style="font-size: 13px; font-weight: 700; color: #0f172a;" />
+                        </div>
+
+                        <!-- Quick Preset Fee Chips -->
+                        <div class="cm-preset-chips">
+                            <span style="font-size: 10.5px; color: #64748b; margin-right: 2px;">@I18n.T("Quick Presets"):</span>
+                            @foreach (var rate in presetRates)
+                            {
+                                <button type="button" 
+                                        class="cm-preset-chip" 
+                                        @onclick="() => SetPresetFee(rate)" 
+                                        title="@I18n.T("Set fee to") @rate">
+                                    ৳@rate.ToString("0")
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Ticket Type Status Toggle -->
+                    <div class="cm-field-group">
+                        <label class="cm-field-label">
+                            <span>@I18n.T("Status")</span>
+                        </label>
+                        <div class="cm-status-selector">
+                            <button type="button" 
+                                    class="cm-status-btn @(ticketType.IsActive ? "selected-active" : "")" 
+                                    @onclick="() => ticketType.IsActive = true">
+                                ✓ @I18n.T("Active")
+                            </button>
+                            <button type="button" 
+                                    class="cm-status-btn @(!ticketType.IsActive ? "selected-inactive" : "")" 
+                                    @onclick="() => ticketType.IsActive = false">
+                                ⏸ @I18n.T("Inactive")
+                            </button>
+                        </div>
+                        <span class="cm-field-hint">
+                            @(ticketType.IsActive 
+                                ? I18n.T("Active: Available on the OPD Ticket counter.") 
+                                : I18n.T("Inactive: Hidden from the ticket issue dropdown."))
+                        </span>
+                    </div>
+
+                    <!-- System Info / Usage Stats Box -->
+                    <div class="cm-info-box">
+                        <div>
+                            <strong>🎫 @I18n.T("Tickets Issued"):</strong>
+                            <span>@(IsEditing && ticketCountByRate.TryGetValue(ticketType.ID.ToString(), out var tCount) ? $"{tCount} {I18n.T("Tickets issued")}" : I18n.T("Records created at ticket counter"))</span>
+                        </div>
+                        <div style="font-size: 10.5px; color: #64748b;">
+                            ℹ️ @I18n.T("Ticket types with existing billing history cannot be deleted. Deactivate instead.")
+                        </div>
                     </div>
                 }
             </div>
-            <div class="results-form-footer">
+
+            <!-- Form Footer Actions -->
+            <div class="cm-form-footer">
                 <div>
-                    @if (IsEditing) { <button class="btn btn-danger tickets-btn" type="button" @onclick="DeleteAsync" disabled="@isSaving">🗑 @I18n.T("Delete")</button> }
+                    @if (IsEditing)
+                    {
+                        <button class="btn btn-danger tickets-btn" type="button" @onclick="DeleteAsync" disabled="@isSaving" title="@I18n.T("Delete permanently")">
+                            🗑 @I18n.T("Delete")
+                        </button>
+                    }
                 </div>
-                <div style="display:flex;gap:6px">
-                    <button class="btn btn-ghost tickets-btn" type="button" @onclick="() => Reset()" disabled="@isSaving">@I18n.T("Clear")</button>
-                    <button class="btn btn-primary tickets-btn" type="button" @onclick="SaveAsync" disabled="@isSaving">✓ @(IsEditing ? I18n.T("Update") : I18n.T("Save"))</button>
+                <div style="display: flex; gap: 6px;">
+                    <button class="btn btn-ghost tickets-btn" type="button" @onclick="() => Reset()" disabled="@isSaving">
+                        @I18n.T("Clear")
+                    </button>
+                    <button class="btn btn-primary tickets-btn" type="button" @onclick="SaveAsync" disabled="@isSaving">
+                        ✓ @(isSaving ? I18n.T("Saving...") : IsEditing ? I18n.T("Update") : I18n.T("Save"))
+                    </button>
                 </div>
             </div>
         </section>
 
-        <section class="diagnostic-queue-card" style="flex:1.45">
-            <div class="diagnostic-card-header">
-                <h2>@I18n.T(activeSection == "departments" ? "Department Directory" : "OPD Ticket Type Directory")</h2>
-                <span class="diagnostic-badge">@FilteredCount</span>
+        <!-- Right Panel: Data Grid Directory -->
+        <section class="cm-list-card" aria-label="@I18n.T("Master Directory")">
+            <div class="cm-list-header">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <h2 style="font-size: 12.5px; font-weight: 800; color: #1e293b; margin: 0;">
+                        @(activeSection == "departments" ? I18n.T("Clinical Departments Directory") : I18n.T("OPD Ticket Types & Fee Directory"))
+                    </h2>
+                    <span class="cm-card-badge">
+                        @FilteredCount @I18n.T("Records")
+                    </span>
+                </div>
+
+                <div class="cm-search-combo">
+                    <!-- Search Input Combo with Blue Search Button -->
+                    <div class="cm-search-input-wrap">
+                        <input type="text"
+                               class="classic-input cm-search-input"
+                               placeholder="@I18n.T("Search name or ID...")"
+                               @bind="search"
+                               @bind:event="oninput" />
+                        @if (!string.IsNullOrWhiteSpace(search))
+                        {
+                            <button type="button" class="cm-search-clear" @onclick='() => search = string.Empty' title="@I18n.T("Clear search")">✕</button>
+                        }
+                    </div>
+
+                    <button type="button" class="btn-find cm-search-btn" title="@I18n.T("Search")">
+                        <SearchIcon />
+                    </button>
+
+                    <button type="button" class="btn btn-ghost tickets-btn cm-refresh-btn" @onclick="LoadAsync" title="@I18n.T("Refresh list")">
+                        🔄
+                    </button>
+                </div>
             </div>
-            <div class="diagnostic-queue-body" style="overflow:auto;max-height:calc(100vh - 170px)">
-                <table class="classic-table" style="width:100%">
+
+            <div class="cm-table-container">
+                <table class="cm-table">
                     <thead>
-                        @if (activeSection == "departments") { <tr><th style="width:70px">ID</th><th>@I18n.T("Department")</th><th style="width:100px">@I18n.T("Status")</th><th style="width:70px"></th></tr> }
-                        else { <tr><th style="width:70px">ID</th><th>@I18n.T("Ticket Type")</th><th class="num">@I18n.T("Fee")</th><th style="width:100px">@I18n.T("Status")</th><th style="width:70px"></th></tr> }
+                        @if (activeSection == "departments")
+                        {
+                            <tr>
+                                <th style="width: 65px; text-align: center;">ID</th>
+                                <th>@I18n.T("Department Name")</th>
+                                <th style="width: 140px; text-align: center;">@I18n.T("Doctors Assigned")</th>
+                                <th style="width: 100px; text-align: center;">@I18n.T("Status")</th>
+                                <th style="width: 75px; text-align: center;">@I18n.T("Action")</th>
+                            </tr>
+                        }
+                        else
+                        {
+                            <tr>
+                                <th style="width: 65px; text-align: center;">ID</th>
+                                <th>@I18n.T("Ticket Type Name")</th>
+                                <th class="num" style="width: 130px;">@I18n.T("Consultation Fee")</th>
+                                <th style="width: 130px; text-align: center;">@I18n.T("Tickets Issued")</th>
+                                <th style="width: 100px; text-align: center;">@I18n.T("Status")</th>
+                                <th style="width: 75px; text-align: center;">@I18n.T("Action")</th>
+                            </tr>
+                        }
                     </thead>
                     <tbody>
                         @if (activeSection == "departments")
                         {
-                            @if (!FilteredDepartments.Any()) { <tr><td colspan="4" class="dtm-empty">@I18n.T("No departments found.")</td></tr> }
+                            @if (!FilteredDepartments.Any())
+                            {
+                                <tr>
+                                    <td colspan="5">
+                                        <div class="cm-empty-state">
+                                            <span class="icon">🏥</span>
+                                            <strong>@I18n.T("No clinical departments found")</strong>
+                                            @if (!string.IsNullOrWhiteSpace(search))
+                                            {
+                                                <small>@I18n.T("No match for") "@search"</small>
+                                                <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; margin-top: 4px;" @onclick='() => search = string.Empty'>@I18n.T("Clear Search")</button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
                             @foreach (var item in FilteredDepartments)
                             {
-                                <tr style="@(department.ID == item.ID ? "background:#e0f2fe" : "")"><td><span class="pill">#@item.ID</span></td><td><strong>@item.Name</strong></td><td><span class="pill @(item.IsActive ? "pill-success" : "")">@I18n.T(item.IsActive ? "Active" : "Inactive")</span></td><td><button class="btn btn-ghost tickets-btn" @onclick="() => Select(item)">✎ @I18n.T("Edit")</button></td></tr>
+                                var isSelected = department.ID == item.ID;
+                                var docCount = doctorCountByDept.TryGetValue(item.ID, out var dc) ? dc : 0;
+                                <tr class="@(isSelected ? "selected-row" : "")" @onclick="() => Select(item)">
+                                    <td style="text-align: center;">
+                                        <span class="pill" style="font-size: 10px; font-weight: 700;">#@item.ID</span>
+                                    </td>
+                                    <td>
+                                        <strong style="color: #0f172a; font-size: 12px;">@item.Name</strong>
+                                    </td>
+                                    <td style="text-align: center;">
+                                        @if (docCount > 0)
+                                        {
+                                            <span class="pill" style="font-size: 10.5px; font-weight: 700; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;">
+                                                👨‍⚕️ @docCount @I18n.T("Doctors")
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span style="color: #94a3b8; font-size: 11px;">—</span>
+                                        }
+                                    </td>
+                                    <td style="text-align: center;">
+                                        <span class="pill @(item.IsActive ? "pill-success" : "")" style="font-size: 10.5px; font-weight: 700;">
+                                            @(item.IsActive ? "✓ " + I18n.T("Active") : "⏸ " + I18n.T("Inactive"))
+                                        </span>
+                                    </td>
+                                    <td style="text-align: center;" @onclick:stopPropagation>
+                                        <button type="button" class="cm-row-edit-btn" @onclick="() => Select(item)" title="@I18n.T("Edit record")">
+                                            ✎ @I18n.T("Edit")
+                                        </button>
+                                    </td>
+                                </tr>
                             }
                         }
                         else
                         {
-                            @if (!FilteredTicketTypes.Any()) { <tr><td colspan="5" class="dtm-empty">@I18n.T("No ticket types found.")</td></tr> }
+                            @if (!FilteredTicketTypes.Any())
+                            {
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="cm-empty-state">
+                                            <span class="icon">🎫</span>
+                                            <strong>@I18n.T("No ticket types found")</strong>
+                                            @if (!string.IsNullOrWhiteSpace(search))
+                                            {
+                                                <small>@I18n.T("No match for") "@search"</small>
+                                                <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; margin-top: 4px;" @onclick='() => search = string.Empty'>@I18n.T("Clear Search")</button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
                             @foreach (var item in FilteredTicketTypes)
                             {
-                                <tr style="@(ticketType.ID == item.ID ? "background:#e0f2fe" : "")"><td><span class="pill">#@item.ID</span></td><td><strong>@item.Name</strong></td><td class="num"><strong>@I18n.FormatCurrency(item.Amount)</strong></td><td><span class="pill @(item.IsActive ? "pill-success" : "")">@I18n.T(item.IsActive ? "Active" : "Inactive")</span></td><td><button class="btn btn-ghost tickets-btn" @onclick="() => Select(item)">✎ @I18n.T("Edit")</button></td></tr>
+                                var isSelected = ticketType.ID == item.ID;
+                                var tCount = ticketCountByRate.TryGetValue(item.ID.ToString(), out var tc) ? tc : 0;
+                                <tr class="@(isSelected ? "selected-row" : "")" @onclick="() => Select(item)">
+                                    <td style="text-align: center;">
+                                        <span class="pill" style="font-size: 10px; font-weight: 700;">#@item.ID</span>
+                                    </td>
+                                    <td>
+                                        <strong style="color: #0f172a; font-size: 12px;">@item.Name</strong>
+                                    </td>
+                                    <td class="num">
+                                        <strong style="color: #059669; font-size: 12px; font-weight: 800;">
+                                            @I18n.FormatCurrency(item.Amount)
+                                        </strong>
+                                    </td>
+                                    <td style="text-align: center;">
+                                        @if (tCount > 0)
+                                        {
+                                            <span class="pill" style="font-size: 10.5px; font-weight: 700; background: #f8fafc; color: #475569; border: 1px solid #cbd5e1;">
+                                                🎫 @tCount
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span style="color: #94a3b8; font-size: 11px;">0</span>
+                                        }
+                                    </td>
+                                    <td style="text-align: center;">
+                                        <span class="pill @(item.IsActive ? "pill-success" : "")" style="font-size: 10.5px; font-weight: 700;">
+                                            @(item.IsActive ? "✓ " + I18n.T("Active") : "⏸ " + I18n.T("Inactive"))
+                                        </span>
+                                    </td>
+                                    <td style="text-align: center;" @onclick:stopPropagation>
+                                        <button type="button" class="cm-row-edit-btn" @onclick="() => Select(item)" title="@I18n.T("Edit record")">
+                                            ✎ @I18n.T("Edit")
+                                        </button>
+                                    </td>
+                                </tr>
                             }
                         }
                     </tbody>
@@ -96,26 +1034,149 @@
 </div>
 
 @code {
-    [SupplyParameterFromQuery(Name = "section")] public string? Section { get; set; }
-    private string activeSection = "departments", search = "", message = "", messageClass = "success";
+    [SupplyParameterFromQuery(Name = "section")] 
+    public string? Section { get; set; }
+
+    private string activeSection = "departments";
+    private string search = "";
+    private string statusFilter = "All"; // "All", "Active", "Inactive"
+    private string message = "";
+    private string messageClass = "success";
+
     private Department department = NewDepartment();
     private TicketType ticketType = NewTicketType();
     private List<Department> departments = [];
     private List<TicketType> ticketTypes = [];
+    private Dictionary<int, int> doctorCountByDept = new();
+    private Dictionary<string, int> ticketCountByRate = new();
+
+    private readonly decimal[] presetRates = [50m, 100m, 200m, 300m, 500m, 1000m];
+
     private bool isSaving;
     private bool IsEditing => EditingId > 0;
     private int EditingId => activeSection == "departments" ? department.ID : ticketType.ID;
-    private int FilteredCount => activeSection == "departments" ? FilteredDepartments.Count() : FilteredTicketTypes.Count();
-    private IEnumerable<Department> FilteredDepartments => string.IsNullOrWhiteSpace(search) ? departments : departments.Where(x => x.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) || x.ID.ToString().Contains(search.Trim()));
-    private IEnumerable<TicketType> FilteredTicketTypes => string.IsNullOrWhiteSpace(search) ? ticketTypes : ticketTypes.Where(x => x.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) || x.ID.ToString().Contains(search.Trim()));
 
-    protected override async Task OnInitializedAsync() { I18n.OnLanguageChanged += LanguageChanged; await LoadAsync(); }
-    protected override void OnParametersSet() { activeSection = Section == "ticket-types" ? "ticket-types" : "departments"; Reset(clearMessage: false); }
-    private async Task LoadAsync() { await using var db = await DbFactory.CreateDbContextAsync(); departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync(); ticketTypes = await db.TicketTypes.AsNoTracking().OrderBy(x => x.Name).ToListAsync(); }
-    private void SwitchSection(string value) { activeSection = value; Navigation.NavigateTo(value == "ticket-types" ? "masters/clinical?section=ticket-types" : "masters/clinical"); search = ""; Reset(); }
-    private void Select(Department item) { department = new Department { ID = item.ID, Name = item.Name, DepartmentCategoryID = item.DepartmentCategoryID, IsActive = item.IsActive }; message = ""; }
-    private void Select(TicketType item) { ticketType = new TicketType { ID = item.ID, Name = item.Name, Amount = item.Amount, IsActive = item.IsActive }; message = ""; }
-    private void Reset(bool clearMessage = true) { department = NewDepartment(); ticketType = NewTicketType(); if (clearMessage) message = ""; }
+    private int TotalSectionCount => activeSection == "departments" ? departments.Count : ticketTypes.Count;
+    private int ActiveSectionCount => activeSection == "departments" ? departments.Count(x => x.IsActive) : ticketTypes.Count(x => x.IsActive);
+    private int InactiveSectionCount => activeSection == "departments" ? departments.Count(x => !x.IsActive) : ticketTypes.Count(x => !x.IsActive);
+    private int FilteredCount => activeSection == "departments" ? FilteredDepartments.Count() : FilteredTicketTypes.Count();
+
+    private IEnumerable<Department> FilteredDepartments => departments
+        .Where(x => statusFilter == "All" || (statusFilter == "Active" && x.IsActive) || (statusFilter == "Inactive" && !x.IsActive))
+        .Where(x => string.IsNullOrWhiteSpace(search) || x.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) || x.ID.ToString().Contains(search.Trim()));
+
+    private IEnumerable<TicketType> FilteredTicketTypes => ticketTypes
+        .Where(x => statusFilter == "All" || (statusFilter == "Active" && x.IsActive) || (statusFilter == "Inactive" && !x.IsActive))
+        .Where(x => string.IsNullOrWhiteSpace(search) || x.Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase) || x.ID.ToString().Contains(search.Trim()));
+
+    protected override async Task OnInitializedAsync()
+    {
+        I18n.OnLanguageChanged += LanguageChanged;
+        await LoadAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        var uri = Navigation.Uri.ToLowerInvariant();
+        if (uri.Contains("ticket-types") || Section == "ticket-types" || uri.Contains("opd-ticket"))
+        {
+            activeSection = "ticket-types";
+        }
+        else
+        {
+            activeSection = "departments";
+        }
+        Reset(clearMessage: false);
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+            ticketTypes = await db.TicketTypes.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+
+            try
+            {
+                doctorCountByDept = await db.Doctors.AsNoTracking()
+                    .Where(d => d.Department.HasValue)
+                    .GroupBy(d => d.Department!.Value)
+                    .Select(g => new { DeptId = g.Key, Count = g.Count() })
+                    .ToDictionaryAsync(x => x.DeptId, x => x.Count);
+            }
+            catch
+            {
+                doctorCountByDept = new();
+            }
+
+            try
+            {
+                ticketCountByRate = await db.OPDTickets.AsNoTracking()
+                    .Where(t => !string.IsNullOrEmpty(t.TicketRate))
+                    .GroupBy(t => t.TicketRate!)
+                    .Select(g => new { Rate = g.Key, Count = g.Count() })
+                    .ToDictionaryAsync(x => x.Rate, x => x.Count);
+            }
+            catch
+            {
+                ticketCountByRate = new();
+            }
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+    }
+
+    private void SwitchSection(string value)
+    {
+        activeSection = value;
+        Navigation.NavigateTo(value == "ticket-types" ? "masters/clinical?section=ticket-types" : "masters/clinical?section=departments");
+        search = "";
+        Reset();
+    }
+
+    private void SetStatusFilter(string filter)
+    {
+        statusFilter = filter;
+    }
+
+    private void SetPresetFee(decimal amount)
+    {
+        ticketType.Amount = amount;
+    }
+
+    private void Select(Department item)
+    {
+        department = new Department
+        {
+            ID = item.ID,
+            Name = item.Name,
+            DepartmentCategoryID = item.DepartmentCategoryID,
+            IsActive = item.IsActive
+        };
+        message = "";
+    }
+
+    private void Select(TicketType item)
+    {
+        ticketType = new TicketType
+        {
+            ID = item.ID,
+            Name = item.Name,
+            Amount = item.Amount,
+            IsActive = item.IsActive
+        };
+        message = "";
+    }
+
+    private void Reset(bool clearMessage = true)
+    {
+        department = NewDepartment();
+        ticketType = NewTicketType();
+        if (clearMessage) message = "";
+    }
 
     private async Task SaveAsync()
     {
@@ -126,52 +1187,136 @@
             if (activeSection == "departments")
             {
                 var name = department.Name?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(name)) { Fail(I18n.T("Department name is required.")); return; }
-                if (await db.Departments.AnyAsync(x => x.ID != department.ID && x.Name == name)) { Fail(I18n.T("A department with this name already exists.")); return; }
-                if (department.ID == 0) db.Departments.Add(new Department { Name = name, IsActive = department.IsActive });
-                else { var entity = await db.Departments.FindAsync(department.ID); if (entity is null) { Fail(I18n.T("Department was not found.")); return; } entity.Name = name; entity.IsActive = department.IsActive; }
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    Fail(I18n.T("Department name is required."));
+                    return;
+                }
+
+                if (await db.Departments.AnyAsync(x => x.ID != department.ID && x.Name == name))
+                {
+                    Fail(I18n.T("A department with this name already exists."));
+                    return;
+                }
+
+                if (department.ID == 0)
+                {
+                    db.Departments.Add(new Department { Name = name, IsActive = department.IsActive });
+                }
+                else
+                {
+                    var entity = await db.Departments.FindAsync(department.ID);
+                    if (entity is null)
+                    {
+                        Fail(I18n.T("Department was not found."));
+                        return;
+                    }
+                    entity.Name = name;
+                    entity.IsActive = department.IsActive;
+                }
             }
             else
             {
                 var name = ticketType.Name?.Trim() ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(name) || ticketType.Amount < 0) { Fail(I18n.T("Enter a valid ticket type and non-negative fee.")); return; }
-                if (await db.TicketTypes.AnyAsync(x => x.ID != ticketType.ID && x.Name == name)) { Fail(I18n.T("A ticket type with this name already exists.")); return; }
-                if (ticketType.ID == 0) db.TicketTypes.Add(new TicketType { Name = name, Amount = ticketType.Amount, IsActive = ticketType.IsActive });
-                else { var entity = await db.TicketTypes.FindAsync(ticketType.ID); if (entity is null) { Fail(I18n.T("Ticket type was not found.")); return; } entity.Name = name; entity.Amount = ticketType.Amount; entity.IsActive = ticketType.IsActive; }
+                if (string.IsNullOrWhiteSpace(name) || ticketType.Amount < 0)
+                {
+                    Fail(I18n.T("Enter a valid ticket type name and non-negative fee."));
+                    return;
+                }
+
+                if (await db.TicketTypes.AnyAsync(x => x.ID != ticketType.ID && x.Name == name))
+                {
+                    Fail(I18n.T("A ticket type with this name already exists."));
+                    return;
+                }
+
+                if (ticketType.ID == 0)
+                {
+                    db.TicketTypes.Add(new TicketType { Name = name, Amount = ticketType.Amount, IsActive = ticketType.IsActive });
+                }
+                else
+                {
+                    var entity = await db.TicketTypes.FindAsync(ticketType.ID);
+                    if (entity is null)
+                    {
+                        Fail(I18n.T("Ticket type was not found."));
+                        return;
+                    }
+                    entity.Name = name;
+                    entity.Amount = ticketType.Amount;
+                    entity.IsActive = ticketType.IsActive;
+                }
             }
-            await db.SaveChangesAsync(); Success(I18n.T("Record saved successfully.")); Reset(clearMessage: false); await LoadAsync();
+
+            await db.SaveChangesAsync();
+            Success(I18n.T("Record saved successfully."));
+            Reset(clearMessage: false);
+            await LoadAsync();
         }
-        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
-        finally { isSaving = false; }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+        finally
+        {
+            isSaving = false;
+        }
     }
 
     private async Task DeleteAsync()
     {
-        if (!IsEditing || !await JS.InvokeAsync<bool>("hpm.confirm", I18n.T("Delete this unused master record permanently?"))) return;
+        if (!IsEditing || !await JS.InvokeAsync<bool>("hpm.confirm", I18n.T("Delete this master record permanently?"))) 
+            return;
+
         isSaving = true;
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync();
             if (activeSection == "departments")
             {
-                var used = await db.Doctors.AnyAsync(x => x.Department == department.ID) || await db.OPDTickets.AnyAsync(x => x.DeptID == department.ID) || await db.PatientEncounters.AnyAsync(x => x.DepartmentID == department.ID);
-                if (used) { Fail(I18n.T("This department has clinical history and cannot be deleted. Mark it inactive instead.")); return; }
-                var entity = await db.Departments.FindAsync(department.ID); if (entity is not null) db.Departments.Remove(entity);
+                var used = await db.Doctors.AnyAsync(x => x.Department == department.ID) 
+                    || await db.OPDTickets.AnyAsync(x => x.DeptID == department.ID) 
+                    || await db.PatientEncounters.AnyAsync(x => x.DepartmentID == department.ID);
+
+                if (used)
+                {
+                    Fail(I18n.T("This department has active doctor profiles or clinical visit history and cannot be deleted. Deactivate it instead."));
+                    return;
+                }
+
+                var entity = await db.Departments.FindAsync(department.ID);
+                if (entity is not null) db.Departments.Remove(entity);
             }
             else
             {
                 var id = ticketType.ID.ToString();
-                if (await db.OPDTickets.AnyAsync(x => x.TicketRate == id)) { Fail(I18n.T("This ticket type has billing history and cannot be deleted. Mark it inactive instead.")); return; }
-                var entity = await db.TicketTypes.FindAsync(ticketType.ID); if (entity is not null) db.TicketTypes.Remove(entity);
+                if (await db.OPDTickets.AnyAsync(x => x.TicketRate == id))
+                {
+                    Fail(I18n.T("This ticket type has billing history and cannot be deleted. Deactivate it instead."));
+                    return;
+                }
+
+                var entity = await db.TicketTypes.FindAsync(ticketType.ID);
+                if (entity is not null) db.TicketTypes.Remove(entity);
             }
-            await db.SaveChangesAsync(); Success(I18n.T("Record deleted.")); Reset(clearMessage: false); await LoadAsync();
+
+            await db.SaveChangesAsync();
+            Success(I18n.T("Record deleted successfully."));
+            Reset(clearMessage: false);
+            await LoadAsync();
         }
-        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
-        finally { isSaving = false; }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+        finally
+        {
+            isSaving = false;
+        }
     }
 
     private static Department NewDepartment() => new() { IsActive = true };
-    private static TicketType NewTicketType() => new() { IsActive = true };
+    private static TicketType NewTicketType() => new() { IsActive = true, Amount = 50m };
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
     private void LanguageChanged() => InvokeAsync(StateHasChanged);

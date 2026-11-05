@@ -2,7 +2,7 @@
 @page "/diagnostic/imaging-results"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician + "," + RoleNames.Doctor)]
 @using System.Security.Claims
-@rendermode InteractiveServer
+@using System.Text.RegularExpressions
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
@@ -14,20 +14,41 @@
 
 <PageTitle>@I18n.T(IsImagingMode ? "Imaging Report Entry" : "Lab Results & Report") | @Branding.HospitalName</PageTitle>
 
-<div class="results-classic-fit">
-    <!-- Compact Top Action & Status Bar -->
+<!-- Diagnostic Module Workflow Navigation Tabs -->
+<DiagnosticNavTabs />
+
+<div class="results-classic-fit" style="margin-top: 8px;">
+    <!-- Top Action & Status Bar -->
     <div class="results-classic-topbar">
-        <div class="tickets-top-left">
-            <h1 class="tickets-page-title">
+        <div class="tickets-top-left" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <h1 class="tickets-page-title" style="margin:0;">
                 <span>@(IsImagingMode ? "🩻" : "🧪")</span>
-                <span>@I18n.T(IsImagingMode ? "Imaging & Radiology Report Entry" : "Pathology & Lab Result Entry")</span>
+                <span>@I18n.T(IsImagingMode ? "Imaging & Radiology Reports" : "Pathology & Lab Results")</span>
             </h1>
+
+            <!-- Quick Mode Switcher -->
+            <div class="results-mode-toggle">
+                <button type="button" 
+                        class="results-mode-btn @(!IsImagingMode ? "active" : "")" 
+                        @onclick="() => SwitchMode(false)"
+                        title="@I18n.T("Switch to Pathology / Laboratory Results")">
+                    🧪 @I18n.T("Pathology / Lab")
+                </button>
+                <button type="button" 
+                        class="results-mode-btn @(IsImagingMode ? "active imaging" : "")" 
+                        @onclick="() => SwitchMode(true)"
+                        title="@I18n.T("Switch to Radiology / Imaging Reports")">
+                    🩻 @I18n.T("Radiology / Imaging")
+                </button>
+            </div>
+
             @if (selectedMemo != null)
             {
                 <span class="tickets-count-pill" style="background:#e0f2fe; color:#0369a1; border-color:#bae6fd;">
                     #@selectedMemo.ID &bull; @selectedMemo.PatientName @(string.IsNullOrWhiteSpace(selectedMemo.PatientID) ? "" : $"(PID: {selectedMemo.PatientID})")
                 </span>
             }
+
             @if (!string.IsNullOrWhiteSpace(message))
             {
                 <span class="tickets-inline-alert @messageClass" title="@message">
@@ -43,7 +64,23 @@
         </div>
     </div>
 
-    <!-- Main Workspace Grid: Left Result Entry Form, Right Recent Orders -->
+    <!-- Quick Status / KPI Counters Bar -->
+    <div class="results-kpi-bar" style="margin-top: 6px;">
+        <button type="button" class="results-kpi-pill total @(queueStatusFilter == "all" ? "active" : "")" @onclick='() => SetQueueFilter("all")'>
+            📊 @I18n.T("Total Listed"): <strong>@recentOrderDtos.Count</strong>
+        </button>
+        <button type="button" class="results-kpi-pill pending @(queueStatusFilter == "Pending" ? "active" : "")" @onclick='() => SetQueueFilter("Pending")'>
+            ⏳ @I18n.T("Awaiting Results"): <strong>@recentOrderDtos.Count(x => x.OverallStatus == "Pending")</strong>
+        </button>
+        <button type="button" class="results-kpi-pill draft @(queueStatusFilter == "InProcess" ? "active" : "")" @onclick='() => SetQueueFilter("InProcess")'>
+            📝 @I18n.T("Draft / In Process"): <strong>@recentOrderDtos.Count(x => x.OverallStatus == "InProcess")</strong>
+        </button>
+        <button type="button" class="results-kpi-pill verified @(queueStatusFilter == "Verified" ? "active" : "")" @onclick='() => SetQueueFilter("Verified")'>
+            ✅ @I18n.T("Verified & Finalized"): <strong>@recentOrderDtos.Count(x => x.OverallStatus == "Verified")</strong>
+        </button>
+    </div>
+
+    <!-- Main Workspace Grid: Left Result Entry Form, Right Recent Orders Queue -->
     <div class="results-classic-workspace">
         <!-- Left Panel: Result Entry Card -->
         <div class="results-form-card">
@@ -51,14 +88,22 @@
                 <h2>@(selectedMemo == null ? I18n.T("Search Test #, Memo #, or Patient ID (PID)") : $"{I18n.T(IsImagingMode ? "Imaging Report Entry" : "Results & Report Entry")} — #{selectedMemo.ID}")</h2>
                 @if (selectedMemo != null)
                 {
-                    <span class="diagnostic-badge">
-                        MEMO #@selectedMemo.ID
-                    </span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="diagnostic-badge">
+                            MEMO #@selectedMemo.ID
+                        </span>
+                        @if (orderItems.Count > 0)
+                        {
+                            <span class="pill" style="font-size:11px; font-weight:700; background:#f0f9ff; color:#0369a1; border:1px solid #bae6fd;">
+                                @CompletedTestsCount / @orderItems.Count @I18n.T("Tests Completed")
+                            </span>
+                        }
+                    </div>
                 }
             </div>
 
             <div class="results-form-body">
-                <!-- Enhanced Search & Scanner Bar: Accepts Memo #, Test #, Patient ID (PID), Phone, or Barcode -->
+                <!-- Search & Scanner Bar -->
                 <div style="display:flex; gap:8px; align-items:center;">
                     <div class="tickets-scanner-bar" style="margin:0; flex:1;">
                         <div class="tickets-scanner-input-wrap">
@@ -97,7 +142,7 @@
                                 <button type="button"
                                         class="results-memo-pill @(selectedMemo?.ID == pm.ID ? "active" : "")"
                                         @onclick="() => SwitchPatientMemo(pm.ID)">
-                                    #@pm.ID (@pm.TransDate.ToString("dd/MM/yy"))
+                                    #@pm.ID (@pm.TransDate.ToString("dd/MM/yy")) &bull; @pm.Items.Count @I18n.T("tests")
                                 </button>
                             }
                         </div>
@@ -142,39 +187,72 @@
                     }
                     else
                     {
-                        <!-- Specimen Type & Collection Summary Strip for Lab Mode -->
-                        <div style="display:flex; gap:12px; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 12px; font-size:11.5px;">
-                            <div>
-                                <span style="color:#64748b; font-weight:600;">🧪 @I18n.T("Specimen / Sample"):</span>
-                                <input type="text" class="classic-input" style="width:130px; height:24px; padding:2px 6px; display:inline-block; font-weight:700; margin-left:4px;" @bind="currentSampleType" placeholder="Blood" />
+                        <!-- Specimen Type & Collection Summary Strip for Lab Mode with Quick Chips -->
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 12px; font-size:11.5px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="color:#64748b; font-weight:700;">🧪 @I18n.T("Specimen / Sample"):</span>
+                                    <input type="text" class="classic-input" style="width:120px; height:24px; padding:2px 6px; display:inline-block; font-weight:700;" @bind="currentSampleType" placeholder="Blood" />
+                                </div>
+                                <div style="display:flex; align-items:center; gap:16px;">
+                                    <div>
+                                        <span style="color:#64748b;">🕒 @I18n.T("Coll"):</span>
+                                        <b>@GetSampleCollectionTime()</b>
+                                    </div>
+                                    <div>
+                                        <span style="color:#64748b;">📥 @I18n.T("Recv"):</span>
+                                        <b>@GetSampleReceiveTime()</b>
+                                    </div>
+                                </div>
                             </div>
-                            <div>
-                                <span style="color:#64748b;">🕒 Coll:</span>
-                                <b>@GetSampleCollectionTime()</b>
-                            </div>
-                            <div>
-                                <span style="color:#64748b;">📥 Recv:</span>
-                                <b>@GetSampleReceiveTime()</b>
+                            <!-- Specimen Quick Chips -->
+                            <div class="specimen-chip-bar">
+                                <span style="font-size:10.5px; color:#64748b; font-weight:600;">@I18n.T("Quick Select"):</span>
+                                @foreach (var spec in QuickSpecimens)
+                                {
+                                    <button type="button" 
+                                            class="specimen-chip @(currentSampleType.Equals(spec, StringComparison.OrdinalIgnoreCase) ? "active" : "")" 
+                                            @onclick="() => SelectSpecimen(spec)">
+                                        @spec
+                                    </button>
+                                }
                             </div>
                         </div>
                     }
 
-                    <!-- Test Selector Tabs -->
+                    <!-- Test Selector Tabs with Progress & Save & Next Button -->
                     <div>
-                        <div class="billing-section-heading" style="margin-bottom:4px;">
-                            @(IsImagingMode ? "🩻 " + I18n.T("Selected Imaging Studies") : "🔬 " + I18n.T("Selected Tests & Investigations"))
+                        <div class="billing-section-heading" style="margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
+                            <span>@(IsImagingMode ? "🩻 " + I18n.T("Selected Imaging Studies") : "🔬 " + I18n.T("Selected Tests & Investigations"))</span>
+                            @if (orderItems.Count > 1)
+                            {
+                                <span style="font-size:11px; color:#0369a1; font-weight:700;">
+                                    @CompletedTestsCount / @orderItems.Count @I18n.T("Done")
+                                </span>
+                            }
                         </div>
-                        <div class="results-test-tabs">
+                        <div class="results-test-tabs" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                             @foreach (var test in orderItems)
                             {
                                 var sName = ServiceName(test.TestID);
-                                var hasResults = allResults.Any(x => x.ServiceID == test.TestID);
-                                var isTestVerified = hasResults && allResults.Where(x => x.ServiceID == test.TestID).All(x => x.IsVerified);
+                                var hasResults = allResults.Any(x => x.ServiceID == test.TestID && !string.IsNullOrWhiteSpace(x.ResultValue));
+                                var isTestVerified = allResults.Any(x => x.ServiceID == test.TestID) && allResults.Where(x => x.ServiceID == test.TestID).All(x => x.IsVerified);
                                 <button type="button"
                                         class="btn tickets-btn @(activeTestId == test.TestID ? "btn-primary" : "btn-secondary")"
                                         style="font-size:11px; padding:3px 10px; border-radius:14px;"
                                         @onclick="() => SwitchActiveTest(test.TestID)">
                                     @(isTestVerified ? "✓ " : hasResults ? "📝 " : "⏳ ")@sName
+                                </button>
+                            }
+
+                            @if (orderItems.Count > 1 && activeTestId > 0)
+                            {
+                                <button type="button"
+                                        class="btn btn-secondary tickets-btn"
+                                        style="font-size:11px; padding:3px 10px; border-radius:14px; margin-left:auto; background:#e0f2fe; color:#0369a1; border-color:#bae6fd;"
+                                        @onclick="SaveAndNextTestAsync"
+                                        title="@I18n.T("Save current test and move to next test")">
+                                    💾 @I18n.T("Save & Next Test") &rarr;
                                 </button>
                             }
                         </div>
@@ -196,9 +274,50 @@
                                 <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("KUB")'>
                                     + Normal KUB Study
                                 </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("Pelvis")'>
+                                    + Normal Pelvis / TVS
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("CTBrain")'>
+                                    + Normal CT Brain Plain
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("CSpine")'>
+                                    + Normal Cervical Spine
+                                </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("LSSpine")'>
+                                    + Normal LS Spine
+                                </button>
                                 <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("Bone")'>
                                     + Normal Bone / Extremity
                                 </button>
+                                <button type="button" class="imaging-template-btn" @onclick='() => LoadImagingTemplate("ECG")'>
+                                    + Normal 12-Lead ECG
+                                </button>
+                            </div>
+                        }
+
+                        <!-- Action Toolbar above Table for Lab Mode -->
+                        @if (!IsImagingMode)
+                        {
+                            <div class="results-table-toolbar">
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <button type="button" class="results-quick-btn success" @onclick="SetAllNormal" title="@I18n.T("Fill normal reference findings for all parameters")">
+                                        ⚡ @I18n.T("Set All Normal")
+                                    </button>
+                                    <button type="button" class="results-quick-btn" @onclick="ClearParameterValues" title="@I18n.T("Clear entered result values")">
+                                        🧹 @I18n.T("Clear Values")
+                                    </button>
+                                    <button type="button" class="results-quick-btn" @onclick="ResetToDefaultTemplate" title="@I18n.T("Reset to standard test parameters")">
+                                        🔄 @I18n.T("Reset Template")
+                                    </button>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <button type="button" class="results-quick-btn" @onclick="AddBlankParameter">
+                                        + @I18n.T("Add Parameter")
+                                    </button>
+                                    <button type="button" class="results-quick-btn" @onclick="AddSectionHeader">
+                                        + @I18n.T("Add Group Heading")
+                                    </button>
+                                </div>
                             </div>
                         }
 
@@ -214,15 +333,16 @@
                                 <table class="data-table">
                                     <thead>
                                         <tr>
+                                            <th style="width: 32px; text-align:center;">#</th>
                                             <th>@I18n.T(IsImagingMode ? "Report Section Heading" : "Parameter Name")</th>
-                                            <th style="width:@(IsImagingMode ? "420px" : "170px");">@I18n.T(IsImagingMode ? "Radiological Findings / Detailed Report" : "Observed Value")<span style="color:#dc2626;">*</span></th>
+                                            <th style="width:@(IsImagingMode ? "420px" : "175px");">@I18n.T(IsImagingMode ? "Radiological Findings / Detailed Report" : "Observed Value")<span style="color:#dc2626;">*</span></th>
                                             @if (!IsImagingMode)
                                             {
                                                 <th style="width:95px;">@I18n.T("Unit")</th>
                                                 <th style="width:180px;">@I18n.T("Reference Range")</th>
-                                                <th style="width:105px;">@I18n.T("Flag")</th>
+                                                <th style="width:115px;">@I18n.T("Flag")</th>
                                             }
-                                            <th style="width:30px;"></th>
+                                            <th style="width:65px; text-align:center;">@I18n.T("Action")</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -231,7 +351,15 @@
                                             var idx = i;
                                             var row = currentTestResults[idx];
                                             var isHeaderRow = string.IsNullOrWhiteSpace(row.ResultValue) && string.IsNullOrWhiteSpace(row.Unit) && !IsImagingMode;
-                                            <tr style="@(isHeaderRow ? "background:#f1f5f9;" : "")">
+                                            var flagClass = row.Flag switch
+                                            {
+                                                "High" or "Positive" => "results-row-high",
+                                                "Low" => "results-row-low",
+                                                "Critical" => "results-row-critical",
+                                                _ => ""
+                                            };
+                                            <tr class="@(isHeaderRow ? "results-row-header" : flagClass)">
+                                                <td style="text-align:center; color:#64748b; font-size:11px;">@(idx + 1)</td>
                                                 <td>
                                                     <InputText class="classic-input" @bind-Value="row.ParameterName" style="font-weight:700; height:26px !important; padding:2px 6px !important;" placeholder="Section Heading" />
                                                 </td>
@@ -242,7 +370,12 @@
                                                     }
                                                     else
                                                     {
-                                                        <InputText class="classic-input bold-number" @bind-Value="row.ResultValue" style="height:26px !important; padding:2px 6px !important;" placeholder="e.g. 12.7 or Negative" />
+                                                        <input type="text" 
+                                                               class="classic-input bold-number" 
+                                                               value="@row.ResultValue"
+                                                               @oninput="(e) => OnResultValueInput(row, e.Value?.ToString())"
+                                                               style="height:26px !important; padding:2px 6px !important;" 
+                                                               placeholder="e.g. 12.7 or Negative" />
                                                     }
                                                 </td>
                                                 @if (!IsImagingMode)
@@ -250,18 +383,22 @@
                                                     <td><InputText class="classic-input" @bind-Value="row.Unit" style="width:88px; height:26px !important; padding:2px 6px !important;" placeholder="g/dL" /></td>
                                                     <td><InputText class="classic-input" @bind-Value="row.ReferenceRange" style="height:26px !important; padding:2px 6px !important;" placeholder="12.0 - 16.0" /></td>
                                                     <td>
-                                                        <InputSelect class="classic-input tickets-select" @bind-Value="row.Flag" style="font-size:11px; height:26px !important; padding:2px 4px !important;">
-                                                            <option value="Normal">Normal</option>
-                                                            <option value="High">High</option>
-                                                            <option value="Low">Low</option>
-                                                            <option value="Positive">Positive</option>
-                                                            <option value="Negative">Negative</option>
-                                                            <option value="Critical">Critical</option>
+                                                        <InputSelect class="classic-input tickets-select" @bind-Value="row.Flag" style="font-size:11px; height:26px !important; padding:2px 4px !important; font-weight:700;">
+                                                            <option value="Normal">✓ Normal</option>
+                                                            <option value="High" style="color:#b91c1c; font-weight:bold;">▲ High</option>
+                                                            <option value="Low" style="color:#b45309; font-weight:bold;">▼ Low</option>
+                                                            <option value="Positive" style="color:#b91c1c; font-weight:bold;">+ Positive</option>
+                                                            <option value="Negative">− Negative</option>
+                                                            <option value="Critical" style="color:#dc2626; font-weight:bold;">⚠ Critical</option>
                                                         </InputSelect>
                                                     </td>
                                                 }
-                                                <td>
-                                                    <button type="button" class="tickets-icon-action danger" @onclick="() => RemoveParameter(idx)" title="@I18n.T("Delete")">✕</button>
+                                                <td style="text-align:center;">
+                                                    <div style="display:inline-flex; align-items:center; gap:2px;">
+                                                        <button type="button" class="tickets-icon-action" @onclick="() => MoveParameterUp(idx)" disabled="@(idx == 0)" title="@I18n.T("Move Up")">▲</button>
+                                                        <button type="button" class="tickets-icon-action" @onclick="() => MoveParameterDown(idx)" disabled="@(idx == currentTestResults.Count - 1)" title="@I18n.T("Move Down")">▼</button>
+                                                        <button type="button" class="tickets-icon-action danger" @onclick="() => RemoveParameter(idx)" title="@I18n.T("Delete")">✕</button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         }
@@ -279,45 +416,49 @@
                             </div>
                         }
 
-                        <!-- Verification & Add Parameter Bar -->
-                        <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px;">
-                            <div style="display:flex; gap:6px;">
-                                <button class="btn btn-secondary tickets-btn" type="button" style="font-size:11px;" @onclick="AddBlankParameter">
-                                    + @I18n.T(IsImagingMode ? "Add Report Section" : "Add Parameter")
-                                </button>
-                                @if (!IsImagingMode)
-                                {
-                                    <button class="btn btn-secondary tickets-btn" type="button" style="font-size:11px;" @onclick="AddSectionHeader">
-                                        + @I18n.T("Add Group Heading")
-                                    </button>
-                                }
-                            </div>
+                        <!-- Verification & Consultant Selection Bar -->
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:8px 12px; margin-top:6px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:11.5px; font-weight:700; color:#334155;">
+                                    <span>@(IsImagingMode ? "🩻 " + I18n.T("Consultant Radiologist") : "🔬 " + I18n.T("Consultant Pathologist")):</span>
+                                    <InputSelect class="classic-input tickets-select" style="min-width:180px; height:28px !important;" @bind-Value="selectedDoctorId">
+                                        <option value="0">@I18n.T("Select Doctor")</option>
+                                        @foreach (var d in doctors)
+                                        {
+                                            <option value="@d.ID">@d.Title @d.Name @(string.IsNullOrWhiteSpace(d.Degree) ? "" : $"({d.Degree})")</option>
+                                        }
+                                    </InputSelect>
+                                </label>
 
-                            @if (canVerify)
-                            {
-                                <div style="display:flex; align-items:center; gap:10px;">
-                                    <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:11px; font-weight:700; color:#334155;">
-                                        <span>@I18n.T(IsImagingMode ? "Consultant Radiologist" : "Pathologist / Consultant"):</span>
-                                        <InputSelect class="classic-input tickets-select" style="min-width:160px; height:26px !important;" @bind-Value="selectedDoctorId">
-                                            <option value="0">@I18n.T("Select Doctor")</option>
-                                            @foreach (var d in doctors)
-                                            {
-                                                <option value="@d.ID">@d.Title @d.Name @(string.IsNullOrWhiteSpace(d.Degree) ? "" : $"({d.Degree})")</option>
-                                            }
-                                        </InputSelect>
-                                    </label>
-                                    <label style="display:flex; align-items:center; gap:5px; margin:0; font-size:11.5px; font-weight:750; color:#047857; cursor:pointer;">
+                                @if (canVerify)
+                                {
+                                    <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:11.5px; font-weight:750; color:#047857; cursor:pointer;">
                                         <InputCheckbox @bind-Value="isVerified" />
                                         <span>@I18n.T("Mark Verified & Signed")</span>
                                     </label>
-                                </div>
-                            }
-                            else
-                            {
-                                <span style="font-size:11px; color:#64748b; font-style:italic;">
-                                    @I18n.T(IsImagingMode ? "Draft imaging report only. Consultant Radiologist must verify & sign." : "Draft results only. Pathologist / Doctor must verify.")
-                                </span>
-                            }
+                                }
+                            </div>
+
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                @if (isVerified)
+                                {
+                                    <span class="results-verified-seal">
+                                        ✓ @I18n.T("Verified & Finalized")
+                                    </span>
+                                    @if (isAdministrator)
+                                    {
+                                        <button type="button" class="btn btn-secondary tickets-btn" style="font-size:10.5px; padding:2px 8px;" @onclick="UnlockReportAsync" title="@I18n.T("Unlock report for corrections")">
+                                            🔓 @I18n.T("Unlock")
+                                        </button>
+                                    }
+                                }
+                                @if (canVerify && orderItems.Count > 1)
+                                {
+                                    <button type="button" class="btn btn-secondary tickets-btn" style="font-size:10.5px; padding:3px 8px; color:#047857; border-color:#a7f3d0;" @onclick="VerifyAllTestsAsync" title="@I18n.T("Verify all completed tests on this invoice at once")">
+                                        ✓ @I18n.T("Verify All Tests on Bill")
+                                    </button>
+                                }
+                            </div>
                         </div>
                     }
                 }
@@ -329,23 +470,46 @@
                         <span style="font-size: 11.5px; color:#64748b;">
                             @I18n.T(IsImagingMode ? "Patient collects film from counter; enter findings & print official written radiology report here." : "Scan barcode from specimen tube, or enter Patient ID (PID) to fetch patient tests and print reports.")
                         </span>
+                        <div style="margin-top: 12px; display:flex; gap:8px;">
+                            @if (recentOrderDtos.Count > 0)
+                            {
+                                <button type="button" class="btn btn-secondary tickets-btn" @onclick="() => SelectOrder(recentOrderDtos[0].ID)">
+                                    👉 @I18n.T("Load Latest Order") (#@recentOrderDtos[0].ID &bull; @recentOrderDtos[0].PatientName)
+                                </button>
+                            }
+                        </div>
                     </div>
                 }
             </div>
 
             <!-- Footer Actions -->
-            <div class="results-form-footer">
+            <div class="results-form-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                 @if (selectedMemo != null && activeTestId > 0)
                 {
-                    <button class="btn btn-primary tickets-btn" type="button" @onclick="SaveResultsAsync">
-                        💾 @I18n.T(IsImagingMode ? "Save Written Imaging Report" : "Save Test Results")
-                    </button>
                     <div style="display:flex; align-items:center; gap:6px;">
+                        <button class="btn btn-primary tickets-btn" type="button" @onclick="SaveResultsAsync">
+                            💾 @I18n.T(IsImagingMode ? "Save Written Imaging Report" : "Save Test Results")
+                        </button>
+                        @if (orderItems.Count > 1)
+                        {
+                            <button class="btn btn-secondary tickets-btn" type="button" @onclick="SaveAndNextTestAsync" title="@I18n.T("Save and move to next test")">
+                                💾 ⏭ @I18n.T("Save & Next")
+                            </button>
+                        }
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="ToggleReportPreview" title="@I18n.T("Show / Hide on-screen print preview")">
+                            👁️ @(showReportPreview ? I18n.T("Hide Preview") : I18n.T("Preview Report"))
+                        </button>
                         <button class="btn btn-secondary tickets-btn" type="button" @onclick="PrintAsync" title="@I18n.T("Print official report")">
-                            🖨 @I18n.T(IsImagingMode ? "Print Written Imaging Report" : "Print Lab Report")
+                            🖨 @I18n.T("Print")
                         </button>
                         <button class="btn btn-secondary tickets-btn" type="button" @onclick="DownloadPdfAsync" title="@I18n.T("Download official report as PDF")">
-                            📄 @I18n.T("Download PDF")
+                            📄 PDF
+                        </button>
+                        <button class="btn btn-secondary tickets-btn" type="button" @onclick="CopySummaryAsync" title="@I18n.T("Copy text summary for WhatsApp / SMS")">
+                            📋 @I18n.T("Copy")
                         </button>
                         <button class="btn btn-ghost tickets-btn" type="button" @onclick="Reset">
                             @I18n.T("Clear")
@@ -362,43 +526,102 @@
             </div>
         </div>
 
-        <!-- Right Panel: Recent Lab / Imaging Orders Queue Card -->
+        <!-- Right Panel: Recent Lab / Imaging Orders Queue Card with Search & Filters -->
         <div class="results-queue-card">
             <div class="results-queue-top">
                 <div style="display:flex; align-items:center; gap:8px;">
                     <h2>@I18n.T(IsImagingMode ? "Recent Imaging Orders" : "Recent Lab Orders")</h2>
-                    <span style="font-size:11.5px; color:#64748b; font-weight:600;">
-                        (@DateTime.Today.ToString("dd MMMM yyyy"))
+                    <span style="font-size:11px; color:#64748b; font-weight:600;">
+                        (@DateTime.Today.ToString("dd MMM"))
                     </span>
                 </div>
                 <span class="pill" style="font-size:11px; font-weight:700;">
-                    @recentOrders.Count @I18n.T("Listed")
+                    @filteredQueueOrders.Count @I18n.T("Orders")
                 </span>
             </div>
 
+            <!-- Queue Search & Filter Tabs -->
+            <div class="results-queue-filter-wrap">
+                <div class="tickets-search-wrap" style="width:100%;">
+                    <input class="classic-input"
+                           style="width:100%; height:26px; font-size:11px;"
+                           placeholder="@I18n.T("Search queue by patient, memo, PID, test...")"
+                           @bind="queueSearchQuery"
+                           @bind:event="oninput"
+                           @bind:after="FilterQueueOrders" />
+                    <span class="tickets-search-icon" style="font-size:11px;">🔍</span>
+                    @if (!string.IsNullOrWhiteSpace(queueSearchQuery))
+                    {
+                        <button type="button" class="tickets-search-clear" @onclick="ClearQueueSearch" style="font-size:11px;">✕</button>
+                    }
+                </div>
+                <div class="results-queue-tabs">
+                    <button type="button" class="results-queue-tab @(queueStatusFilter == "all" ? "active" : "")" @onclick='() => SetQueueFilter("all")'>
+                        @I18n.T("All") (@recentOrderDtos.Count)
+                    </button>
+                    <button type="button" class="results-queue-tab @(queueStatusFilter == "Pending" ? "active" : "")" @onclick='() => SetQueueFilter("Pending")'>
+                        ⏳ @I18n.T("Pending") (@recentOrderDtos.Count(x => x.OverallStatus == "Pending"))
+                    </button>
+                    <button type="button" class="results-queue-tab @(queueStatusFilter == "InProcess" ? "active" : "")" @onclick='() => SetQueueFilter("InProcess")'>
+                        📝 @I18n.T("Draft") (@recentOrderDtos.Count(x => x.OverallStatus == "InProcess"))
+                    </button>
+                    <button type="button" class="results-queue-tab @(queueStatusFilter == "Verified" ? "active" : "")" @onclick='() => SetQueueFilter("Verified")'>
+                        ✓ @I18n.T("Ready") (@recentOrderDtos.Count(x => x.OverallStatus == "Verified"))
+                    </button>
+                </div>
+            </div>
+
             <div class="billing-queue-list">
-                @if (!recentOrders.Any())
+                @if (filteredQueueOrders.Count == 0)
                 {
                     <div class="tickets-queue-empty">
                         <span style="font-size: 2rem;">@(IsImagingMode ? "🩻" : "🧪")</span>
-                        <span>@I18n.T(IsImagingMode ? "No recent imaging orders found." : "No recent lab orders found.")</span>
+                        <span>@I18n.T(IsImagingMode ? "No imaging orders match the filter." : "No lab orders match the filter.")</span>
                     </div>
                 }
-                @foreach (var o in recentOrders)
+                @foreach (var o in filteredQueueOrders)
                 {
-                    <div class="billing-queue-item @(selectedMemo?.ID == o.ID ? "active" : "")" @onclick="() => SelectOrder(o.ID)">
+                    var isSelected = selectedMemo?.ID == o.ID;
+                    <div class="billing-queue-item @(isSelected ? "active" : "")" @onclick="() => SelectOrder(o.ID)">
                         <span class="billing-queue-serial">#@o.ID</span>
                         <div class="billing-queue-info">
-                            <span class="billing-queue-name">
-                                @o.PatientName
-                                @if (!string.IsNullOrWhiteSpace(o.PatientID))
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span class="billing-queue-name">
+                                    @o.PatientName
+                                    @if (!string.IsNullOrWhiteSpace(o.PatientID))
+                                    {
+                                        <small class="tickets-queue-reg">(@o.PatientID)</small>
+                                    }
+                                </span>
+                                @if (o.OverallStatus == "Verified")
                                 {
-                                    <small class="tickets-queue-reg">(@o.PatientID)</small>
+                                    <span class="pill pill-success" style="font-size:9.5px; padding:1px 6px;">✓ @I18n.T("Verified")</span>
                                 }
-                            </span>
+                                else if (o.OverallStatus == "InProcess")
+                                {
+                                    <span class="pill" style="font-size:9.5px; padding:1px 6px; background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;">📝 @I18n.T("Draft")</span>
+                                }
+                                else
+                                {
+                                    <span class="pill" style="font-size:9.5px; padding:1px 6px; background:#fffbeb; color:#92400e; border:1px solid #fde68a;">⏳ @I18n.T("Pending")</span>
+                                }
+                            </div>
                             <span class="billing-queue-meta">
                                 @o.TransDate.ToString("dd MMM · hh:mm tt") &bull; @o.Age / @o.Sex
                             </span>
+                            @if (o.TestNames.Count > 0)
+                            {
+                                <div style="display:flex; flex-wrap:wrap; margin-top:2px;">
+                                    @foreach (var tName in o.TestNames.Take(3))
+                                    {
+                                        <span class="results-queue-chip" title="@tName">@tName</span>
+                                    }
+                                    @if (o.TestNames.Count > 3)
+                                    {
+                                        <span class="results-queue-chip" style="background:#e2e8f0;">+@(o.TestNames.Count - 3)</span>
+                                    }
+                                </div>
+                            }
                         </div>
                         <div class="tickets-queue-actions" @onclick:stopPropagation="true">
                             <button type="button" class="btn btn-secondary tickets-btn" style="font-size:10.5px; padding:2px 8px;" @onclick="() => SelectOrder(o.ID)">
@@ -412,22 +635,28 @@
     </div>
 </div>
 
-@if (selectedMemo != null)
+@if (selectedMemo != null && showReportPreview)
 {
-    <!-- Print Mode Switcher Toolbar (On-Screen Preview Toolbar) -->
-    <div class="results-print-toolbar no-print" style="max-width:820px; margin:20px auto 10px auto;">
+    <!-- Print & Preview Mode Switcher Toolbar -->
+    <div class="results-print-toolbar no-print" style="max-width:840px; margin:20px auto 10px auto;">
         <div class="results-print-mode-group">
             <span style="font-weight:700; font-size:12px; color:#334155;">🖨️ @I18n.T("Print Scope"):</span>
             <button type="button" class="btn btn-sm @(printMode == "active" ? "btn-primary active" : "btn-secondary")" @onclick='() => printMode = "active"' title="@I18n.T("Print only currently selected test/study")">
-                @(IsImagingMode ? "🩻 " : "🔬 ")@I18n.T("Active Study / Test") (@ServiceName(activeTestId))
+                @(IsImagingMode ? "🩻 " : "🔬 ")@I18n.T("Active Test") (@ServiceName(activeTestId))
             </button>
             <button type="button" class="btn btn-sm @(printMode == "all" ? "btn-primary active" : "btn-secondary")" @onclick='() => printMode = "all"' title="@I18n.T("Print all studies/tests for this patient / memo")">
-                📑 @I18n.T("Patient ID Wise (All Studies)") (@orderItems.Count @I18n.T("items"))
+                📑 @I18n.T("All Tests Combined") (@orderItems.Count @I18n.T("items"))
             </button>
         </div>
+
+        <!-- Pre-printed Stationery / Letterhead Mode Toggle -->
         <div style="display:flex; align-items:center; gap:8px;">
+            <label style="display:flex; align-items:center; gap:5px; margin:0; font-size:11.5px; font-weight:700; color:#334155; cursor:pointer;" title="@I18n.T("Check this to print on hospital pre-printed pad paper without hospital header")">
+                <input type="checkbox" @bind="usePreprintedPad" />
+                <span>📄 @I18n.T("Pre-printed Pad Mode (Blank Header)")</span>
+            </label>
             <button type="button" class="btn btn-primary" @onclick="PrintAsync" title="@I18n.T("Print to printer or PDF preview")">
-                🖨️ @I18n.T(IsImagingMode ? "Print Written Imaging Report" : "Print Lab Report")
+                🖨️ @I18n.T("Print Report")
             </button>
             <button type="button" class="btn btn-secondary" @onclick="DownloadPdfAsync" title="@I18n.T("Download report directly as a PDF file")">
                 📄 @I18n.T("Download PDF")
@@ -437,25 +666,33 @@
 
     <!-- Delta Hospital Official Clinical Laboratory & Written Radiology Report Sheet -->
     <div id="lab-report-print" class="print-sheet print-document">
-        <div class="delta-report-sheet">
-            <!-- Top Hospital Letterhead / Banner -->
-            <div class="delta-report-header">
-                <div class="delta-hosp-banner">
-                    @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
-                    {
-                        <img src="@Branding.LogoData" alt="Logo" class="delta-hosp-logo" />
-                    }
-                    else
-                    {
-                        <div class="delta-logo-placeholder">🏥</div>
-                    }
-                    <div class="delta-hosp-info">
-                        <h1 class="delta-hosp-name">@Branding.HospitalName</h1>
-                        <p class="delta-hosp-tagline">@(string.IsNullOrWhiteSpace(Branding.Tagline) ? "Delta Hospital Limited, Dhaka" : Branding.Tagline)</p>
-                        <p class="delta-hosp-addr">📍 @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}") &bull; 📞 Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</p>
+        <div class="delta-report-sheet @(usePreprintedPad ? "delta-pad-mode" : "")">
+            @if (!usePreprintedPad)
+            {
+                <!-- Top Hospital Letterhead / Banner -->
+                <div class="delta-report-header">
+                    <div class="delta-hosp-banner">
+                        @if (!string.IsNullOrWhiteSpace(Branding.LogoData))
+                        {
+                            <img src="@Branding.LogoData" alt="Logo" class="delta-hosp-logo" />
+                        }
+                        else
+                        {
+                            <div class="delta-logo-placeholder">🏥</div>
+                        }
+                        <div class="delta-hosp-info">
+                            <h1 class="delta-hosp-name">@Branding.HospitalName</h1>
+                            <p class="delta-hosp-tagline">@(string.IsNullOrWhiteSpace(Branding.Tagline) ? "Delta Hospital Limited, Dhaka" : Branding.Tagline)</p>
+                            <p class="delta-hosp-addr">📍 @Branding.Address@(string.IsNullOrWhiteSpace(Branding.CityDistrict) ? "" : $", {Branding.CityDistrict}") &bull; 📞 Hotline: @(string.IsNullOrWhiteSpace(Branding.Hotline) ? Branding.Phone : Branding.Hotline)</p>
+                        </div>
                     </div>
                 </div>
-            </div>
+            }
+            else
+            {
+                <!-- Pad Spacing Reservation for Pre-printed Stationery -->
+                <div class="delta-pad-spacer"></div>
+            }
 
             <!-- Barcodes & Department Title Row -->
             <div class="delta-barcodes-strip">
@@ -561,7 +798,7 @@
                 }
             </div>
 
-            <!-- Vertical Left HN Barcode Watermark/Indicator (matches HN: *H2610065515* on PDF) -->
+            <!-- Vertical Left HN Barcode Watermark/Indicator -->
             <div class="delta-hn-indicator">
                 <span>HN: <b>@(selectedMemo.PatientID ?? $"P-{selectedMemo.ID}")</b></span>
                 <span>&bull;</span>
@@ -570,9 +807,7 @@
 
             @if (IsImagingMode)
             {
-                <!-- =================================================================
-                     Official Written Radiology / Imaging Report Layout
-                     ================================================================= -->
+                <!-- Official Written Radiology / Imaging Report Layout -->
                 <div class="delta-imaging-report-body">
                     <div class="delta-imaging-study-header">
                         <span class="delta-imaging-lbl">EXAMINATION / STUDY:</span>
@@ -604,9 +839,7 @@
             }
             else
             {
-                <!-- =================================================================
-                     Pathology / Clinical Laboratory Test Table (Delta Hospital standard)
-                     ================================================================= -->
+                <!-- Pathology / Clinical Laboratory Test Table (Delta Hospital standard) -->
                 <table class="delta-results-table">
                     <thead>
                         <tr>
@@ -687,7 +920,7 @@
                 </table>
             }
 
-            <!-- Signatures Row (Technologist / Radiographer on Left, Consultant Radiologist / Pathologist on Right) -->
+            <!-- Signatures Row -->
             <div class="delta-signatures-row">
                 <div class="delta-sign-col">
                     <div class="delta-sign-line"></div>
@@ -728,13 +961,21 @@
     private CashMemoDInvestigation? selectedMemo;
     private List<CashMemoDInvestigation> patientMemosList = [];
     private List<CashMemoSubDInvestigation> orderItems = [];
-    private List<CashMemoDInvestigation> recentOrders = [];
+    private List<RecentOrderDto> recentOrderDtos = [];
+    private List<RecentOrderDto> filteredQueueOrders = [];
+    private string queueSearchQuery = "";
+    private string queueStatusFilter = "all"; // "all", "Pending", "InProcess", "Verified"
+
     private List<LabTestResult> allResults = [];
     private List<LabTestResult> currentTestResults = [];
+    private List<LabTestResult> initialTemplateBackup = [];
     private LabSampleCollection? currentSample;
     private string currentSampleType = "Blood";
+    private readonly string[] QuickSpecimens = ["Blood", "Serum", "Plasma", "Urine", "Stool", "Sputum", "CSF", "Swab", "Fluid"];
     private string analyzerMethodNote = "Estimations were carried out by automated analyzer Sysmex XN 1000-2, Vision C and Checked manually.";
     private string printMode = "active"; // "active" or "all"
+    private bool usePreprintedPad = false;
+    private bool showReportPreview = true;
     private string currentUserDisplayName = "Lab Technician";
 
     private List<Service> services = [];
@@ -750,12 +991,30 @@
     private bool canVerify;
     private bool isAdministrator;
     private int? currentDoctorProfileId;
+
+    private int CompletedTestsCount => orderItems.Count(t => allResults.Any(r => r.ServiceID == t.TestID && !string.IsNullOrWhiteSpace(r.ResultValue)));
     private bool ReportVerified => orderItems.Count > 0
         && orderItems.Select(x => x.TestID).Distinct().All(testId =>
             allResults.Any(x => x.ServiceID == testId) && allResults.Where(x => x.ServiceID == testId).All(x => x.IsVerified));
 
     private string message = "";
     private string messageClass = "success";
+
+    public sealed class RecentOrderDto
+    {
+        public long ID { get; set; }
+        public string PatientName { get; set; } = "";
+        public string? PatientID { get; set; }
+        public string? Age { get; set; }
+        public string? Sex { get; set; }
+        public string? Contact { get; set; }
+        public DateTime TransDate { get; set; }
+        public int TotalTests { get; set; }
+        public int CompletedTests { get; set; }
+        public int VerifiedTests { get; set; }
+        public string OverallStatus { get; set; } = "Pending";
+        public List<string> TestNames { get; set; } = [];
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -796,23 +1055,113 @@
         loadedImagingMode = IsImagingMode;
     }
 
-    private static readonly string[] PathologyReadyStatuses = ["Collected", "InProcess", "Completed"];
-    private static readonly string[] ImagingReadyStatuses = ["Completed", "InProcess"];
+    private static readonly string[] PathologyReadyStatuses = ["Collected", "Received", "InProcess", "Completed"];
+    private static readonly string[] ImagingReadyStatuses = ["Completed", "InProcess", "Scheduled"];
 
     private async Task LoadRecentOrdersAsync(HpmDbContext db)
     {
         var recentCandidates = await db.EmergencyMemos.Include(x => x.Items).AsNoTracking()
             .Where(x => x.ModuleID == 2)
             .OrderByDescending(x => x.ID)
-            .Take(30)
+            .Take(40)
             .ToListAsync();
         var recentMemoIds = recentCandidates.Select(x => x.ID).ToArray();
         var eligibleStatuses = IsImagingMode ? ImagingReadyStatuses : PathologyReadyStatuses;
-        var eligible = (await db.LabSampleCollections.AsNoTracking()
-            .Where(x => recentMemoIds.Contains(x.MemoID) && eligibleStatuses.Contains(x.Status))
-            .Select(x => new { x.MemoID, x.ServiceID }).ToListAsync())
-            .Select(x => (x.MemoID, x.ServiceID)).ToHashSet();
-        recentOrders = recentCandidates.Where(m => m.Items.Any(i => IsRouteService(i.TestID) && eligible.Contains((m.ID, i.TestID)))).ToList();
+
+        var sampleList = await db.LabSampleCollections.AsNoTracking()
+            .Where(x => recentMemoIds.Contains(x.MemoID))
+            .ToListAsync();
+        var sampleDict = sampleList.ToDictionary(x => (x.MemoID, x.ServiceID));
+
+        var resultsList = await db.LabTestResults.AsNoTracking()
+            .Where(x => recentMemoIds.Contains(x.MemoID))
+            .ToListAsync();
+        var resultsGroup = resultsList.GroupBy(x => (x.MemoID, x.ServiceID)).ToDictionary(g => g.Key, g => g.ToList());
+
+        var list = new List<RecentOrderDto>();
+        foreach (var m in recentCandidates)
+        {
+            var validItems = m.Items.Where(i => IsRouteService(i.TestID)).ToList();
+            if (validItems.Count == 0) continue;
+
+            // Check eligibility (collected or in process or completed)
+            var hasEligible = validItems.Any(i => sampleDict.TryGetValue((m.ID, i.TestID), out var samp) && eligibleStatuses.Contains(samp.Status));
+            if (!hasEligible && !IsImagingMode) continue;
+
+            int totalTests = validItems.Count;
+            int completedTests = 0;
+            int verifiedTests = 0;
+
+            foreach (var item in validItems)
+            {
+                if (resultsGroup.TryGetValue((m.ID, item.TestID), out var res) && res.Count > 0)
+                {
+                    if (res.Any(x => !string.IsNullOrWhiteSpace(x.ResultValue))) completedTests++;
+                    if (res.All(x => x.IsVerified)) verifiedTests++;
+                }
+            }
+
+            string overall = "Pending";
+            if (verifiedTests == totalTests && totalTests > 0) overall = "Verified";
+            else if (completedTests > 0) overall = "InProcess";
+
+            list.Add(new RecentOrderDto
+            {
+                ID = m.ID,
+                PatientName = m.PatientName,
+                PatientID = m.PatientID,
+                Age = m.Age,
+                Sex = m.Sex,
+                Contact = m.Contact,
+                TransDate = m.TransDate,
+                TotalTests = totalTests,
+                CompletedTests = completedTests,
+                VerifiedTests = verifiedTests,
+                OverallStatus = overall,
+                TestNames = validItems.Select(x => ServiceName(x.TestID)).ToList()
+            });
+        }
+
+        recentOrderDtos = list;
+        FilterQueueOrders();
+    }
+
+    private void FilterQueueOrders()
+    {
+        var q = recentOrderDtos.AsEnumerable();
+        if (queueStatusFilter != "all")
+        {
+            q = q.Where(x => x.OverallStatus == queueStatusFilter);
+        }
+        if (!string.IsNullOrWhiteSpace(queueSearchQuery))
+        {
+            var s = queueSearchQuery.Trim();
+            q = q.Where(x => x.ID.ToString().Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                             x.PatientName.Contains(s, StringComparison.OrdinalIgnoreCase) ||
+                             (x.PatientID?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             (x.Contact?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                             x.TestNames.Any(t => t.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        }
+        filteredQueueOrders = q.ToList();
+    }
+
+    private void SetQueueFilter(string filter)
+    {
+        queueStatusFilter = filter;
+        FilterQueueOrders();
+    }
+
+    private void ClearQueueSearch()
+    {
+        queueSearchQuery = "";
+        FilterQueueOrders();
+    }
+
+    private void SwitchMode(bool imaging)
+    {
+        var url = imaging ? "diagnostic/imaging-results" : "diagnostic/results";
+        if (selectedMemo != null) url += $"?memoId={selectedMemo.ID}";
+        Navigation.NavigateTo(url);
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
@@ -828,6 +1177,16 @@
     private void ClearSearch()
     {
         searchQuery = "";
+    }
+
+    private void ToggleReportPreview()
+    {
+        showReportPreview = !showReportPreview;
+    }
+
+    private void SelectSpecimen(string spec)
+    {
+        currentSampleType = spec;
     }
 
     private async Task SwitchPatientMemo(long id)
@@ -1029,9 +1388,123 @@
             }
             else
             {
-                // Smart clinical default templates for pathology
                 currentTestResults = GetDefaultParametersForService(ServiceName(testId), testId);
             }
+        }
+
+        initialTemplateBackup = currentTestResults.Select(x => new LabTestResult
+        {
+            ParameterName = x.ParameterName,
+            Unit = x.Unit,
+            ReferenceRange = x.ReferenceRange,
+            Flag = x.Flag,
+            ResultValue = x.ResultValue
+        }).ToList();
+    }
+
+    private void OnResultValueInput(LabTestResult row, string? newVal)
+    {
+        row.ResultValue = newVal ?? "";
+        AutoEvaluateFlag(row);
+    }
+
+    private void AutoEvaluateFlag(LabTestResult row)
+    {
+        if (string.IsNullOrWhiteSpace(row.ResultValue)) return;
+        var valStr = row.ResultValue.Trim();
+
+        // Check qualitative values first
+        var lowerVal = valStr.ToLowerInvariant();
+        if (lowerVal is "nil" or "negative" or "normal" or "clear" or "absent" or "none" or "non-reactive")
+        {
+            row.Flag = "Normal";
+            return;
+        }
+        if (lowerVal is "positive" or "reactive" or "+" or "++" or "+++" or "++++" or "detected")
+        {
+            row.Flag = "Positive";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(row.ReferenceRange)) return;
+        var refStr = row.ReferenceRange.Trim();
+
+        // Try parsing numeric value
+        if (double.TryParse(valStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
+        {
+            // Case: "< 150" or "<= 150"
+            if (refStr.StartsWith("<") && double.TryParse(refStr.TrimStart('<', '=', ' '), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var maxVal))
+            {
+                row.Flag = num > maxVal ? "High" : "Normal";
+                return;
+            }
+            // Case: "> 40" or ">= 40"
+            if (refStr.StartsWith(">") && double.TryParse(refStr.TrimStart('>', '=', ' '), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var minVal))
+            {
+                row.Flag = num < minVal ? "Low" : "Normal";
+                return;
+            }
+            // Case: "12.0 - 16.0" or "12 - 16"
+            var rangeMatch = Regex.Match(refStr, @"(?<low>\d+(\.\d+)?)\s*[-–—to]\s*(?<high>\d+(\.\d+)?)");
+            if (rangeMatch.Success)
+            {
+                if (double.TryParse(rangeMatch.Groups["low"].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var low) &&
+                    double.TryParse(rangeMatch.Groups["high"].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var high))
+                {
+                    if (num < low) row.Flag = "Low";
+                    else if (num > high) row.Flag = "High";
+                    else row.Flag = "Normal";
+                    return;
+                }
+            }
+        }
+    }
+
+    private void SetAllNormal()
+    {
+        foreach (var r in currentTestResults)
+        {
+            r.Flag = "Normal";
+            if (string.IsNullOrWhiteSpace(r.ResultValue))
+            {
+                var pLower = r.ParameterName.ToLowerInvariant();
+                if (pLower.Contains("colour") || pLower.Contains("color")) r.ResultValue = "Straw / Pale Yellow";
+                else if (pLower.Contains("appearance")) r.ResultValue = "Clear";
+                else if (pLower.Contains("sugar") || pLower.Contains("albumin") || pLower.Contains("protein") || pLower.Contains("blood") || pLower.Contains("ketone") || pLower.Contains("bilirubin") || pLower.Contains("casts") || pLower.Contains("crystals") || pLower.Contains("rbc")) r.ResultValue = "Nil";
+                else if (pLower.Contains("pus")) r.ResultValue = "0 - 2 /HPF";
+                else if (pLower.Contains("epithelial")) r.ResultValue = "Few (1 - 2 /HPF)";
+                else if (pLower.Contains("specific gravity")) r.ResultValue = "1.015";
+                else if (pLower.Contains("reaction") || pLower.Contains("ph")) r.ResultValue = "6.0 (Acidic)";
+            }
+        }
+        Success(I18n.IsBangla ? "সকল প্যারামিটার স্বাভাবিক (Normal) নির্ধারণ করা হয়েছে।" : "All parameters set to Normal reference findings.");
+    }
+
+    private void ClearParameterValues()
+    {
+        foreach (var r in currentTestResults)
+        {
+            r.ResultValue = "";
+            r.Flag = "Normal";
+        }
+        Success(I18n.IsBangla ? "প্যারামিটার ভ্যালু মুছে দেওয়া হয়েছে।" : "Parameter values cleared.");
+    }
+
+    private void ResetToDefaultTemplate()
+    {
+        if (initialTemplateBackup.Count > 0)
+        {
+            currentTestResults = initialTemplateBackup.Select(x => new LabTestResult
+            {
+                MemoID = selectedMemo?.ID ?? 0,
+                ServiceID = activeTestId,
+                ParameterName = x.ParameterName,
+                Unit = x.Unit,
+                ReferenceRange = x.ReferenceRange,
+                Flag = x.Flag,
+                ResultValue = ""
+            }).ToList();
+            Success(I18n.IsBangla ? "স্ট্যান্ডার্ড টেমপ্লেট পুনরায় লোড করা হয়েছে।" : "Reset to standard test template.");
         }
     }
 
@@ -1067,6 +1540,51 @@
                 new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal plain radiograph of KUB region. No radiopaque calculus seen." }
             ];
         }
+        else if (sLower.Contains("pelvis") || sLower.Contains("tvs"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "High resolution pelvic ultrasonography" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Urinary bladder is well distended with smooth, regular margins. Lumen is free of calculus or mass lesion.\nUterus is normal in size, anteverted with homogenous myometrial echotexture. Endometrial stripe is central and uniform.\nBoth ovaries appear normal in size, contour and parenchymal echotexture with physiological follicles.\nNo adnexal mass lesion or abnormal collection noted. Pouch of Douglas is free of fluid." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Sonographically normal study of pelvic organs." }
+            ];
+        }
+        else if (sLower.Contains("ct") && sLower.Contains("brain"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Non-contrast Helical CT Scan of Brain" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Cerebral and cerebellar parenchyma show normal attenuation pattern. No intra- or extra-axial hemorrhage, infarction, or mass effect seen.\nVentricular system, basal cisterns and cortical sulci are within normal age-related limits.\nMidline structures are centrally aligned with no shift.\nCalvarium and base of skull bones are intact. Visualized paranasal sinuses are clear." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal non-contrast CT study of the brain." }
+            ];
+        }
+        else if (sLower.Contains("cervical") || sLower.Contains("c-spine"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Digital Radiography - Cervical Spine A/P & Lateral Views" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Normal cervical lordosis is preserved. Vertebral body heights and alignment are normal.\nIntervertebral disc spaces are well preserved. No osteophyte formation or facet joint arthropathy.\nPrevertebral soft tissue shadow is within normal limits. Neural foramina are patent." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal radiograph of the cervical spine." }
+            ];
+        }
+        else if (sLower.Contains("lumbar") || sLower.Contains("ls-spine") || sLower.Contains("lumbo"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Digital Radiography - Lumbo-Sacral Spine A/P & Lateral Views" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Normal lumbar lordosis is maintained. Vertebral bodies show normal contour, height and bone density.\nIntervertebral disc spaces show no gross narrowing. Pedicles, spinous processes and facet joints appear normal.\nPsoas shadows are normal and symmetric. Visualized sacroiliac joints are unremarkable." },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal radiographic examination of lumbosacral spine." }
+            ];
+        }
+        else if (sLower.Contains("ecg") || sLower.Contains("ekg"))
+        {
+            return
+            [
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Technique", ResultValue = "Standard 12-Lead Electrocardiogram (25 mm/s, 10 mm/mV)" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Findings", ResultValue = "Rhythm: Normal Sinus Rhythm\nHeart Rate: 74 bpm\nP-Wave: Normal morphology, axis and duration (< 0.11 s)\nPR Interval: 0.16 s (Normal 0.12 - 0.20 s)\nQRS Complex: Narrow (0.08 s), normal voltage, no pathological Q waves\nST Segment: Isoelectric, no elevation or depression\nT-Wave: Upright and normal in all leads except aVR\nQT/QTc Interval: 380 ms / 415 ms (Normal)" },
+                new LabTestResult { MemoID = memoIdVal, ServiceID = activeTestId, ParameterName = "Impression", ResultValue = "Normal 12-Lead Electrocardiogram." }
+            ];
+        }
 
         return
         [
@@ -1078,23 +1596,19 @@
 
     private void LoadImagingTemplate(string templateType)
     {
-        var memoIdVal = selectedMemo?.ID ?? 0;
-        if (templateType == "Chest")
+        currentTestResults = templateType switch
         {
-            currentTestResults = GetDefaultImagingParameters("Chest");
-        }
-        else if (templateType == "Abdomen")
-        {
-            currentTestResults = GetDefaultImagingParameters("Abdomen");
-        }
-        else if (templateType == "KUB")
-        {
-            currentTestResults = GetDefaultImagingParameters("KUB");
-        }
-        else if (templateType == "Bone")
-        {
-            currentTestResults = GetDefaultImagingParameters("Bone");
-        }
+            "Chest" => GetDefaultImagingParameters("Chest"),
+            "Abdomen" => GetDefaultImagingParameters("Abdomen"),
+            "KUB" => GetDefaultImagingParameters("KUB"),
+            "Pelvis" => GetDefaultImagingParameters("Pelvis"),
+            "CTBrain" => GetDefaultImagingParameters("CT Brain"),
+            "CSpine" => GetDefaultImagingParameters("Cervical Spine"),
+            "LSSpine" => GetDefaultImagingParameters("Lumbo-Sacral Spine"),
+            "Bone" => GetDefaultImagingParameters("Bone"),
+            "ECG" => GetDefaultImagingParameters("ECG"),
+            _ => GetDefaultImagingParameters("General")
+        };
         StateHasChanged();
     }
 
@@ -1246,6 +1760,26 @@
         });
     }
 
+    private void MoveParameterUp(int idx)
+    {
+        if (idx > 0 && idx < currentTestResults.Count)
+        {
+            var temp = currentTestResults[idx];
+            currentTestResults[idx] = currentTestResults[idx - 1];
+            currentTestResults[idx - 1] = temp;
+        }
+    }
+
+    private void MoveParameterDown(int idx)
+    {
+        if (idx >= 0 && idx < currentTestResults.Count - 1)
+        {
+            var temp = currentTestResults[idx];
+            currentTestResults[idx] = currentTestResults[idx + 1];
+            currentTestResults[idx + 1] = temp;
+        }
+    }
+
     private void RemoveParameter(int idx)
     {
         if (idx >= 0 && idx < currentTestResults.Count)
@@ -1303,7 +1837,7 @@
                     r.MemoID = selectedMemo.ID;
                     r.ServiceID = activeTestId;
                     r.ReportedAt = verify ? now : null;
-                    r.ReportedBy = verify ? selectedDoctorId : null;
+                    r.ReportedBy = selectedDoctorId > 0 ? selectedDoctorId : null;
                     r.IsVerified = verify;
                     db.LabTestResults.Add(r);
                 }
@@ -1322,7 +1856,7 @@
                         sample.CompletedAt = now;
                         sample.CompletedBy = selectedDoctorId;
                     }
-                    else if (sample.Status == "Collected")
+                    else if (sample.Status == "Collected" || sample.Status == "Received")
                     {
                         sample.Status = "InProcess";
                         sample.ProcessingStartedAt ??= now;
@@ -1341,6 +1875,125 @@
         {
             Fail(I18n.IsBangla ? $"ফলাফল সংরক্ষণ করা যায়নি: {ex.GetBaseException().Message}" : $"Could not save results: {ex.GetBaseException().Message}");
         }
+    }
+
+    private async Task SaveAndNextTestAsync()
+    {
+        await SaveResultsAsync();
+        var currentIndex = orderItems.FindIndex(x => x.TestID == activeTestId);
+        if (currentIndex >= 0 && currentIndex < orderItems.Count - 1)
+        {
+            await SwitchActiveTest(orderItems[currentIndex + 1].TestID);
+        }
+        else
+        {
+            Success(I18n.IsBangla ? "সকল টেস্টের ফলাফল সংরক্ষণ সম্পন্ন হয়েছে।" : "All ordered tests have been saved.");
+        }
+    }
+
+    private async Task VerifyAllTestsAsync()
+    {
+        if (selectedMemo == null) return;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        var canVerifyNow = isAdministrator || (principal.IsInRole(RoleNames.Doctor) && currentDoctorProfileId.HasValue);
+        if (!canVerifyNow)
+        {
+            Fail(I18n.IsBangla ? "শুধুমাত্র অনুমোদিত ডাক্তার বা অ্যাডমিন রিপোর্ট সত্যায়ন করতে পারবেন।" : "Only authorized Doctor or Administrator can verify reports.");
+            return;
+        }
+        if (selectedDoctorId <= 0)
+        {
+            Fail(I18n.IsBangla ? "রিপোর্ট সত্যায়নকারী ডাক্তার নির্বাচন করুন।" : "Please select the verifying doctor.");
+            return;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var now = DateTime.Now;
+            var results = await db.LabTestResults.Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+            foreach (var r in results)
+            {
+                r.IsVerified = true;
+                r.ReportedAt = now;
+                r.ReportedBy = selectedDoctorId;
+            }
+
+            var samples = await db.LabSampleCollections.Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+            foreach (var s in samples)
+            {
+                s.Status = "Completed";
+                s.CompletedAt = now;
+                s.CompletedBy = selectedDoctorId;
+            }
+
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? "এই মেমোর সকল টেস্ট সফলভাবে সত্যায়ন ও সম্পন্ন করা হয়েছে।" : "All tests on this memo have been verified and marked completed.");
+            allResults = await db.LabTestResults.AsNoTracking().Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+            isVerified = true;
+            await LoadRecentOrdersAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Fail($"Verification failed: {ex.Message}");
+        }
+    }
+
+    private async Task UnlockReportAsync()
+    {
+        if (!isAdministrator) return;
+        if (selectedMemo == null || activeTestId <= 0) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var results = await db.LabTestResults.Where(x => x.MemoID == selectedMemo.ID && x.ServiceID == activeTestId).ToListAsync();
+            foreach (var r in results)
+            {
+                r.IsVerified = false;
+            }
+            var sample = await db.LabSampleCollections.FirstOrDefaultAsync(x => x.MemoID == selectedMemo.ID && x.ServiceID == activeTestId);
+            if (sample != null)
+            {
+                sample.Status = "InProcess";
+            }
+            await db.SaveChangesAsync();
+            isVerified = false;
+            allResults = await db.LabTestResults.AsNoTracking().Where(x => x.MemoID == selectedMemo.ID).ToListAsync();
+            Success(I18n.IsBangla ? "রিপোর্ট এডিটের জন্য আনলক করা হয়েছে।" : "Report unlocked for amendments.");
+            await LoadRecentOrdersAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Fail($"Unlock failed: {ex.Message}");
+        }
+    }
+
+    private async Task CopySummaryAsync()
+    {
+        if (selectedMemo == null) return;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"--- {Branding.HospitalName} ---");
+        sb.AppendLine($"{(IsImagingMode ? "RADIOLOGY REPORT" : "DIAGNOSTIC LAB REPORT")}");
+        sb.AppendLine($"Patient: {selectedMemo.PatientName} (PID: {selectedMemo.PatientID ?? "Walk-in"}) | {selectedMemo.Age} / {selectedMemo.Sex}");
+        sb.AppendLine($"Bill No: #D{selectedMemo.ID} | Date: {selectedMemo.TransDate:dd/MM/yyyy}");
+        sb.AppendLine($"Test: {ServiceName(activeTestId)}");
+        sb.AppendLine("--------------------------------");
+        foreach (var r in currentTestResults.Where(x => !string.IsNullOrWhiteSpace(x.ParameterName)))
+        {
+            if (string.IsNullOrWhiteSpace(r.ResultValue) && string.IsNullOrWhiteSpace(r.Unit))
+            {
+                sb.AppendLine($"\n[{r.ParameterName}]");
+            }
+            else
+            {
+                sb.AppendLine($"{r.ParameterName}: {r.ResultValue} {r.Unit} (Ref: {r.ReferenceRange}) {(r.Flag != "Normal" ? $"[{r.Flag}]" : "")}");
+            }
+        }
+        sb.AppendLine("--------------------------------");
+        sb.AppendLine($"Reported by: {GetConsultantDoctorTitleAndName()}");
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", sb.ToString());
+        Success(I18n.IsBangla ? "রিপোর্ট সামারি ক্লিপবোর্ডে কপি করা হয়েছে।" : "Report summary copied to clipboard.");
     }
 
     private async Task SelectOrder(long id)
@@ -1372,6 +2025,7 @@
         orderItems.Clear();
         allResults.Clear();
         currentTestResults.Clear();
+        initialTemplateBackup.Clear();
         activeTestId = 0;
         message = "";
     }
@@ -1384,12 +2038,6 @@
         if (service is null) return false;
         var category = service.CategoryID.HasValue ? categories.GetValueOrDefault(service.CategoryID.Value) : null;
         return IsImagingMode ? DiagnosticTestRouting.IsImaging(service, category) : DiagnosticTestRouting.IsPathology(service, category);
-    }
-
-    private string DoctorName(int? id)
-    {
-        var d = doctors.FirstOrDefault(x => x.ID == id);
-        return d == null ? (I18n.IsBangla ? "ডিউটি ডাক্তার" : "Duty Doctor") : $"{d.Title} {d.Name}";
     }
 
     private string DoctorFormatted(int? id)

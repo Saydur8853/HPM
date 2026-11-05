@@ -1,0 +1,1710 @@
+@page "/medical/nurse-desk"
+@page "/medical/stickers"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Nurse + "," + RoleNames.Doctor + "," + RoleNames.Reception)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IBarcodeQrService BarcodeQr
+@inject NavigationManager Navigation
+@implements IDisposable
+@using System.Security.Claims
+@using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Services
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>@I18n.T("Nurse's Desk & Clinical Ward Hub", "নার্সেস ডেস্ক ও ক্লিনিক্যাল চার্ট হাব") | @Branding.HospitalName</PageTitle>
+
+<style>
+.nurse-page {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px 16px 24px;
+    max-width: 1580px;
+    margin: 0 auto;
+    outline: none;
+}
+.nurse-top-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.nurse-top-nav-link {
+    color: #0284c7;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    transition: all 0.15s ease;
+}
+.nurse-top-nav-link:hover {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* KPI Summary Metric Cards */
+.ipd-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+}
+.ipd-kpi-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+.ipd-kpi-info {
+    display: flex;
+    flex-direction: column;
+}
+.ipd-kpi-label {
+    font-size: 11px;
+    font-weight: 750;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.5px;
+}
+.ipd-kpi-val {
+    font-size: 22px;
+    font-weight: 900;
+    line-height: 1.2;
+    margin-top: 2px;
+}
+.ipd-kpi-sub {
+    font-size: 11px;
+    color: #64748b;
+    margin-top: 2px;
+}
+.ipd-kpi-icon {
+    font-size: 26px;
+    opacity: 0.85;
+}
+
+/* Workspace Grid */
+.nurse-grid {
+    display: grid;
+    grid-template-columns: minmax(330px, 400px) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+}
+@@media (max-width: 1024px) {
+    .nurse-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.nurse-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+    overflow: hidden;
+}
+.nurse-card-header {
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.nurse-card-header h2 {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.nurse-card-body {
+    padding: 14px;
+}
+
+/* Tab Navigation */
+.nurse-tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    padding: 6px 14px 0;
+    overflow-x: auto;
+}
+.nurse-tab-btn {
+    padding: 8px 13px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #64748b;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: transparent;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+}
+.nurse-tab-btn:hover {
+    color: #0284c7;
+    background: #f1f5f9;
+}
+.nurse-tab-btn.active {
+    background: #ffffff;
+    color: #0284c7;
+    border-color: #cbd5e1;
+    border-bottom-color: #ffffff;
+    margin-bottom: -1px;
+    font-weight: 800;
+}
+
+/* Filter pills on roster */
+.nurse-filter-pill {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 20px;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #475569;
+    transition: all 0.12s ease;
+}
+.nurse-filter-pill:hover {
+    background: #f1f5f9;
+}
+.nurse-filter-pill.active {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* Patient item in queue */
+.nurse-item-row {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+.nurse-item-row:hover {
+    background: #f8fafc;
+}
+.nurse-item-row.selected {
+    background: #f0f9ff;
+    border-left: 4px solid #0284c7;
+}
+.nurse-avatar-badge {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-weight: 800;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Stickers preview box */
+.sticker-preview-box {
+    border: 1.5px dashed #cbd5e1;
+    border-radius: 6px;
+    padding: 14px;
+    background: #f8fafc;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+}
+.sticker-label-card {
+    width: 300px;
+    background: #ffffff;
+    border: 1px solid #000;
+    border-radius: 4px;
+    padding: 10px 12px;
+    text-align: left;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #000;
+}
+
+/* Multi-sticker sheet */
+.sticker-sheet-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    width: 100%;
+    max-width: 620px;
+}
+.sticker-sheet-item {
+    background: #ffffff;
+    border: 1px dashed #475569;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 9.5px;
+    color: #000;
+}
+
+/* Print CSS */
+@@media print {
+    body * {
+        visibility: hidden;
+    }
+    #printable-sticker, #printable-sticker *,
+    #printable-specimen, #printable-specimen *,
+    #printable-ivline, #printable-ivline *,
+    #printable-stickersheet, #printable-stickersheet *,
+    #printable-vitals, #printable-vitals *,
+    #printable-mar, #printable-mar *,
+    #printable-fluid, #printable-fluid *,
+    #printable-handover, #printable-handover *,
+    #printable-transfusion, #printable-transfusion * {
+        visibility: visible;
+    }
+    #printable-sticker, #printable-specimen, #printable-ivline {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        margin: 0;
+        border: 1px solid #000 !important;
+    }
+    #printable-stickersheet, #printable-vitals, #printable-mar, #printable-fluid, #printable-handover, #printable-transfusion {
+        display: block !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        margin: 0;
+        padding: 8mm 10mm;
+        box-sizing: border-box;
+    }
+}
+</style>
+
+<div class="nurse-page" @onkeydown="HandleGlobalKeyDown" tabindex="0">
+    <!-- 1. Top Flow Links & Topbar -->
+    <div>
+        <div class="nurse-top-nav-links">
+            <span style="color:#64748b; font-weight:700;">@I18n.T("Medical Services Flow", "মেডিকেল সার্ভিসেস ফ্লো"):</span>
+            <span class="nurse-top-nav-link" style="background:#e0f2fe; color:#0369a1; font-weight:750;">🩺 @I18n.T("Nurse's Desk & Charts (Current)", "নার্সেস ডেস্ক ও ক্লিনিক্যাল চার্ট")</span>
+            <span>&bull;</span>
+            <a href="/doctor/prescriptions?view=ipd-indent" class="nurse-top-nav-link">💊 @I18n.T("Medicine Indent", "মেডিসিন ইনডেন্ট")</a>
+            <span>&bull;</span>
+            <a href="/ipd/bed-occupancy" class="nurse-top-nav-link">🛏️ @I18n.T("Bed Occupancy", "বেড ভিউ")</a>
+            <span>&bull;</span>
+            <a href="/ipd/patient-services" class="nurse-top-nav-link">💉 @I18n.T("Patient Services & Care", "রোগীর সেবা সমূহ")</a>
+            <span>&bull;</span>
+            <a href="/medical/ot-notes" class="nurse-top-nav-link">📝 @I18n.T("Surgeon's OT Note", "সার্জন্স ওটি নোট")</a>
+            <span>&bull;</span>
+            <a href="/medical/operations" class="nurse-top-nav-link">📋 @I18n.T("OT Schedule", "ওটি শিডিউল")</a>
+        </div>
+
+        <div class="appt-classic-topbar">
+            <div class="appt-top-left">
+                <h1 class="appt-page-title">
+                    <span>🩺</span>
+                    <span>@I18n.T("Nurse's Desk, Wristband Stickers & Clinical Forms Hub", "নার্সেস ডেস্ক, রিস্টব্যান্ড স্টিকার ও ক্লিনিক্যাল চার্ট হাব")</span>
+                </h1>
+                <span class="appt-count-pill">
+                    👥 @admittedPatients.Count @I18n.T("Inpatients", "জন ভর্তি রোগী")
+                </span>
+                <span class="appt-count-pill" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe;">
+                    🛏️ @occupiedBedCount @I18n.T("Beds Occupied", "টি বেড ব্যবহৃত")
+                </span>
+            </div>
+
+            <div class="appt-top-actions">
+                <button type="button" class="btn btn-secondary appt-btn" @onclick="RefreshDataAsync" title="@I18n.T("Refresh Inpatient Data", "তথ্য রিফ্রেশ করুন")">
+                    🔄 @I18n.T("Refresh", "রিফ্রেশ")
+                </button>
+                <a href="/doctor/prescriptions?view=ipd-indent" class="btn btn-secondary appt-btn" style="text-decoration:none;" title="@I18n.T("Order Ward Medicine Indent")">
+                    💊 @I18n.T("Indent Medicine", "মেডিসিন ইনডেন্ট")
+                </a>
+                <a href="/ipd/bed-occupancy" class="btn btn-secondary appt-btn" style="text-decoration:none;" title="@I18n.T("View Inpatient Bed Occupancy")">
+                    🛏️ @I18n.T("Bed Occupancy", "বেড ভিউ")
+                </a>
+                <a href="/ipd/patient-services" class="btn btn-secondary appt-btn" style="text-decoration:none;" title="@I18n.T("Log Patient Daily Services & Nursing Charges")">
+                    💉 @I18n.T("Patient Services", "সেবা সমূহ")
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. Real-time KPI Metric Summary Cards -->
+    <div class="ipd-kpi-grid">
+        <div class="ipd-kpi-card" style="border-left: 4px solid #0284c7;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Admitted Inpatients", "বর্তমানে ভর্তি রোগী")</div>
+                <div class="ipd-kpi-val" style="color: #0369a1;">@admittedPatients.Count</div>
+                <div class="ipd-kpi-sub">@I18n.T("Under active inpatient care", "সক্রিয় চিকিৎসাধীন রোগী")</div>
+            </div>
+            <div class="ipd-kpi-icon">👥</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #10b981;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Beds Occupied", "ব্যবহৃত বেড ও কেবিন")</div>
+                <div class="ipd-kpi-val" style="color: #047857;">@occupiedBedCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Allocated hospital beds", "ওয়ার্ড ও কেবিনের বেড")</div>
+            </div>
+            <div class="ipd-kpi-icon">🛏️</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #8b5cf6;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("New Admissions Today", "আজকে ভর্তি রোগী")</div>
+                <div class="ipd-kpi-val" style="color: #6d28d9;">@todayAdmittedCount</div>
+                <div class="ipd-kpi-sub">@I18n.T("Admitted in last 24h", "গত ২৪ ঘণ্টায় ভর্তি")</div>
+            </div>
+            <div class="ipd-kpi-icon">☀️</div>
+        </div>
+
+        <div class="ipd-kpi-card" style="border-left: 4px solid #f59e0b;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Duty Consultants", "কনসালট্যান্ট চিকিৎসক")</div>
+                <div class="ipd-kpi-val" style="color: #b45309;">@doctors.Count</div>
+                <div class="ipd-kpi-sub">@I18n.T("Treating physicians", "চিকিৎসক ও সার্জন")</div>
+            </div>
+            <div class="ipd-kpi-icon">🩺</div>
+        </div>
+    </div>
+
+    <!-- 3. Main Workspace -->
+    <div class="nurse-grid">
+        <!-- Left Column: Patient Roster & Ward Filter -->
+        <div class="nurse-card">
+            <div class="nurse-card-header">
+                <h2>
+                    <span>👥 @I18n.T("Inpatient Ward Roster", "ভর্তি রোগীদের তালিকা")</span>
+                </h2>
+                <span class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:800; font-size:10.5px;">
+                    @filteredAdmissions.Count @I18n.T("Patients", "জন")
+                </span>
+            </div>
+
+            <!-- Search and Ward Filter Section -->
+            <div style="padding:10px 12px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; flex-direction:column; gap:8px;">
+                <div style="position:relative; width:100%;">
+                    <input class="classic-input"
+                           style="height:32px !important; padding-left:28px !important; padding-right:26px !important;"
+                           value="@searchQuery"
+                           @oninput="OnSearchInput"
+                           placeholder="@I18n.T("Search by Name, Patient ID, Bed, Reg #...")" />
+                    <span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); color:#94a3b8; pointer-events:none; font-size:12px;">🔍</span>
+                    @if (!string.IsNullOrWhiteSpace(searchQuery))
+                    {
+                        <button type="button" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:#94a3b8; cursor:pointer;" @onclick='ClearSearch'>✕</button>
+                    }
+                </div>
+
+                <div style="display:flex; gap:6px;">
+                    <select class="classic-input" style="height:28px !important; min-height:28px !important; font-size:11px !important; padding:0 8px !important; flex:1;" @bind="deptFilter" @bind:after="ApplyFilters">
+                        <option value="0">@I18n.T("All Wards / Departments", "সকল ওয়ার্ড / বিভাগ")</option>
+                        @foreach (var dept in departments)
+                        {
+                            <option value="@dept.ID">@dept.Name</option>
+                        }
+                    </select>
+                </div>
+
+                <!-- Quick Filter Chips -->
+                <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                    <button type="button" class="nurse-filter-pill @(quickFilter == "all" ? "active" : "")" @onclick='() => SetQuickFilter("all")'>
+                        @I18n.T("All", "সব") (@admittedPatients.Count)
+                    </button>
+                    <button type="button" class="nurse-filter-pill @(quickFilter == "today" ? "active" : "")" @onclick='() => SetQuickFilter("today")'>
+                        ☀️ @I18n.T("Today", "আজকে") (@todayAdmittedCount)
+                    </button>
+                    <button type="button" class="nurse-filter-pill @(quickFilter == "cabin" ? "active" : "")" @onclick='() => SetQuickFilter("cabin")'>
+                        🏠 @I18n.T("Cabins", "কেবিন")
+                    </button>
+                    <button type="button" class="nurse-filter-pill @(quickFilter == "ward" ? "active" : "")" @onclick='() => SetQuickFilter("ward")'>
+                        🛏️ @I18n.T("Wards", "ওয়ার্ড")
+                    </button>
+                </div>
+            </div>
+
+            <!-- Inpatient List -->
+            <div style="max-height: 640px; overflow-y: auto;">
+                @if (!filteredAdmissions.Any())
+                {
+                    <div style="padding:36px 14px; text-align:center; color:#64748b; font-size:12px;">
+                        <div style="font-size:24px; margin-bottom:6px;">🔍</div>
+                        @I18n.T("No admitted patients matching your search criteria.")
+                    </div>
+                }
+                else
+                {
+                    @foreach (var adm in filteredAdmissions)
+                    {
+                        var isSel = selectedAdmission?.RegNo == adm.RegNo;
+                        var reg = patientRegistrations.GetValueOrDefault(adm.PatientID ?? "");
+                        var pName = reg?.Name ?? patientNames.GetValueOrDefault(adm.PatientID ?? "", "—");
+                        var initials = GetInitials(pName);
+                        var stayDuration = GetStayDurationText(adm.AdmissionDate);
+
+                        <div class="nurse-item-row @(isSel ? "selected" : "")" @onclick="() => SelectAdmission(adm)">
+                            <div class="nurse-avatar-badge" style="@(isSel ? "background:#0284c7; color:#fff;" : "")">
+                                @initials
+                            </div>
+
+                            <div style="flex:1; min-width:0;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                                    <div style="font-size:12.5px; font-weight:800; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                        @pName
+                                    </div>
+                                    <span style="font-size:10px; font-weight:750; color:#0284c7; background:#e0f2fe; padding:1px 6px; border-radius:4px; flex-shrink:0;">
+                                        🛏️ @BedName(adm.BedCabinID)
+                                    </span>
+                                </div>
+
+                                <div style="font-size:10.5px; color:#475569; margin-top:2px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span>ID: <b>#@adm.PatientID</b> &bull; Reg: <b>@adm.RegNo</b></span>
+                                    <span style="font-size:10px; color:#64748b;">@stayDuration</span>
+                                </div>
+
+                                <div style="font-size:10px; color:#64748b; margin-top:2px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:210px;">
+                                        👨‍⚕️ @DoctorName(adm.Consultant)
+                                    </span>
+                                    @if (!string.IsNullOrWhiteSpace(reg?.BloodGroup))
+                                    {
+                                        <span style="color:#b91c1c; font-weight:800; font-size:9.5px; background:#fee2e2; padding:0 4px; border-radius:3px;">
+                                            🩸 @reg.BloodGroup
+                                        </span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Right Column: Patient Workspace & Clinical Forms Hub -->
+        <div class="nurse-card">
+            <!-- Tab Navigation Bar -->
+            <div class="nurse-tab-bar">
+                <button type="button" class="nurse-tab-btn @(activeTab == "stickers" ? "active" : "")" @onclick='() => SwitchTab("stickers")'>
+                    🏷️ @I18n.T("Barcode Stickers & Tags", "স্টিকার ও বারকোড")
+                </button>
+                <button type="button" class="nurse-tab-btn @(activeTab == "vitals" ? "active" : "")" @onclick='() => SwitchTab("vitals")'>
+                    📈 @I18n.T("Vital Signs Chart (TPR)", "ভাইটাল চার্ট")
+                </button>
+                <button type="button" class="nurse-tab-btn @(activeTab == "mar" ? "active" : "")" @onclick='() => SwitchTab("mar")'>
+                    💊 @I18n.T("Medication Sheet (MAR)", "ওষুধ চার্ট (MAR)")
+                </button>
+                <button type="button" class="nurse-tab-btn @(activeTab == "fluid" ? "active" : "")" @onclick='() => SwitchTab("fluid")'>
+                    💧 @I18n.T("Fluid Balance (I/O)", "ফ্লুইড ব্যালেন্স")
+                </button>
+                <button type="button" class="nurse-tab-btn @(activeTab == "handover" ? "active" : "")" @onclick='() => SwitchTab("handover")'>
+                    📋 @I18n.T("Nurse Progress (ISBAR)", "নার্সিং প্রগ্রেস ও হ্যান্ডওভার")
+                </button>
+                <button type="button" class="nurse-tab-btn @(activeTab == "transfusion" ? "active" : "")" @onclick='() => SwitchTab("transfusion")'>
+                    🩸 @I18n.T("Blood Transfusion", "রক্ত সঞ্চালন চার্ট")
+                </button>
+            </div>
+
+            <div class="nurse-card-body">
+                @if (selectedAdmission == null)
+                {
+                    <div style="padding:60px 16px; text-align:center; color:#64748b;">
+                        <div style="font-size:44px; margin-bottom:12px;">👈</div>
+                        <div style="font-size:15px; font-weight:800; color:#1e293b;">@I18n.T("Select an Inpatient from the Roster", "তালিকা থেকে একজন রোগী নির্বাচন করুন")</div>
+                        <div style="font-size:12px; margin-top:6px; color:#64748b; max-width:480px; margin-left:auto; margin-right:auto;">
+                            @I18n.T("Click on any patient on the left to print wristband identification stickers, sample tube labels, IV line tags, or standard A4 clinical observation charts.")
+                        </div>
+                        <div style="margin-top:20px; display:inline-flex; gap:8px; font-size:11px; background:#f8fafc; border:1px solid #e2e8f0; padding:6px 14px; border-radius:20px; color:#475569;">
+                            <span>⌨️ <b>Ctrl + P:</b> Print Active Form</span> &bull;
+                            <span><b>Esc:</b> Deselect</span> &bull;
+                            <span><b>1-6:</b> Switch Tabs</span>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    var reg = patientRegistrations.GetValueOrDefault(selectedAdmission.PatientID ?? "");
+                    var pName = reg?.Name ?? selectedPatientName;
+                    var pSex = !string.IsNullOrWhiteSpace(reg?.Sex) ? reg.Sex : "—";
+                    var pBlood = !string.IsNullOrWhiteSpace(reg?.BloodGroup) ? reg.BloodGroup : "—";
+
+                    <!-- Patient Active Demographic Banner with Quick Action Links -->
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#f0f9ff; border:1.5px solid #bae6fd; padding:10px 14px; border-radius:6px; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+                        <div>
+                            <div style="font-size:13.5px; font-weight:850; color:#0f172a; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <span>#@selectedAdmission.PatientID</span>
+                                <span>&mdash;</span>
+                                <span style="color:#0284c7; font-size:14px;">@pName</span>
+                                <span class="pill" style="font-size:10px; background:#e0f2fe; color:#0369a1; padding:2px 7px;">
+                                    @(pSex == "Male" ? "♂ Male" : pSex == "Female" ? "♀ Female" : pSex) &bull; Age: @(selectedAdmission.Age ?? "—")
+                                </span>
+                                @if (pBlood != "—")
+                                {
+                                    <span class="pill" style="font-size:10px; background:#fee2e2; color:#b91c1c; font-weight:800; padding:2px 7px;">
+                                        🩸 @pBlood
+                                    </span>
+                                }
+                                <span class="pill" style="font-size:10px; background:#f1f5f9; color:#475569; padding:2px 7px;">
+                                    Reg: <b>@selectedAdmission.RegNo</b>
+                                </span>
+                            </div>
+                            <div style="font-size:11px; color:#475569; margin-top:3px; display:flex; gap:12px; flex-wrap:wrap;">
+                                <span>🛏️ Bed: <strong>@BedName(selectedAdmission.BedCabinID)</strong></span>
+                                <span>🏛️ Dept: <strong>@DepartmentName(selectedAdmission.Department)</strong></span>
+                                <span>👨‍⚕️ Consultant: <strong>@DoctorName(selectedAdmission.Consultant)</strong></span>
+                                <span>📅 Stay: <strong>@GetStayDurationText(selectedAdmission.AdmissionDate)</strong></span>
+                            </div>
+                        </div>
+
+                        <!-- Direct Flow Quick Action Links -->
+                        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                            <a href="/doctor/prescriptions?view=ipd-indent&regNo=@selectedAdmission.RegNo" class="btn btn-secondary appt-btn" style="text-decoration:none; font-size:11px; padding:3px 8px;" title="@I18n.T("Indent Ward Medicines for this Patient")">
+                                💊 @I18n.T("Indent Med", "ইনডেন্ট")
+                            </a>
+                            <a href="/ipd/patient-services?regNo=@selectedAdmission.RegNo" class="btn btn-secondary appt-btn" style="text-decoration:none; font-size:11px; padding:3px 8px;" title="@I18n.T("Add Patient Daily Service Charges")">
+                                💉 @I18n.T("Services", "সার্ভিস")
+                            </a>
+                            <a href="/medical/ot-notes?regNo=@selectedAdmission.RegNo" class="btn btn-secondary appt-btn" style="text-decoration:none; font-size:11px; padding:3px 8px;" title="@I18n.T("Write Surgeon's OT Note")">
+                                📝 @I18n.T("OT Note", "ওটি নোট")
+                            </a>
+                            <a href="/ipd/bed-occupancy" class="btn btn-secondary appt-btn" style="text-decoration:none; font-size:11px; padding:3px 8px;" title="@I18n.T("Transfer Bed or Change Category")">
+                                🛏️ @I18n.T("Bed", "বেড")
+                            </a>
+                            <button type="button" class="btn btn-ghost btn-sm" @onclick='() => selectedAdmission = null' style="font-size:11px; color:#0369a1; padding:3px 8px;" title="@I18n.T("Deselect (Esc)")">
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- ========================================== -->
+                    <!-- TAB 1: STICKERS & BARCODE LABELS          -->
+                    <!-- ========================================== -->
+                    @if (activeTab == "stickers")
+                    {
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                            <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                🏷️ @I18n.T("Inpatient Identification & Specimen Labels Generator", "রোগীর আইডি ও ল্যাব স্পেসিমেন লেবেল")
+                            </div>
+                            <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-stickersheet")'>
+                                🖨️ @I18n.T("Print Sheet of 8 Admission Labels (A4)", "৮টি স্টিকার শিট প্রিন্ট করুন")
+                            </button>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:14px;">
+                            <!-- 1A: Patient ID Wristband / Bedhead Label -->
+                            <div class="sticker-preview-box">
+                                <div style="font-size:12.5px; font-weight:800; color:#0f172a;">
+                                    🏷️ @I18n.T("Patient ID Wristband / Bedhead Label")
+                                </div>
+                                <div style="font-size:10.5px; color:#64748b;">
+                                    @I18n.T("For wristband, bedhead card, chart file cover & diet tray.")
+                                </div>
+
+                                <div class="sticker-label-card" id="printable-sticker">
+                                    <div style="font-size:9.5px; font-weight:800; text-transform:uppercase; border-bottom:1.5px solid #000; padding-bottom:2px; display:flex; justify-content:space-between;">
+                                        <span>@Branding.HospitalName</span>
+                                        <span>IPD PATIENT</span>
+                                    </div>
+                                    <div style="margin-top:4px; font-size:13px; font-weight:900;">
+                                        @pName
+                                    </div>
+                                    <div style="font-size:10.5px; font-weight:750; display:flex; justify-content:space-between; margin-top:2px;">
+                                        <span>ID: #@selectedAdmission.PatientID</span>
+                                        <span>@(pSex == "Male" ? "M" : pSex == "Female" ? "F" : pSex) / @selectedAdmission.Age</span>
+                                        @if (pBlood != "—")
+                                        {
+                                            <span style="font-weight:900; color:#b91c1c;">🩸 @pBlood</span>
+                                        }
+                                    </div>
+                                    <div style="font-size:11px; font-weight:850; color:#000; margin-top:2px; display:flex; justify-content:space-between;">
+                                        <span>🛏️ @BedName(selectedAdmission.BedCabinID)</span>
+                                        <span>Reg: @selectedAdmission.RegNo</span>
+                                    </div>
+                                    <div style="font-size:9.5px; color:#333; margin-top:2px;">
+                                        Cons: @DoctorName(selectedAdmission.Consultant)
+                                    </div>
+                                    <div style="margin-top:6px; text-align:center;">
+                                        @((MarkupString)BarcodeQr.GenerateBarcodeSvg(selectedAdmission.RegNo ?? selectedAdmission.PatientID ?? "000", barHeight: 30, includeText: true))
+                                    </div>
+                                </div>
+
+                                <button type="button" class="btn btn-secondary appt-btn" @onclick='() => PrintElement("printable-sticker")' style="width:100%;">
+                                    🖨️ @I18n.T("Print Single ID Label", "আইডি স্টিকার প্রিন্ট")
+                                </button>
+                            </div>
+
+                            <!-- 1B: Specimen / Sample Tube Barcode Label -->
+                            <div class="sticker-preview-box">
+                                <div style="font-size:12.5px; font-weight:800; color:#0f172a;">
+                                    🧪 @I18n.T("Lab Specimen Tube Label")
+                                </div>
+                                <div style="font-size:10.5px; color:#64748b;">
+                                    @I18n.T("For blood vacutainer, urine cup, pathology vial & swab.")
+                                </div>
+
+                                <div class="ot-field-group" style="width:100%; text-align:left;">
+                                    <span style="font-size:10.5px; font-weight:700; color:#475569;">Tube / Specimen Type:</span>
+                                    <select class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="sampleType">
+                                        <option value="Blood (EDTA / CBC / HbA1c)">🟣 Blood EDTA (CBC / HbA1c / ESR)</option>
+                                        <option value="Blood (Serum / Clot Activator)">🔴 Blood Plain / Serum (LFT / RFT)</option>
+                                        <option value="Blood (Sodium Citrate / PT/INR)">🔵 Blood Sodium Citrate (PT / INR)</option>
+                                        <option value="Blood (Fluoride / Sugar)">⚪ Blood Fluoride (Glucose)</option>
+                                        <option value="Urine Routine / Culture">🟡 Urine Routine / Culture</option>
+                                        <option value="Stool Routine / R/E">💩 Stool Routine / R/E</option>
+                                        <option value="Wound Swab / Pus">🧫 Wound Swab / Pus Culture</option>
+                                        <option value="Biopsy / Histopathology">🔬 Biopsy / Histopathology</option>
+                                    </select>
+                                </div>
+
+                                <div class="sticker-label-card" id="printable-specimen">
+                                    <div style="font-size:9px; font-weight:800; border-bottom:1.5px solid #000; padding-bottom:1px; display:flex; justify-content:space-between;">
+                                        <span>LAB SPECIMEN</span>
+                                        <span>🛏️ @BedName(selectedAdmission.BedCabinID)</span>
+                                    </div>
+                                    <div style="font-size:12px; font-weight:900; margin-top:3px;">
+                                        @pName
+                                    </div>
+                                    <div style="font-size:10px; font-weight:750; display:flex; justify-content:space-between; margin-top:2px;">
+                                        <span>#@selectedAdmission.PatientID</span>
+                                        <span>Reg: @selectedAdmission.RegNo</span>
+                                    </div>
+                                    <div style="font-size:9.5px; font-weight:800; margin-top:2px; color:#000;">
+                                        🧪 @sampleType
+                                    </div>
+                                    <div style="font-size:9px; color:#444; margin-top:2px; display:flex; justify-content:space-between;">
+                                        <span>Date: @DateTime.Now.ToString("dd-MMM, hh:mm tt")</span>
+                                        <span>Nurse: @currentStaffNurse</span>
+                                    </div>
+                                    <div style="margin-top:6px; text-align:center;">
+                                        @((MarkupString)BarcodeQr.GenerateBarcodeSvg($"SMP-{selectedAdmission.RegNo}", barHeight: 26, includeText: true))
+                                    </div>
+                                </div>
+
+                                <button type="button" class="btn btn-secondary appt-btn" @onclick='() => PrintElement("printable-specimen")' style="width:100%;">
+                                    🖨️ @I18n.T("Print Specimen Vial Label", "স্যাম্পল স্টিকার প্রিন্ট")
+                                </button>
+                            </div>
+
+                            <!-- 1C: IV Cannula & Line Insertion Date Tag (NEW) -->
+                            <div class="sticker-preview-box">
+                                <div style="font-size:12.5px; font-weight:800; color:#0f172a;">
+                                    🩹 @I18n.T("IV Cannula / Line Date Tag")
+                                </div>
+                                <div style="font-size:10.5px; color:#64748b;">
+                                    @I18n.T("Standard hospital protocol for IV line & catheter tracking.")
+                                </div>
+
+                                <div style="width:100%; display:grid; grid-template-columns:1fr 1fr; gap:6px; text-align:left;">
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Line Type:</span>
+                                        <select class="classic-input" style="height:26px !important; font-size:10.5px !important;" @bind="cannulaLineType">
+                                            <option value="Peripheral IV Cannula">Peripheral IV Cannula</option>
+                                            <option value="Urinary Foley Catheter">Foley Catheter</option>
+                                            <option value="Central Venous Line (CVC)">Central Line (CVC)</option>
+                                            <option value="NG Tube / Ryle's Tube">NG / Ryle's Tube</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Gauge / Size:</span>
+                                        <select class="classic-input" style="height:26px !important; font-size:10.5px !important;" @bind="cannulaGauge">
+                                            <option value="18G (Green - Rapid IV)">18G (Green)</option>
+                                            <option value="20G (Pink - Standard IV)">20G (Pink)</option>
+                                            <option value="22G (Blue - Maintenance)">22G (Blue)</option>
+                                            <option value="24G (Yellow - Pediatric)">24G (Yellow)</option>
+                                            <option value="16G (Grey - Trauma/Blood)">16G (Grey)</option>
+                                            <option value="16 Fr (Foley Catheter)">16 Fr (Foley)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="sticker-label-card" id="printable-ivline" style="border: 2px solid #0284c7;">
+                                    <div style="font-size:9.5px; font-weight:800; color:#0284c7; border-bottom:1px solid #0284c7; padding-bottom:1px; display:flex; justify-content:space-between;">
+                                        <span>LINE INSERTION TAG</span>
+                                        <span>🛏️ @BedName(selectedAdmission.BedCabinID)</span>
+                                    </div>
+                                    <div style="font-size:11.5px; font-weight:900; margin-top:3px;">
+                                        @pName (#@selectedAdmission.PatientID)
+                                    </div>
+                                    <div style="font-size:10px; font-weight:800; color:#0f172a; margin-top:2px;">
+                                        🩹 @cannulaLineType &bull; <span style="color:#0284c7;">@cannulaGauge</span>
+                                    </div>
+                                    <div style="font-size:9.5px; margin-top:3px; background:#f0f9ff; padding:3px 5px; border-radius:3px;">
+                                        <div><b>Inserted:</b> @DateTime.Now.ToString("dd-MMM-yyyy, hh:mm tt")</div>
+                                        <div style="color:#b91c1c; font-weight:750;"><b>Due for Change:</b> @DateTime.Now.AddDays(3).ToString("dd-MMM-yyyy") (72h)</div>
+                                    </div>
+                                    <div style="font-size:9px; color:#475569; margin-top:3px; display:flex; justify-content:space-between;">
+                                        <span>Staff Nurse: @currentStaffNurse</span>
+                                        <span>Reg: @selectedAdmission.RegNo</span>
+                                    </div>
+                                </div>
+
+                                <button type="button" class="btn btn-secondary appt-btn" @onclick='() => PrintElement("printable-ivline")' style="width:100%;">
+                                    🖨️ @I18n.T("Print Line Date Tag", "লাইন ট্যাগ প্রিন্ট")
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Hidden Printable Sheet of 8 Labels for A4 Paper -->
+                        <div id="printable-stickersheet" style="display:none; font-family:sans-serif;">
+                            <div style="text-align:center; margin-bottom:8px; font-size:11px; font-weight:800; border-bottom:1px solid #000; padding-bottom:4px;">
+                                @Branding.HospitalName &bull; INPATIENT ADMISSION LABEL SHEET (8 LABELS) &bull; Reg: @selectedAdmission.RegNo
+                            </div>
+                            <div class="sticker-sheet-grid">
+                                @for (int i = 0; i < 8; i++)
+                                {
+                                    <div class="sticker-sheet-item">
+                                        <div style="display:flex; justify-content:space-between; font-weight:800; border-bottom:1px solid #000; padding-bottom:1px;">
+                                            <span>@Branding.HospitalName</span>
+                                            <span>🛏️ @BedName(selectedAdmission.BedCabinID)</span>
+                                        </div>
+                                        <div style="font-size:11px; font-weight:900; margin-top:2px;">@pName</div>
+                                        <div style="display:flex; justify-content:space-between; margin-top:1px;">
+                                            <span>ID: #@selectedAdmission.PatientID</span>
+                                            <span>Age/Sex: @selectedAdmission.Age/@(pSex == "Male" ? "M" : pSex == "Female" ? "F" : pSex)</span>
+                                            @if (pBlood != "—") { <span style="font-weight:800;">🩸 @pBlood</span> }
+                                        </div>
+                                        <div style="margin-top:1px;">Reg: <b>@selectedAdmission.RegNo</b> &bull; Cons: @DoctorName(selectedAdmission.Consultant)</div>
+                                        <div style="text-align:center; margin-top:3px;">
+                                            @((MarkupString)BarcodeQr.GenerateBarcodeSvg(selectedAdmission.RegNo ?? "000", barHeight: 18, includeText: false))
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    <!-- ========================================== -->
+                    <!-- TAB 2: VITAL SIGNS OBSERVATION (TPR / BP) -->
+                    <!-- ========================================== -->
+                    else if (activeTab == "vitals")
+                    {
+                        <div>
+                            <!-- Header & Print Action -->
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                    📈 @I18n.T("Inpatient Vital Signs (TPR / BP / SpO2 / RBS) Observation Chart")
+                                </div>
+                                <div style="display:flex; gap:6px;">
+                                    <button type="button" class="btn btn-secondary appt-btn" @onclick="ClearRecordedVitals" title="@I18n.T("Clear entered readings for a clean blank sheet")">
+                                        🧹 @I18n.T("Clear Entries (Blank Sheet)", "এন্ট্রি মুছুন")
+                                    </button>
+                                    <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-vitals")'>
+                                        🖨️ @I18n.T("Print A4 Vital Chart", "ভাইটাল চার্ট প্রিন্ট")
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Interactive Quick Vital Signs Logger -->
+                            <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:10px 12px; margin-bottom:14px;">
+                                <div style="font-size:11.5px; font-weight:800; color:#0f172a; margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+                                    <span>⏱️ @I18n.T("Quick Vital Entry", "দ্রুত ভাইটাল রিডিং যোগ করুন"):</span>
+                                    <span style="font-size:10.5px; color:#64748b; font-weight:normal;">(@I18n.T("Enter readings to populate the chart table, or print blank"))</span>
+                                </div>
+
+                                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(105px, 1fr)) 90px; gap:6px; align-items:end;">
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Temp (°F):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalTemp" placeholder="98.4" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Pulse (/min):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalPulse" placeholder="76" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Resp (/min):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalResp" placeholder="18" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">BP (mmHg):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalBp" placeholder="120/80" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">SpO2 (%):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalSpo2" placeholder="99" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">RBS (mmol/L):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalRbs" placeholder="6.4" />
+                                    </div>
+                                    <div>
+                                        <span style="font-size:10px; font-weight:700; color:#475569;">Pain (0-10):</span>
+                                        <input class="classic-input" style="height:28px !important; font-size:11px !important;" @bind="newVitalPain" placeholder="0" />
+                                    </div>
+                                    <div>
+                                        <button type="button" class="btn btn-secondary appt-btn" style="height:28px !important; width:100%; font-size:11px; font-weight:750;" @onclick="AddVitalEntry">
+                                            ➕ @I18n.T("Add", "যোগ")
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Printable A4 Observation Chart Document -->
+                            <div id="printable-vitals" style="padding:14px 18px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; font-family:sans-serif;">
+                                <PrintDocumentHeader Title="INPATIENT VITAL SIGNS OBSERVATION CHART (TPR / BP)"
+                                                     Subtitle="Clinical Nursing Observations & Daily Inpatient Monitoring"
+                                                     DocNo="@($"VIT-{selectedAdmission.RegNo}")"
+                                                     DocNoLabel="Reg #"
+                                                     BarcodeCode="@selectedAdmission.RegNo" />
+
+                                <!-- Patient Demographics Strip -->
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; margin-top:8px; font-size:11px;">
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Name:</span> <strong>@pName</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient ID:</span> <strong>#@selectedAdmission.PatientID</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Bed / Cabin:</span> <strong>🛏️ @BedName(selectedAdmission.BedCabinID)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Reg No:</span> <strong>@selectedAdmission.RegNo</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Age / Sex:</span> <strong>@(selectedAdmission.Age ?? "—") / @pSex</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Blood Group:</span> <strong style="color:#b91c1c;">@(pBlood != "—" ? $"🩸 {pBlood}" : "—")</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Ward / Unit:</span> <strong>@DepartmentName(selectedAdmission.Department)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Consultant:</span> <strong>@DoctorName(selectedAdmission.Consultant)</strong></div>
+                                </div>
+
+                                <!-- Observation Table -->
+                                <table style="width:100%; border-collapse:collapse; font-size:11px; text-align:center; border:1px solid #000; margin-top:10px;">
+                                    <tr style="background:#f1f5f9; font-weight:800;">
+                                        <th style="border:1px solid #000; padding:6px; width:130px;">Date & Time</th>
+                                        <th style="border:1px solid #000; padding:6px;">Temp (°F)</th>
+                                        <th style="border:1px solid #000; padding:6px;">Pulse (/min)</th>
+                                        <th style="border:1px solid #000; padding:6px;">Resp (/min)</th>
+                                        <th style="border:1px solid #000; padding:6px;">BP (mmHg)</th>
+                                        <th style="border:1px solid #000; padding:6px;">SpO2 (%)</th>
+                                        <th style="border:1px solid #000; padding:6px;">Blood Sugar</th>
+                                        <th style="border:1px solid #000; padding:6px;">Pain Score</th>
+                                        <th style="border:1px solid #000; padding:6px; width:90px;">Nurse Initial</th>
+                                    </tr>
+
+                                    <!-- Render populated readings -->
+                                    @foreach (var v in recordedVitals)
+                                    {
+                                        <tr style="height:26px; background:#f0fdf4;">
+                                            <td style="border:1px solid #000; font-weight:750;">@v.RecordedAt.ToString("dd-MMM hh:mm tt")</td>
+                                            <td style="border:1px solid #000;">@v.Temperature</td>
+                                            <td style="border:1px solid #000;">@v.Pulse</td>
+                                            <td style="border:1px solid #000;">@v.Respiration</td>
+                                            <td style="border:1px solid #000; font-weight:750;">@v.BloodPressure</td>
+                                            <td style="border:1px solid #000;">@v.SpO2</td>
+                                            <td style="border:1px solid #000;">@v.BloodSugar</td>
+                                            <td style="border:1px solid #000;">@v.PainScore</td>
+                                            <td style="border:1px solid #000;">@v.NurseInitial</td>
+                                        </tr>
+                                    }
+
+                                    <!-- Fill remaining rows for manual bedside pen charting -->
+                                    @{ int remainingRows = Math.Max(3, 14 - recordedVitals.Count); }
+                                    @for (int i = 0; i < remainingRows; i++)
+                                    {
+                                        <tr style="height:26px;">
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        </tr>
+                                    }
+                                </table>
+
+                                <!-- Clinical Reference Normal Ranges Strip -->
+                                <div style="margin-top:8px; font-size:10px; color:#475569; background:#f8fafc; border:1px solid #e2e8f0; padding:5px 8px; border-radius:4px; display:flex; justify-content:space-between; flex-wrap:wrap;">
+                                    <span><b>Normal Reference:</b> Temp: 97.8°F-99.1°F</span>
+                                    <span>Pulse: 60-100 bpm</span>
+                                    <span>Resp: 12-20 /min</span>
+                                    <span>BP: 120/80 mmHg</span>
+                                    <span>SpO2: &ge; 95%</span>
+                                    <span>RBS: 4.0-7.8 mmol/L</span>
+                                </div>
+
+                                <div style="margin-top:30px; display:flex; justify-content:space-between; font-size:10.5px; text-align:center;">
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Duty Staff Nurse Signature</div>
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Ward In-Charge Nurse</div>
+                                    <div style="border-top:1px solid #000; width:190px; padding-top:4px;">Treating Consultant / MO</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- ========================================== -->
+                    <!-- TAB 3: MEDICATION ADMINISTRATION (MAR)     -->
+                    <!-- ========================================== -->
+                    else if (activeTab == "mar")
+                    {
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                    💊 @I18n.T("Medication Administration Record (MAR / Nurse Kardex Sheet)")
+                                </div>
+                                <div style="display:flex; gap:6px;">
+                                    <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-mar")'>
+                                        🖨️ @I18n.T("Print A4 Medication Sheet", "ওষুধ চার্ট প্রিন্ট")
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div id="printable-mar" style="padding:14px 18px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; font-family:sans-serif;">
+                                <PrintDocumentHeader Title="MEDICATION ADMINISTRATION RECORD (MAR / KARDEX)"
+                                                     Subtitle="Inpatient Pharmacy & Nursing Dose Administration Schedule"
+                                                     DocNo="@($"MAR-{selectedAdmission.RegNo}")"
+                                                     DocNoLabel="Reg #"
+                                                     BarcodeCode="@selectedAdmission.RegNo" />
+
+                                <!-- Patient Demographics Strip -->
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; margin-top:8px; font-size:11px;">
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Name:</span> <strong>@pName</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient ID:</span> <strong>#@selectedAdmission.PatientID</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Bed / Cabin:</span> <strong>🛏️ @BedName(selectedAdmission.BedCabinID)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Reg No:</span> <strong>@selectedAdmission.RegNo</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Age / Sex:</span> <strong>@(selectedAdmission.Age ?? "—") / @pSex</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Consultant:</span> <strong>@DoctorName(selectedAdmission.Consultant)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Diagnosis:</span> <strong>@(selectedAdmission.Diagnosis ?? "Under observation")</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Admission:</span> <strong>@(selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy") ?? "—")</strong></div>
+                                </div>
+
+                                <!-- High Alert Allergy Box -->
+                                <div style="margin-top:8px; background:#fef2f2; border:1.5px solid #f87171; border-radius:4px; padding:5px 10px; font-size:11px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="color:#b91c1c; font-weight:800;">⚠️ DRUG ALLERGIES: <span style="text-decoration:underline;">@drugAllergies</span></span>
+                                    <span style="font-size:10px; color:#64748b;">Verified by Ward Nurse prior to administration</span>
+                                </div>
+
+                                <!-- MAR Table -->
+                                <table style="width:100%; border-collapse:collapse; font-size:11px; text-align:center; border:1px solid #000; margin-top:10px;">
+                                    <tr style="background:#f1f5f9; font-weight:800;">
+                                        <th style="border:1px solid #000; padding:6px; width:180px; text-align:left;">Drug Name & Strength</th>
+                                        <th style="border:1px solid #000; padding:6px; width:70px;">Dose</th>
+                                        <th style="border:1px solid #000; padding:6px; width:60px;">Route</th>
+                                        <th style="border:1px solid #000; padding:6px; width:65px;">Freq</th>
+                                        <th style="border:1px solid #000; padding:6px;">Morning<br /><span style="font-size:9.5px; font-weight:normal;">08:00 AM</span></th>
+                                        <th style="border:1px solid #000; padding:6px;">Noon<br /><span style="font-size:9.5px; font-weight:normal;">02:00 PM</span></th>
+                                        <th style="border:1px solid #000; padding:6px;">Evening<br /><span style="font-size:9.5px; font-weight:normal;">06:00 PM</span></th>
+                                        <th style="border:1px solid #000; padding:6px;">Night<br /><span style="font-size:9.5px; font-weight:normal;">10:00 PM</span></th>
+                                        <th style="border:1px solid #000; padding:6px; width:85px;">Prescribed By</th>
+                                    </tr>
+
+                                    @for (int i = 0; i < 10; i++)
+                                    {
+                                        <tr style="height:30px;">
+                                            <td style="border:1px solid #cbd5e1; text-align:left; padding-left:6px;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        </tr>
+                                    }
+                                </table>
+
+                                <!-- MAR Codes Legend & Verification -->
+                                <div style="margin-top:8px; font-size:9.5px; color:#475569; display:flex; justify-content:space-between; background:#f8fafc; border:1px solid #e2e8f0; padding:4px 8px; border-radius:4px;">
+                                    <span><b>Nurse Action Codes:</b> [✔] Given | [O] Omitted | [R] Patient Refused | [V] Vomited | [W] Withheld / Medical Doctor Consulted</span>
+                                </div>
+
+                                <div style="margin-top:28px; display:flex; justify-content:space-between; font-size:10.5px; text-align:center;">
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Administering Nurse Initial</div>
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Ward In-Charge Signature</div>
+                                    <div style="border-top:1px solid #000; width:190px; padding-top:4px;">Treating Consultant / MO</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- ========================================== -->
+                    <!-- TAB 4: FLUID BALANCE CHART (INTAKE/OUTPUT)  -->
+                    <!-- ========================================== -->
+                    else if (activeTab == "fluid")
+                    {
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                    💧 @I18n.T("24-Hour Inpatient Fluid Balance (Intake & Output) Chart")
+                                </div>
+                                <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-fluid")'>
+                                    🖨️ @I18n.T("Print A4 Fluid Chart", "ফ্লুইড ব্যালেন্স প্রিন্ট")
+                                </button>
+                            </div>
+
+                            <div id="printable-fluid" style="padding:14px 18px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; font-family:sans-serif;">
+                                <PrintDocumentHeader Title="24-HOUR INPATIENT FLUID BALANCE CHART (INTAKE & OUTPUT)"
+                                                     Subtitle="Strict Fluid Resuscitation & Renal Output Observation"
+                                                     DocNo="@($"FLD-{selectedAdmission.RegNo}")"
+                                                     DocNoLabel="Reg #"
+                                                     BarcodeCode="@selectedAdmission.RegNo" />
+
+                                <!-- Patient Demographics Strip -->
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; margin-top:8px; font-size:11px;">
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Name:</span> <strong>@pName</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient ID:</span> <strong>#@selectedAdmission.PatientID</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Bed / Cabin:</span> <strong>🛏️ @BedName(selectedAdmission.BedCabinID)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Reg No:</span> <strong>@selectedAdmission.RegNo</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Age / Sex:</span> <strong>@(selectedAdmission.Age ?? "—") / @pSex</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Ward:</span> <strong>@DepartmentName(selectedAdmission.Department)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Consultant:</span> <strong>@DoctorName(selectedAdmission.Consultant)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Chart Date:</span> <strong>@DateTime.Today.ToString("dd MMMM yyyy")</strong></div>
+                                </div>
+
+                                <table style="width:100%; border-collapse:collapse; font-size:10.5px; text-align:center; border:1px solid #000; margin-top:10px;">
+                                    <tr style="background:#f1f5f9; font-weight:800;">
+                                        <th style="border:1px solid #000; padding:5px; width:75px;" rowspan="2">Shift / Time</th>
+                                        <th style="border:1px solid #000; padding:5px;" colspan="4">INTAKE (ml)</th>
+                                        <th style="border:1px solid #000; padding:5px;" colspan="4">OUTPUT (ml)</th>
+                                        <th style="border:1px solid #000; padding:5px; width:75px;" rowspan="2">Net (+/-)</th>
+                                        <th style="border:1px solid #000; padding:5px; width:65px;" rowspan="2">Nurse</th>
+                                    </tr>
+                                    <tr style="background:#f8fafc; font-size:10px; font-weight:700;">
+                                        <th style="border:1px solid #000; padding:4px;">Oral / NG</th>
+                                        <th style="border:1px solid #000; padding:4px;">IV Fluids</th>
+                                        <th style="border:1px solid #000; padding:4px;">Blood / Other</th>
+                                        <th style="border:1px solid #000; padding:4px; background:#e0f2fe;">Sub Total</th>
+                                        <th style="border:1px solid #000; padding:4px;">Urine</th>
+                                        <th style="border:1px solid #000; padding:4px;">Drain / Chest</th>
+                                        <th style="border:1px solid #000; padding:4px;">Vomit / Stool</th>
+                                        <th style="border:1px solid #000; padding:4px; background:#fee2e2;">Sub Total</th>
+                                    </tr>
+
+                                    <!-- Morning Shift -->
+                                    @foreach (var t in new[] { "08:00 AM", "10:00 AM", "12:00 PM", "02:00 PM" })
+                                    {
+                                        <tr style="height:25px;">
+                                            <td style="border:1px solid #cbd5e1; font-weight:750;">@t</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#f0f9ff;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#fef2f2;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        </tr>
+                                    }
+                                    <tr style="background:#f1f5f9; font-weight:800; height:24px;">
+                                        <td style="border:1px solid #000;">MORNING SUB</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#bae6fd;">&nbsp;</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#fca5a5;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">Sign:</td>
+                                    </tr>
+
+                                    <!-- Evening Shift -->
+                                    @foreach (var t in new[] { "04:00 PM", "06:00 PM", "08:00 PM", "09:00 PM" })
+                                    {
+                                        <tr style="height:25px;">
+                                            <td style="border:1px solid #cbd5e1; font-weight:750;">@t</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#f0f9ff;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#fef2f2;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        </tr>
+                                    }
+                                    <tr style="background:#f1f5f9; font-weight:800; height:24px;">
+                                        <td style="border:1px solid #000;">EVENING SUB</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#bae6fd;">&nbsp;</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#fca5a5;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">Sign:</td>
+                                    </tr>
+
+                                    <!-- Night Shift -->
+                                    @foreach (var t in new[] { "11:00 PM", "02:00 AM", "05:00 AM", "08:00 AM" })
+                                    {
+                                        <tr style="height:25px;">
+                                            <td style="border:1px solid #cbd5e1; font-weight:750;">@t</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#f0f9ff;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1; background:#fef2f2;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                            <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        </tr>
+                                    }
+                                    <tr style="background:#f1f5f9; font-weight:800; height:24px;">
+                                        <td style="border:1px solid #000;">NIGHT SUB</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#bae6fd;">&nbsp;</td>
+                                        <td style="border:1px solid #000;" colspan="3">&nbsp;</td>
+                                        <td style="border:1px solid #000; background:#fca5a5;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">&nbsp;</td>
+                                        <td style="border:1px solid #000;">Sign:</td>
+                                    </tr>
+
+                                    <!-- 24H Grand Total -->
+                                    <tr style="background:#e2e8f0; font-weight:900; font-size:11px; height:28px;">
+                                        <td style="border:2px solid #000;">24-HR TOTAL</td>
+                                        <td style="border:2px solid #000;" colspan="3">TOTAL INTAKE:</td>
+                                        <td style="border:2px solid #000; background:#7dd3fc;">&nbsp; ml</td>
+                                        <td style="border:2px solid #000;" colspan="3">TOTAL OUTPUT:</td>
+                                        <td style="border:2px solid #000; background:#f87171;">&nbsp; ml</td>
+                                        <td style="border:2px solid #000;" colspan="2">NET: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ml</td>
+                                    </tr>
+                                </table>
+
+                                <div style="margin-top:24px; display:flex; justify-content:space-between; font-size:10.5px; text-align:center;">
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Morning Nurse Sign</div>
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Evening Nurse Sign</div>
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Night Nurse Sign</div>
+                                    <div style="border-top:1px solid #000; width:180px; padding-top:4px;">Duty Medical Officer</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- ========================================== -->
+                    <!-- TAB 5: NURSE PROGRESS & SHIFT HANDOVER     -->
+                    <!-- ========================================== -->
+                    else if (activeTab == "handover")
+                    {
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                    📋 @I18n.T("Inpatient Daily Nursing Progress Notes & Shift Handover Sheet (ISBAR)")
+                                </div>
+                                <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-handover")'>
+                                    🖨️ @I18n.T("Print A4 Handover Sheet", "হ্যান্ডওভার চার্ট প্রিন্ট")
+                                </button>
+                            </div>
+
+                            <div id="printable-handover" style="padding:14px 18px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; font-family:sans-serif;">
+                                <PrintDocumentHeader Title="DAILY NURSING PROGRESS NOTES & CLINICAL SHIFT HANDOVER"
+                                                     Subtitle="Standard ISBAR Clinical Communication & Nursing Care Record"
+                                                     DocNo="@($"HND-{selectedAdmission.RegNo}")"
+                                                     DocNoLabel="Reg #"
+                                                     BarcodeCode="@selectedAdmission.RegNo" />
+
+                                <!-- Patient Demographics Strip -->
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; margin-top:8px; font-size:11px;">
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Name:</span> <strong>@pName</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient ID:</span> <strong>#@selectedAdmission.PatientID</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Bed / Cabin:</span> <strong>🛏️ @BedName(selectedAdmission.BedCabinID)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Reg No:</span> <strong>@selectedAdmission.RegNo</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Age / Sex:</span> <strong>@(selectedAdmission.Age ?? "—") / @pSex</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Consultant:</span> <strong>@DoctorName(selectedAdmission.Consultant)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Ward:</span> <strong>@DepartmentName(selectedAdmission.Department)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Date:</span> <strong>@DateTime.Today.ToString("dd MMMM yyyy")</strong></div>
+                                </div>
+
+                                <!-- ISBAR Structure Guide Banner -->
+                                <div style="margin-top:8px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:4px; padding:5px 8px; font-size:10px; color:#0369a1; display:flex; justify-content:space-between;">
+                                    <span><b>I</b>dentify: Patient / Bed</span>
+                                    <span><b>S</b>ituation: Current Status</span>
+                                    <span><b>B</b>ackground: Diagnosis / Surgery</span>
+                                    <span><b>A</b>ssessment: Vitals & Lines</span>
+                                    <span><b>R</b>ecommendation: Care Plan</span>
+                                </div>
+
+                                <table style="width:100%; border-collapse:collapse; font-size:11px; border:1px solid #000; margin-top:8px;">
+                                    <tr style="background:#f1f5f9; font-weight:800; text-align:center;">
+                                        <th style="border:1px solid #000; padding:6px; width:130px;">Shift</th>
+                                        <th style="border:1px solid #000; padding:6px;">Nursing Observations, Clinical Progress & Interventions (ISBAR)</th>
+                                        <th style="border:1px solid #000; padding:6px; width:160px;">Handover Signatures</th>
+                                    </tr>
+
+                                    <!-- Morning Shift -->
+                                    <tr style="height:115px;">
+                                        <td style="border:1px solid #000; padding:8px; font-weight:750; vertical-align:top; text-align:center; background:#fafafa;">
+                                            MORNING SHIFT<br />
+                                            <span style="font-size:10px; color:#64748b;">(08:00 AM - 02:00 PM)</span>
+                                        </td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:top;">&nbsp;</td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:bottom; text-align:center;">
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px;">Handover Nurse (Morning)</div>
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px; margin-top:16px;">Takeover Nurse (Evening)</div>
+                                        </td>
+                                    </tr>
+
+                                    <!-- Evening Shift -->
+                                    <tr style="height:115px;">
+                                        <td style="border:1px solid #000; padding:8px; font-weight:750; vertical-align:top; text-align:center; background:#fafafa;">
+                                            EVENING SHIFT<br />
+                                            <span style="font-size:10px; color:#64748b;">(02:00 PM - 09:00 PM)</span>
+                                        </td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:top;">&nbsp;</td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:bottom; text-align:center;">
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px;">Handover Nurse (Evening)</div>
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px; margin-top:16px;">Takeover Nurse (Night)</div>
+                                        </td>
+                                    </tr>
+
+                                    <!-- Night Shift -->
+                                    <tr style="height:115px;">
+                                        <td style="border:1px solid #000; padding:8px; font-weight:750; vertical-align:top; text-align:center; background:#fafafa;">
+                                            NIGHT SHIFT<br />
+                                            <span style="font-size:10px; color:#64748b;">(09:00 PM - 08:00 AM)</span>
+                                        </td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:top;">&nbsp;</td>
+                                        <td style="border:1px solid #000; padding:8px; vertical-align:bottom; text-align:center;">
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px;">Handover Nurse (Night)</div>
+                                            <div style="border-top:1px dashed #64748b; font-size:9.5px; padding-top:2px; margin-top:16px;">Takeover Nurse (Morning)</div>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- ========================================== -->
+                    <!-- TAB 6: BLOOD TRANSFUSION MONITORING (NEW)  -->
+                    <!-- ========================================== -->
+                    else if (activeTab == "transfusion")
+                    {
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;">
+                                <div style="font-size:13px; font-weight:800; color:#0f172a;">
+                                    🩸 @I18n.T("Blood & Blood Component Transfusion Safety & Monitoring Chart")
+                                </div>
+                                <button type="button" class="btn btn-primary appt-btn" @onclick='() => PrintElement("printable-transfusion")'>
+                                    🖨️ @I18n.T("Print A4 Transfusion Sheet", "রক্ত সঞ্চালন চার্ট প্রিন্ট")
+                                </button>
+                            </div>
+
+                            <div id="printable-transfusion" style="padding:14px 18px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; font-family:sans-serif;">
+                                <PrintDocumentHeader Title="BLOOD & BLOOD COMPONENT TRANSFUSION MONITORING CHART"
+                                                     Subtitle="Pre-Transfusion Dual Verification & Adverse Reaction Observation Protocol"
+                                                     DocNo="@($"TX-{selectedAdmission.RegNo}")"
+                                                     DocNoLabel="Reg #"
+                                                     BarcodeCode="@selectedAdmission.RegNo" />
+
+                                <!-- Patient Demographics Strip -->
+                                <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:5px; padding:8px 10px; margin-top:8px; font-size:11px;">
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Name:</span> <strong>@pName</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient ID:</span> <strong>#@selectedAdmission.PatientID</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Bed / Cabin:</span> <strong>🛏️ @BedName(selectedAdmission.BedCabinID)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Reg No:</span> <strong>@selectedAdmission.RegNo</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Age / Sex:</span> <strong>@(selectedAdmission.Age ?? "—") / @pSex</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Patient Blood Group:</span> <strong style="color:#b91c1c;">@(pBlood != "—" ? $"🩸 {pBlood}" : "—")</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Ward / Dept:</span> <strong>@DepartmentName(selectedAdmission.Department)</strong></div>
+                                    <div><span style="color:#64748b; font-weight:700;">Consultant:</span> <strong>@DoctorName(selectedAdmission.Consultant)</strong></div>
+                                </div>
+
+                                <!-- Dual Verification Pre-Transfusion Box -->
+                                <div style="margin-top:10px; background:#fef2f2; border:1.5px solid #f87171; border-radius:4px; padding:8px 10px; font-size:11px;">
+                                    <div style="font-weight:800; color:#b91c1c; margin-bottom:4px; text-transform:uppercase;">
+                                        🛡️ Mandatory Pre-Transfusion Dual Safety Checklist (Verified at Bedside by 2 Registered Nurses):
+                                    </div>
+                                    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; font-size:10.5px;">
+                                        <div><input type="checkbox" checked /> Patient ID & Wristband verified</div>
+                                        <div><input type="checkbox" checked /> Donor & Recipient Blood Group match</div>
+                                        <div><input type="checkbox" checked /> Cross-match compatibility label checked</div>
+                                        <div><input type="checkbox" checked /> Blood Bag No & Expiry date valid</div>
+                                        <div><input type="checkbox" checked /> Blood bag inspected for clots/hemolysis</div>
+                                        <div><input type="checkbox" checked /> Informed Consent verified</div>
+                                    </div>
+                                </div>
+
+                                <!-- Transfusion Details Table -->
+                                <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:10px; border:1px solid #000;">
+                                    <tr style="background:#f8fafc;">
+                                        <td style="padding:5px 8px; font-weight:700; width:20%; border:1px solid #cbd5e1;">Blood Bag / Unit #:</td>
+                                        <td style="padding:5px 8px; border:1px solid #cbd5e1; width:30%;">&nbsp;</td>
+                                        <td style="padding:5px 8px; font-weight:700; width:20%; border:1px solid #cbd5e1;">Component Type:</td>
+                                        <td style="padding:5px 8px; border:1px solid #cbd5e1; width:30%;">PRBC / Whole Blood / Platelet / FFP</td>
+                                    </tr>
+                                    <tr style="background:#fff;">
+                                        <td style="padding:5px 8px; font-weight:700; border:1px solid #cbd5e1;">Donor Blood Group:</td>
+                                        <td style="padding:5px 8px; border:1px solid #cbd5e1; font-weight:800; color:#b91c1c;">&nbsp;</td>
+                                        <td style="padding:5px 8px; font-weight:700; border:1px solid #cbd5e1;">Start Date & Time:</td>
+                                        <td style="padding:5px 8px; border:1px solid #cbd5e1;">@DateTime.Now.ToString("dd-MMM-yyyy, hh:mm tt")</td>
+                                    </tr>
+                                </table>
+
+                                <!-- Monitoring Observation Table -->
+                                <table style="width:100%; border-collapse:collapse; font-size:10.5px; text-align:center; border:1px solid #000; margin-top:10px;">
+                                    <tr style="background:#f1f5f9; font-weight:800;">
+                                        <th style="border:1px solid #000; padding:6px; width:130px;">Interval</th>
+                                        <th style="border:1px solid #000; padding:6px;">Time</th>
+                                        <th style="border:1px solid #000; padding:6px;">Temp (°F)</th>
+                                        <th style="border:1px solid #000; padding:6px;">Pulse (/min)</th>
+                                        <th style="border:1px solid #000; padding:6px;">Resp (/min)</th>
+                                        <th style="border:1px solid #000; padding:6px;">BP (mmHg)</th>
+                                        <th style="border:1px solid #000; padding:6px;">SpO2 (%)</th>
+                                        <th style="border:1px solid #000; padding:6px; width:100px;">Adverse Signs?</th>
+                                        <th style="border:1px solid #000; padding:6px; width:80px;">Nurse Sign</th>
+                                    </tr>
+                                    <tr style="height:26px;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:750;">Baseline (0 min)</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">Nil</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                    <tr style="height:26px; background:#fff1f2;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:800; color:#b91c1c;">15 Minutes (Critical)</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                    <tr style="height:26px;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:750;">30 Minutes</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                    <tr style="height:26px;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:750;">1 Hour</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                    <tr style="height:26px;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:750;">2 Hours</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                    <tr style="height:26px;">
+                                        <td style="border:1px solid #cbd5e1; font-weight:750;">Completion (End)</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                        <td style="border:1px solid #cbd5e1;">&nbsp;</td>
+                                    </tr>
+                                </table>
+
+                                <!-- Adverse Reaction Protocol Note -->
+                                <div style="margin-top:8px; font-size:10px; color:#475569; background:#fff7ed; border:1px solid #fed7aa; padding:4px 8px; border-radius:4px;">
+                                    <b>Transfusion Reaction Protocol:</b> If fever, chills, rigors, rash, shortness of breath, or hypotension occurs &rarr; <b>STOP TRANSFUSION IMMEDIATELY</b>, disconnect bag, flush IV line with Normal Saline, alert Duty Doctor immediately.
+                                </div>
+
+                                <div style="margin-top:24px; display:flex; justify-content:space-between; font-size:10.5px; text-align:center;">
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Verifying Nurse 1</div>
+                                    <div style="border-top:1px solid #000; width:170px; padding-top:4px;">Verifying Nurse 2</div>
+                                    <div style="border-top:1px solid #000; width:190px; padding-top:4px;">Duty Medical Officer</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<PatientAdmission> admittedPatients = [];
+    private List<PatientAdmission> filteredAdmissions = [];
+    private List<Department> departments = [];
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<string, string> patientNames = [];
+    private Dictionary<string, Registration> patientRegistrations = [];
+    private Dictionary<int, string> bedNames = [];
+    private Dictionary<int, string> departmentNames = [];
+
+    private PatientAdmission? selectedAdmission;
+    private string selectedPatientName = string.Empty;
+    private string searchQuery = string.Empty;
+    private int deptFilter = 0;
+    private string quickFilter = "all";
+
+    private string activeTab = "stickers";
+    private string sampleType = "Blood (EDTA / CBC / HbA1c)";
+    private string currentStaffNurse = "Staff Nurse";
+
+    // IV Cannula tag state
+    private string cannulaLineType = "Peripheral IV Cannula";
+    private string cannulaGauge = "20G (Pink - Standard IV)";
+
+    // Vitals Logger state
+    private string newVitalTemp = "98.4";
+    private string newVitalPulse = "76";
+    private string newVitalResp = "18";
+    private string newVitalBp = "120/80";
+    private string newVitalSpo2 = "98";
+    private string newVitalRbs = "6.2";
+    private string newVitalPain = "0";
+    private List<VitalEntry> recordedVitals = [];
+
+    // MAR state
+    private string drugAllergies = "NIL KNOWN MEDICINE ALLERGIES";
+
+    private int occupiedBedCount => admittedPatients.Count(x => x.BedCabinID.HasValue);
+    private int todayAdmittedCount => admittedPatients.Count(x => x.AdmissionDate.HasValue && x.AdmissionDate.Value.Date == DateTime.Today);
+
+    public sealed class VitalEntry
+    {
+        public DateTime RecordedAt { get; set; } = DateTime.Now;
+        public string Temperature { get; set; } = string.Empty;
+        public string Pulse { get; set; } = string.Empty;
+        public string Respiration { get; set; } = string.Empty;
+        public string BloodPressure { get; set; } = string.Empty;
+        public string SpO2 { get; set; } = string.Empty;
+        public string BloodSugar { get; set; } = string.Empty;
+        public string PainScore { get; set; } = string.Empty;
+        public string NurseInitial { get; set; } = string.Empty;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDataAsync();
+    }
+
+    private async Task RefreshDataAsync()
+    {
+        await LoadDataAsync();
+        ApplyFilters();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            admittedPatients = await db.PatientAdmissions.AsNoTracking()
+                .Where(x => x.IsAdmitted == true)
+                .OrderByDescending(x => x.AdmissionDate)
+                .ToListAsync();
+
+            filteredAdmissions = admittedPatients;
+
+            var pIds = admittedPatients.Select(x => x.PatientID).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
+            if (pIds.Count > 0)
+            {
+                var regs = await db.Registrations.AsNoTracking().Where(x => pIds.Contains(x.PatientID)).ToListAsync();
+                patientNames = regs.ToDictionary(x => x.PatientID, x => x.Name);
+                patientRegistrations = regs.ToDictionary(x => x.PatientID, x => x);
+            }
+
+            departments = await db.Departments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+            departmentNames = departments.ToDictionary(x => x.ID, x => x.Name);
+
+            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+
+            var beds = await db.BedCabins.AsNoTracking().ToListAsync();
+            bedNames = beds.ToDictionary(x => x.ID, x => x.Name);
+
+            // Fetch current logged-in user name
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+            if (user?.Identity?.IsAuthenticated == true && !string.IsNullOrWhiteSpace(user.Identity.Name))
+            {
+                currentStaffNurse = user.Identity.Name;
+            }
+        }
+        catch (Exception) { }
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        searchQuery = e.Value?.ToString() ?? "";
+        ApplyFilters();
+    }
+
+    private void ClearSearch()
+    {
+        searchQuery = "";
+        ApplyFilters();
+    }
+
+    private void SetQuickFilter(string filter)
+    {
+        quickFilter = filter;
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var q = admittedPatients.AsEnumerable();
+
+        if (deptFilter > 0)
+            q = q.Where(x => x.Department == deptFilter);
+
+        if (quickFilter == "today")
+        {
+            q = q.Where(x => x.AdmissionDate.HasValue && x.AdmissionDate.Value.Date == DateTime.Today);
+        }
+        else if (quickFilter == "cabin")
+        {
+            q = q.Where(x => x.BedCabinID.HasValue && BedName(x.BedCabinID).ToLowerInvariant().Contains("cabin"));
+        }
+        else if (quickFilter == "ward")
+        {
+            q = q.Where(x => !x.BedCabinID.HasValue || !BedName(x.BedCabinID).ToLowerInvariant().Contains("cabin"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchQuery))
+        {
+            var term = searchQuery.Trim().ToLowerInvariant();
+            q = q.Where(x => (x.PatientID?.ToLowerInvariant().Contains(term) ?? false) ||
+                             (x.RegNo?.ToLowerInvariant().Contains(term) ?? false) ||
+                             (patientNames.GetValueOrDefault(x.PatientID ?? "", "").ToLowerInvariant().Contains(term)) ||
+                             (DoctorName(x.Consultant).ToLowerInvariant().Contains(term)) ||
+                             (BedName(x.BedCabinID).ToLowerInvariant().Contains(term)));
+        }
+
+        filteredAdmissions = q.ToList();
+    }
+
+    private void SelectAdmission(PatientAdmission adm)
+    {
+        selectedAdmission = adm;
+        selectedPatientName = patientNames.GetValueOrDefault(adm.PatientID ?? "", "—");
+        recordedVitals.Clear();
+    }
+
+    private void SwitchTab(string tab)
+    {
+        activeTab = tab;
+    }
+
+    private void AddVitalEntry()
+    {
+        recordedVitals.Add(new VitalEntry
+        {
+            RecordedAt = DateTime.Now,
+            Temperature = newVitalTemp,
+            Pulse = newVitalPulse,
+            Respiration = newVitalResp,
+            BloodPressure = newVitalBp,
+            SpO2 = newVitalSpo2,
+            BloodSugar = newVitalRbs,
+            PainScore = newVitalPain,
+            NurseInitial = currentStaffNurse.Length > 2 ? currentStaffNurse[..2].ToUpperInvariant() : "SN"
+        });
+    }
+
+    private void ClearRecordedVitals()
+    {
+        recordedVitals.Clear();
+    }
+
+    private static string GetInitials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "PT";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) return parts[0].Length >= 2 ? parts[0][..2].ToUpperInvariant() : parts[0].ToUpperInvariant();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+    }
+
+    private static string GetStayDurationText(DateTime? admissionDate)
+    {
+        if (!admissionDate.HasValue) return "—";
+        var days = (DateTime.Now.Date - admissionDate.Value.Date).Days;
+        if (days == 0) return "Today";
+        if (days == 1) return "1 day";
+        return $"{days} days";
+    }
+
+    private async Task HandleGlobalKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            if (!string.IsNullOrWhiteSpace(searchQuery))
+            {
+                ClearSearch();
+            }
+            else
+            {
+                selectedAdmission = null;
+            }
+        }
+        else if (e.Key is "1" or "2" or "3" or "4" or "5" or "6" && !e.CtrlKey && !e.AltKey && !e.MetaKey)
+        {
+            activeTab = e.Key switch
+            {
+                "1" => "stickers",
+                "2" => "vitals",
+                "3" => "mar",
+                "4" => "fluid",
+                "5" => "handover",
+                "6" => "transfusion",
+                _ => activeTab
+            };
+        }
+        else if ((e.CtrlKey || e.MetaKey) && (e.Key == "p" || e.Key == "P"))
+        {
+            if (selectedAdmission != null)
+            {
+                var targetId = activeTab switch
+                {
+                    "stickers" => "printable-sticker",
+                    "vitals" => "printable-vitals",
+                    "mar" => "printable-mar",
+                    "fluid" => "printable-fluid",
+                    "handover" => "printable-handover",
+                    "transfusion" => "printable-transfusion",
+                    _ => "printable-sticker"
+                };
+                await PrintElement(targetId);
+            }
+        }
+    }
+
+    private async Task PrintElement(string elementId) => await JS.InvokeVoidAsync("hpm.printElement", elementId);
+
+    private string DoctorName(int? id)
+    {
+        if (!id.HasValue || id.Value <= 0) return "—";
+        var doc = doctors.FirstOrDefault(d => d.ID == id.Value);
+        return doc != null ? $"{doc.Title} {doc.Name}".Trim() : "—";
+    }
+
+    private string BedName(int? id) => id.HasValue && bedNames.TryGetValue(id.Value, out var n) ? n : "—";
+    private string DepartmentName(int? id) => id.HasValue && departmentNames.TryGetValue(id.Value, out var n) ? n : "—";
+
+    public void Dispose() { }
+}

@@ -1,257 +1,1621 @@
 @page "/ipd/patient-services"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.IPDOperator + "," + RoleNames.Cashier + "," + RoleNames.Doctor)]
-@rendermode InteractiveServer
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
 @inject IBarcodeQrService BarcodeQr
+@inject NavigationManager Navigation
 @implements IDisposable
+@using System.Security.Claims
 @using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using Microsoft.EntityFrameworkCore
 
-<PageTitle>@I18n.T("Inpatient Services") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Inpatient Services & Clinical Charges") | @Branding.HospitalName</PageTitle>
 
-<div class="ipd-classic-fit">
-    <!-- Compact Top Action & Status Bar -->
-    <div class="ipd-classic-topbar">
-        <div class="tickets-top-left">
-            <h1 class="tickets-page-title">
-                <span>🩺</span>
-                <span>@I18n.T("IPD Patient Services & Charges")</span>
-            </h1>
-            <span class="tickets-count-pill">
-                @patientServices.Count @I18n.T("Services")
-            </span>
-            @if (selectedAdmission != null)
-            {
-                <span class="pill pill-success" style="font-size: 11px; padding: 2px 8px;">
-                    @I18n.T("Total"): @I18n.FormatCurrency(patientServices.Sum(x => x.Total))
+<style>
+/* =========================================================================
+   IPD Patient Services & Clinical Charges Theme
+   Synchronized 1:1 with IPD Advance Receipts & Admissions Workspaces
+   ========================================================================= */
+.ipd-services-fit {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 12px 18px 48px;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+}
+
+/* 1. Top Bar & Navigation */
+.ipd-top-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.ipd-top-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+.ipd-top-nav-link {
+    color: #0369a1;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+.ipd-top-nav-link:hover {
+    background: #e0f2fe;
+    text-decoration: none;
+}
+.ipd-page-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.ipd-page-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ipd-page-sub {
+    font-size: 11.5px;
+    color: #64748b;
+    margin: 2px 0 0;
+}
+
+/* Top Action Controls */
+.ipd-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.tickets-drawer-trigger-btn {
+    height: 31px;
+    padding: 0 12px;
+    font-size: 11.5px;
+    font-weight: 700;
+    border-radius: 6px;
+    border: 1px solid #0284c7;
+    background: #f0f9ff;
+    color: #0369a1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.tickets-drawer-trigger-btn:hover {
+    background: #e0f2fe;
+    border-color: #0369a1;
+}
+
+/* 2. Top KPI Metric Statistics Banner */
+.ipd-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 14px;
+}
+.ipd-kpi-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.ipd-kpi-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(15,23,42,0.08);
+}
+.ipd-kpi-info {
+    min-width: 0;
+}
+.ipd-kpi-label {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+    margin-bottom: 3px;
+}
+.ipd-kpi-val {
+    font-size: 19px;
+    font-weight: 900;
+    color: #0f172a;
+    line-height: 1.15;
+}
+.ipd-kpi-sub {
+    font-size: 10.5px;
+    color: #94a3b8;
+    margin-top: 2px;
+}
+.ipd-kpi-icon {
+    font-size: 26px;
+    opacity: 0.85;
+    flex-shrink: 0;
+}
+
+/* 3. Main Workspace Form Card */
+/* Keep the workspace on the exact same horizontal edges as the KPI grid & top header */
+.ipd-services-fit > .appt-classic-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    justify-content: stretch;
+    align-items: stretch !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    overflow: visible !important;
+}
+.ipd-services-fit > .appt-classic-workspace > .appt-form-card {
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
+}
+.ipd-services-fit > .appt-classic-workspace > .services-card {
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
+}
+.appt-classic-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 100%;
+}
+.appt-form-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
+}
+.appt-card-header {
+    padding: 9px 16px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.appt-card-header h2 {
+    font-size: 14.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.appt-badge {
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+}
+.appt-badge.new {
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+}
+.appt-badge.posted {
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+}
+
+/* Form Two-Column Grid */
+.ipd-form-twocol {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 14px 16px;
+}
+@@media (max-width: 960px) {
+    .ipd-form-twocol {
+        grid-template-columns: 1fr;
+    }
+    .ipd-kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+@@media (max-width: 580px) {
+    .ipd-kpi-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Column Wrappers - Matching vertical rhythms */
+.ipd-col-left, .ipd-col-right {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Field Groups & Labels */
+.appt-field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    position: relative;
+}
+.appt-field-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #334155;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.appt-field-label .req {
+    color: #dc2626;
+    margin-left: 2px;
+}
+
+/* Standard Patient Search Combo */
+.appt-patient-search-combo {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+}
+.appt-patient-search-combo input.classic-input {
+    flex: 1 1 auto;
+    height: 30px !important;
+    min-height: 30px !important;
+    font-size: 12px !important;
+    border-radius: 4px !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 0 8px !important;
+    box-sizing: border-box !important;
+}
+.appt-patient-search-combo input.classic-input:focus {
+    border-color: #0284c7 !important;
+    box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.2) !important;
+    outline: none !important;
+}
+.appt-patient-search-combo .btn-find {
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 12px !important;
+    font-size: 11.5px !important;
+    font-weight: 700 !important;
+    background: #0284c7 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    flex-shrink: 0 !important;
+}
+.appt-patient-search-combo .btn-find:hover {
+    background: #0369a1 !important;
+}
+
+/* Verified Patient Card */
+.appt-patient-verified {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 6px;
+    padding: 4px 10px;
+    height: 30px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.appt-patient-verified-info {
+    font-size: 11.5px;
+    color: #1e293b;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.appt-patient-verified-info strong {
+    color: #15803d;
+    font-size: 12px;
+}
+.appt-clear-link {
+    font-size: 11px;
+    font-weight: 700;
+    color: #0284c7;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+.appt-clear-link:hover {
+    text-decoration: underline;
+}
+
+/* Autocomplete Dropdown List */
+.appt-patient-suggestions {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 0;
+    width: 100%;
+    max-width: 540px;
+    max-height: 280px;
+    overflow-y: auto;
+    z-index: 125;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(15,23,42,0.14);
+}
+.appt-patient-clean-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 12px;
+    border: none;
+    border-bottom: 1px solid #f1f5f9;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s;
+}
+.appt-patient-clean-option:hover {
+    background: #f0f9ff;
+}
+
+/* Financial Overview Strip (Row 4 Left, Height: 74px) */
+.financial-ledger-strip {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 6px 10px;
+}
+.financial-ledger-title {
+    font-size: 11px;
+    font-weight: 800;
+    color: #334155;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.financial-ledger-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 3px;
+}
+.ledger-cell {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    padding: 4px 6px;
+    text-align: center;
+}
+.ledger-cell.highlight {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+}
+.ledger-cell.due {
+    background: #fef2f2;
+    border-color: #fecaca;
+}
+.ledger-cell-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+}
+.ledger-cell-val {
+    font-size: 12.5px;
+    font-weight: 900;
+    color: #0f172a;
+    line-height: 1.15;
+}
+.ledger-cell.highlight .ledger-cell-val {
+    color: #0284c7;
+}
+.ledger-cell.due .ledger-cell-val {
+    color: #dc2626;
+}
+
+/* Right Column Presets & Time Chips */
+.tickets-time-chips {
+    display: inline-flex;
+    gap: 4px;
+}
+.time-chip {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.time-chip:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+/* Quick Service Pills & Search */
+.service-quick-pill {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #334155;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+.service-quick-pill:hover {
+    background: #e0f2fe;
+    color: #0369a1;
+    border-color: #7dd3fc;
+    transform: translateY(-1px);
+}
+.service-selected-input {
+    border-color: #0284c7 !important;
+    background: #f0f9ff !important;
+    font-weight: 700 !important;
+    color: #0369a1 !important;
+}
+
+/* Empty State Card */
+.ipd-empty-patient-box {
+    margin-top: 10px;
+    padding: 34px 14px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 7px;
+    text-align: center;
+    background: #f8fafc;
+    min-height: 175px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Category Filter Pills */
+.filter-category-pill {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+.filter-category-pill.active {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* Shift Preset Chips */
+.shift-preset-chip {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.shift-preset-chip:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+/* Sticky Form Footer */
+.appt-form-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 16px;
+    background: #f8fafc;
+    border-top: 1px solid #e2e8f0;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.appt-footer-left-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.appt-footer-right-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.appt-btn {
+    height: 32px !important;
+    padding: 0 14px !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    border-radius: 5px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+}
+.appt-book-btn {
+    background: #0284c7 !important;
+    border-color: #0284c7 !important;
+    color: #ffffff !important;
+}
+.appt-book-btn:hover:not(:disabled) {
+    background: #0369a1 !important;
+    border-color: #0369a1 !important;
+}
+
+/* Services Rendered Table Card */
+.services-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06);
+    overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
+}
+.services-card-header {
+    padding: 10px 16px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.services-table-wrap {
+    overflow-x: auto;
+    width: 100%;
+}
+.services-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.services-table th {
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 800;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid #cbd5e1;
+    white-space: nowrap;
+}
+.services-table th:first-child,
+.services-table td:first-child {
+    padding-left: 16px;
+}
+.services-table th:last-child,
+.services-table td:last-child {
+    padding-right: 16px;
+}
+.services-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: middle;
+}
+.services-table tr:hover td {
+    background: #f8fafc;
+}
+.services-table tr.total-row td {
+    background: #f1f5f9;
+    font-weight: 800;
+    border-top: 2px solid #cbd5e1;
+    border-bottom: none;
+}
+
+/* Slide-Over Drawer */
+.appt-drawer-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 1040;
+    display: none;
+}
+.appt-drawer-backdrop.show {
+    display: block;
+}
+.appt-drawer-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 480px;
+    max-width: 92vw;
+    background: #ffffff;
+    box-shadow: -6px 0 24px rgba(15, 23, 42, 0.16);
+    z-index: 1050;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.appt-drawer-panel.show {
+    transform: translateX(0);
+}
+.appt-drawer-header {
+    padding: 10px 14px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.appt-drawer-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.appt-drawer-title {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+}
+.appt-drawer-close {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #64748b;
+    font-size: 13px;
+}
+.appt-drawer-close:hover {
+    background: #fee2e2;
+    color: #dc2626;
+    border-color: #fecaca;
+}
+.appt-drawer-body {
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Drawer Item Cards */
+.drawer-service-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 7px;
+    padding: 9px 12px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.drawer-service-card:hover {
+    border-color: #0284c7;
+    background: #f8fafc;
+    box-shadow: 0 2px 6px rgba(15,23,42,0.06);
+}
+
+/* Modal Preview */
+.doc-preview-modal {
+    background: #ffffff;
+    border-radius: 8px;
+    width: 900px;
+    max-width: 95vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    overflow: hidden;
+}
+</style>
+
+<div class="ipd-services-fit">
+    <!-- =========================================================================
+         1. Header & Quick Actions Toolbar
+         ========================================================================= -->
+    <div class="ipd-top-header">
+        <div>
+            <div class="ipd-top-nav-links">
+                <a href="/ipd/admissions" class="ipd-top-nav-link">← @I18n.T("IPD Admissions", "আইপিডি ভর্তি")</a>
+                <span>&bull;</span>
+                <a href="/ipd/bed-occupancy" class="ipd-top-nav-link">🛏️ @I18n.T("Bed Occupancy View", "বেড অকুপেন্সি")</a>
+                <span>&bull;</span>
+                <a href="/ipd/advance-receipts" class="ipd-top-nav-link">💰 @I18n.T("Advance Receipts", "অগ্রিম জমা")</a>
+                <span>&bull;</span>
+                <a href="/ipd/discharge-billing" class="ipd-top-nav-link">🧾 @I18n.T("Final Discharge Billing", "ডিসচার্জ বিলিং")</a>
+            </div>
+            <div class="ipd-page-title-row">
+                <h1 class="ipd-page-title">
+                    <span>🩺</span>
+                    <span>@I18n.T("IPD Patient Services & Charges", "আইপিডি রোগীর সেবা ও বিলিং চার্জ")</span>
+                </h1>
+                <span class="pill" style="font-size: 11px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700;">
+                    @totalServicesCount @I18n.T("Total Services")
                 </span>
-            }
-            @if (!string.IsNullOrWhiteSpace(message))
-            {
-                <span class="tickets-inline-alert @messageClass" title="@message">
-                    @(messageClass == "success" ? "✓" : "⚠") @message
-                </span>
-            }
+            </div>
+            <p class="ipd-page-sub">
+                @I18n.T("Record daily patient procedures, nursing care, lab investigations, oxygen, and bed clinical charges.", "দৈনিক সেবা, নার্সিং কেয়ার, প্যাথলজি টেস্ট, অক্সিজেন ও চিকিৎসা ব্যয়ের রেকর্ড ব্যবস্থাপনা।")
+            </p>
         </div>
 
-        <div class="tickets-top-actions">
+        <div class="ipd-top-actions">
             @if (selectedAdmission != null)
             {
-                <button type="button" class="btn btn-secondary tickets-btn" @onclick="OpenPrescriptionModal" title="@I18n.T("Print Medication Chart")">
-                    🖨️ @I18n.T("Medication Chart")
+                <button type="button" class="tickets-drawer-trigger-btn" @onclick="OpenPrescriptionModal" title="@I18n.T("Print Medication & Treatment Chart")">
+                    <span>🖨️</span>
+                    <span>@I18n.T("Medication Chart", "মেডিকেশন চার্ট")</span>
                 </button>
             }
-            <button type="button" class="btn btn-secondary tickets-btn" @onclick="Reset" title="@I18n.T("+ Clear / New Search")">
-                + @I18n.T("New Search")
+
+            <!-- Slide-Over Register Drawer Trigger -->
+            <button type="button" class="tickets-drawer-trigger-btn" @onclick="ToggleDrawer" title="@I18n.T("View hospital-wide services log (F2 / Ctrl+Q)")">
+                <span>📋</span>
+                <span>@I18n.T("Services Register", "সার্ভিস রেজিস্টার") (@todayServices.Count)</span>
+            </button>
+
+            <!-- Reset / New Button -->
+            <button type="button" class="btn btn-ghost appt-btn" @onclick="Reset" title="@I18n.T("Start New Entry")">
+                + @I18n.T("New Entry", "নতুন এন্ট্রি")
             </button>
         </div>
     </div>
 
-    <!-- Main Balanced Workspace Grid: Left Entry Form, Right Rendered Services -->
-    <div class="ipd-classic-workspace">
-        <!-- Left Panel: Service Entry Form Card -->
-        <div class="ipd-form-card">
-            <div class="ipd-card-header">
-                <h2>@I18n.T("Add Patient Service / Charge")</h2>
-                @if (selectedAdmission != null)
-                {
-                    <span class="ipd-badge">@I18n.T("ADMITTED")</span>
-                }
-                else
-                {
-                    <span class="ipd-badge">SELECT INPATIENT</span>
-                }
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @(messageClass == "success" ? "alert-success" : "alert-danger")" style="padding: 7px 14px; font-size: 12px; font-weight: 600; margin-bottom: 12px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+            <span>@(messageClass == "success" ? "✓ " : "⚠ ") @message</span>
+            <button type="button" class="btn-close" style="font-size: 10px;" @onclick='() => message = ""' aria-label="Close"></button>
+        </div>
+    }
+
+    <!-- =========================================================================
+         2. Real-Time Collection & Financial KPI Banner
+         ========================================================================= -->
+    <div class="ipd-kpi-grid">
+        <div class="ipd-kpi-card" style="border-left: 4px solid #0284c7;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Today's Services", "আজকের সেবা আদায়")</div>
+                <div class="ipd-kpi-val" style="color: #0369a1;">৳ @todayServicesTotal.ToString("N0")</div>
+                <div class="ipd-kpi-sub">@todayServices.Count @I18n.T("Services logged today", "টি সেবা আজ যুক্ত")</div>
             </div>
+            <div class="ipd-kpi-icon">📊</div>
+        </div>
 
-            <div class="ipd-form-wrapper">
-                <div class="ipd-form-body">
-                    <!-- Scanner / Search Bar -->
-                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr;">
-                        <label>
-                            <span>@I18n.T("Scan / Search Inpatient Admission *")</span>
-                            <div class="tickets-patient-search-combo">
-                                <input class="classic-input"
-                                       placeholder="@I18n.T("Scan Wristband / IPD Reg # / Patient ID...")"
-                                       @bind="searchQuery"
-                                       @bind:event="oninput"
-                                       @onkeydown="HandleSearchKeyDown" />
-                                <button type="button" class="btn-find" @onclick="SearchAdmissionAsync"><SearchIcon /> @I18n.T("Find")</button>
-                            </div>
-                        </label>
-                    </div>
+        <div class="ipd-kpi-card" style="border-left: 4px solid #8b5cf6;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Active Inpatients", "ভর্তি রোগী")</div>
+                <div class="ipd-kpi-val" style="color: #6d28d9;">@activeAdmissionsCount @I18n.T("Patients", "জন")</div>
+                <div class="ipd-kpi-sub">@I18n.T("Eligible for service billing", "সার্ভিস গ্রহণের জন্য প্রস্তুত")</div>
+            </div>
+            <div class="ipd-kpi-icon">🛏️</div>
+        </div>
 
-                    <!-- Selected Patient Summary Strip -->
-                    <div class="patient-summary" style="margin: 0; padding: 6px 10px; font-size: 11.5px; border-radius: 6px;">
-                        <div>
-                            <b>@(selectedAdmission == null ? I18n.T("No IPD admission selected") : $"{patientName} ({selectedAdmission.RegNo})")</b>
-                            @if (selectedAdmission != null)
-                            {
-                                <small style="display: block; margin-top: 1px; color: #64748b;">
-                                    @I18n.T("Bed"): @BedName(selectedAdmission.BedCabinID) &bull; @I18n.T("Age"): @selectedAdmission.Age &bull; Dr: @DoctorName(selectedAdmission.Consultant)
-                                </small>
-                            }
-                        </div>
-                        @if (selectedAdmission != null)
-                        {
-                            <span class="pill pill-info" style="font-size: 11px; padding: 2px 7px;">
-                                @I18n.FormatCurrency(patientServices.Sum(x => x.Total))
-                            </span>
-                        }
-                    </div>
+        <div class="ipd-kpi-card" style="border-left: 4px solid #10b981;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@(selectedAdmission != null ? I18n.T("Patient Services Bill", "রোগীর সেবা বিল") : I18n.T("Hospital Services", "মোট সেবা বিল"))</div>
+                <div class="ipd-kpi-val" style="color: #047857;">৳ @(selectedAdmission != null ? patientServices.Sum(x => x.Total).ToString("N0") : totalHospitalServicesValue.ToString("N0"))</div>
+                <div class="ipd-kpi-sub">@(selectedAdmission != null ? $"{patientServices.Count} {I18n.T("Services for this admission", "টি সেবা")}" : I18n.T("Across all active admissions", "সকল ভর্তি রোগী মিলে"))</div>
+            </div>
+            <div class="ipd-kpi-icon">💰</div>
+        </div>
 
+        <div class="ipd-kpi-card" style="border-left: 4px solid #f59e0b;">
+            <div class="ipd-kpi-info">
+                <div class="ipd-kpi-label">@I18n.T("Services Catalog", "সেবা ক্যাটালগ")</div>
+                <div class="ipd-kpi-val" style="color: #b45309;">@availableServices.Count</div>
+                <div class="ipd-kpi-sub">@I18n.T("Available procedures & tests", "টি সেবা ও পরীক্ষা প্রস্তুত")</div>
+            </div>
+            <div class="ipd-kpi-icon">🩺</div>
+        </div>
+    </div>
+
+    <!-- =========================================================================
+         3. Main Balanced Workspace Form Card (Row-by-Row Aligned)
+         ========================================================================= -->
+    <div class="appt-classic-workspace">
+        <div class="appt-form-card">
+            <div class="appt-card-header">
+                <h2>
+                    <span>🩺</span>
+                    <span>@(selectedAdmission == null ? I18n.T("New Patient Service Entry", "নতুন রোগীর সেবা এন্ট্রি") : $"{I18n.T("Service Entry for")} #{selectedAdmission.RegNo} - {patientName}")</span>
+                </h2>
+                <div>
                     @if (selectedAdmission != null)
                     {
-                        <EditForm Model="serviceEntry" OnSubmit="AddServiceAsync" style="display: flex; flex-direction: column; gap: 8px;">
-                            <!-- Service Selection -->
-                            <div class="billing-demographics-grid" style="grid-template-columns: 1fr;">
-                                <label>
-                                    <span>@I18n.T("Service / Procedure / Test *")</span>
-                                    <select class="classic-input tickets-select" @onchange="ServiceSelected" style="width: 100%;">
-                                        <option value="0">@I18n.T("-- Select service --")</option>
-                                        @foreach (var s in availableServices)
-                                        {
-                                            <option value="@s.ID">@s.Name (@I18n.FormatCurrency(s.SaleRate ?? 0))</option>
-                                        }
-                                    </select>
-                                </label>
-                            </div>
-
-                            <!-- Rates, Qty & Total -->
-                            <div class="billing-demographics-grid" style="grid-template-columns: repeat(3, 1fr);">
-                                <label>
-                                    <span>@I18n.T("Unit Rate (৳) *")</span>
-                                    <InputNumber class="classic-input" @bind-Value="serviceEntry.Rate" @bind-Value:after="RecalculateTotal" />
-                                </label>
-                                <label>
-                                    <span>@I18n.T("Quantity *")</span>
-                                    <InputNumber class="classic-input" @bind-Value="serviceEntry.Quantity" @bind-Value:after="RecalculateTotal" />
-                                </label>
-                                <label>
-                                    <span>@I18n.T("Total (৳)")</span>
-                                    <input class="classic-input" value="@I18n.FormatCurrency(serviceEntry.Total)" disabled style="font-weight: 800; color: #0284c7;" />
-                                </label>
-                            </div>
-
-                            <!-- Doctor & Date -->
-                            <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr;">
-                                <label>
-                                    <span>@I18n.T("Attending Doctor")</span>
-                                    <InputSelect class="classic-input tickets-select" @bind-Value="serviceEntry.DoctorID">
-                                        <option value="">@I18n.T("Not assigned")</option>
-                                        @foreach (var d in doctors)
-                                        {
-                                            <option value="@d.ID">@d.Title @d.Name</option>
-                                        }
-                                    </InputSelect>
-                                </label>
-                                <label>
-                                    <span>@I18n.T("Service Date & Time *")</span>
-                                    <InputDate Type="InputDateType.DateTimeLocal" class="classic-input" @bind-Value="serviceEntry.ServiceDate" />
-                                </label>
-                            </div>
-
-                            <!-- Remarks -->
-                            <div class="billing-demographics-grid" style="grid-template-columns: 1fr;">
-                                <label>
-                                    <span>@I18n.T("Remarks / Notes")</span>
-                                    <InputText class="classic-input" @bind-Value="serviceEntry.Remarks" placeholder="@I18n.T("Special notes, shift...")" />
-                                </label>
-                            </div>
-
-                            <!-- Actions inside form -->
-                            <div style="margin-top: 4px;">
-                                <button class="btn btn-primary" type="submit" style="font-size: 12px; padding: 6px 16px;">
-                                    ➕ @I18n.T("Add Service Charge")
-                                </button>
-                            </div>
-                        </EditForm>
+                        <span class="appt-badge posted">✓ @I18n.T("ADMITTED", "ভর্তি রোগী")</span>
                     }
                     else
                     {
-                        <div class="tickets-queue-empty" style="padding: 2rem 1rem;">
-                            <span style="font-size: 2rem;"><SearchIcon /></span>
-                            <span>@I18n.T("Search or scan an active inpatient admission to record service charges.")</span>
+                        <span class="appt-badge new">+ @I18n.T("SELECT INPATIENT", "রোগী নির্বাচন করুন")</span>
+                    }
+                </div>
+            </div>
+
+            <div class="ipd-form-twocol" @onkeydown="HandleFormKeyDown">
+                <!-- =========================================================================
+                     Left Column: Patient Information & Admission Profile (Rows 1–6)
+                     ========================================================================= -->
+                <div class="ipd-col-left">
+                    <!-- Row 1 Left: Standard Patient Information Search Combo / Verified Box -->
+                    <div class="appt-field-group">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="appt-field-label">
+                                <span>@I18n.T("Scan / Search Admitted Patient", "ভর্তি রোগী সার্চ করুন") <span class="req">*</span></span>
+                            </span>
+                            <span style="font-size:10.5px; color:#64748b; font-weight:700;">
+                                🛏️ @activeAdmissions.Count @I18n.T("Currently Admitted", "জন রোগী ভর্তি আছেন")
+                            </span>
+                        </div>
+
+                        @if (selectedAdmission != null)
+                        {
+                            var pReg = selectedPatient ?? patientRegistrationsByReg.GetValueOrDefault(selectedAdmission.RegNo);
+                            <div class="appt-patient-verified" style="display:flex; justify-content:space-between; align-items:center; background:#f0fdf4; border:1px solid #86efac; padding:6px 12px; border-radius:6px; min-height:36px;">
+                                <div class="appt-patient-verified-info">
+                                    <strong>#@selectedAdmission.PatientID</strong> &bull; <b style="color:#0f172a; font-size:12.5px;">@patientName</b>
+                                    &bull; <span>@(pReg?.Sex == "Male" ? "♂ M" : pReg?.Sex == "Female" ? "♀ F" : pReg?.Sex ?? "—")</span>
+                                    &bull; <span>Age: <b>@selectedAdmission.Age</b></span>
+                                    &bull; <strong style="color: #0284c7;">🛏️ @BedName(selectedAdmission.BedCabinID)</strong>
+                                    &bull; <span>Reg: <strong>@selectedAdmission.RegNo</strong></span>
+                                </div>
+                                <button type="button" class="appt-clear-link" @onclick="ClearSelectedPatient" title="@I18n.T("Change patient")" style="color:#0369a1; font-weight:700; font-size:11px;">
+                                    @I18n.T("Change", "পরিবর্তন")
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="appt-patient-search-field">
+                                <div class="appt-patient-search-combo" style="position:relative; width: 100%;">
+                                    <span style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:#0284c7; pointer-events:none; font-size:13px; z-index:2;">🔍</span>
+                                    <input class="classic-input"
+                                           style="padding-left:32px !important; height:32px !important; font-size:12px !important; border-radius:5px !important;"
+                                           value="@patientSearchText"
+                                           @oninput="HandlePatientSearchInputAsync"
+                                           @onfocus="ShowPatientSuggestions"
+                                           @onkeydown="HandlePatientSearchKeyDown"
+                                           autocomplete="off"
+                                           placeholder="@I18n.T("Scan Wristband / Type Reg # / Patient ID / Name...")"
+                                           title="@I18n.T("Scan Wristband / Type Reg # / Patient ID / Name & press Enter")" />
+
+                                    @if (showPatientSuggestions)
+                                    {
+                                        <div class="appt-dropdown-backdrop" style="position:fixed; inset:0; z-index:110;" @onclick="HidePatientSuggestions"></div>
+                                        <div class="appt-patient-suggestions" style="max-height:280px; overflow-y:auto; z-index:125;">
+                                            @foreach (var adm in suggestedAdmissions)
+                                            {
+                                                var pReg = patientRegistrationsByReg.GetValueOrDefault(adm.RegNo);
+                                                var pName = pReg?.Name ?? "—";
+                                                var bName = BedName(adm.BedCabinID);
+
+                                                <button type="button" class="appt-patient-clean-option" @onmousedown:preventDefault @onclick="() => SelectAdmissionSuggestion(adm)">
+                                                    <span style="font-weight: 800; color: #0284c7; min-width: 85px;">#@adm.RegNo</span>
+                                                    <span style="font-weight: 700; color: #0f172a; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@pName</span>
+                                                    <span style="font-size: 11px; color: #64748b; flex-shrink: 0;">🛏️ @bName</span>
+                                                    <span class="pill" style="font-size: 9.5px; background: #e0f2fe; color: #0369a1; padding: 1px 5px; flex-shrink: 0;">@adm.PatientID</span>
+                                                </button>
+                                            }
+                                            @if (suggestedAdmissions.Count == 0)
+                                            {
+                                                <div style="padding: 12px; font-size: 11.5px; color: #64748b; text-align: center;">
+                                                    @I18n.T("No matching admitted patient found")
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+
+                                <select class="classic-input"
+                                        style="height:32px !important; font-size:12px !important; border-radius:5px !important; margin-top:6px; color:#334155; font-weight:600;"
+                                        @onchange="OnAdmittedDropdownSelected">
+                                    <option value="">-- @I18n.T("Or pick from Admitted Patients List", "অথবা ভর্তি রোগীর তালিকা থেকে বেছে নিন") (@activeAdmissions.Count) --</option>
+                                    @foreach (var adm in activeAdmissions)
+                                    {
+                                        var pReg = patientRegistrationsByReg.GetValueOrDefault(adm.RegNo);
+                                        var pName = pReg?.Name ?? "—";
+                                        <option value="@adm.RegNo">
+                                            #@adm.RegNo - @pName (🛏️ @BedName(adm.BedCabinID))
+                                        </option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                    </div>
+
+                    @if (selectedAdmission == null)
+                    {
+                        <!-- Clean Empty State Box Matching Advance Receipts -->
+                        <div class="ipd-empty-patient-box">
+                            <div style="font-size: 38px; margin-bottom: 10px; opacity: 0.85;">🏥</div>
+                            <div style="font-weight: 800; font-size: 13.5px; color: #334155;">@I18n.T("No Patient Selected", "কোনো রোগী নির্বাচন করা হয়নি")</div>
+                            <div style="font-size: 11.5px; color: #64748b; margin-top: 4px;">
+                                @I18n.T("Scan barcode/wristband or select from the admitted patients list above.", "বারকোড / রিস্টব্যান্ড স্ক্যান করুন অথবা ওপরের তালিকা থেকে রোগী সিলেক্ট করুন।")
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- Row 2 Left: IPD Department & Allocated Bed (Two-Column Row, Height: 30px) -->
+                        <div style="display:flex; gap:8px;">
+                            <div class="appt-field-group" style="flex:1; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("IPD Department / Ward", "বিভাগ / ওয়ার্ড")</span>
+                                <input class="classic-input" value="@DepartmentName(selectedAdmission.Department)" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 600; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                            <div class="appt-field-group" style="flex:1; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("Allocated Bed / Cabin", "বরাদ্দকৃত বেড / কেবিন")</span>
+                                <input class="classic-input" value="🛏️ @BedName(selectedAdmission.BedCabinID)" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 700; color: #0284c7; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                        </div>
+
+                        <!-- Row 3 Left: Consultant Doctor & Admission Date (Two-Column Row, Height: 30px) -->
+                        <div style="display:flex; gap:8px;">
+                            <div class="appt-field-group" style="flex:1.2; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("Consultant Doctor", "কনসালট্যান্ট ডাক্তার")</span>
+                                <input class="classic-input" value="@DoctorName(selectedAdmission.Consultant)" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 600; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                            <div class="appt-field-group" style="flex:0.8; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("Admission Date", "ভর্তির তারিখ")</span>
+                                <input class="classic-input" value="@($"{selectedAdmission.AdmissionDate:dd MMM yyyy} ({lengthOfStayDays}d)")" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 600; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                        </div>
+
+                        <!-- Row 4 Left: Real-Time Patient Financial Ledger Overview Strip (Height: 74px) -->
+                        <div class="financial-ledger-strip" style="height: 74px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between;">
+                            <div class="financial-ledger-title">
+                                <span>💰 @I18n.T("Patient Financial Overview", "রোগীর আর্থিক বিবরণী")</span>
+                                <span style="font-size: 10px; color: #64748b; font-weight: 700;">
+                                    Reg #@selectedAdmission.RegNo
+                                </span>
+                            </div>
+                            <div class="financial-ledger-grid" style="margin-top: 3px;">
+                                <div class="ledger-cell">
+                                    <div class="ledger-cell-label">@I18n.T("Bed Charges", "বেড চার্জ")</div>
+                                    <div class="ledger-cell-val">৳ @estimatedBedCharges.ToString("N0")</div>
+                                </div>
+                                <div class="ledger-cell highlight">
+                                    <div class="ledger-cell-label">@I18n.T("Services / Medicine", "সেবা / ওষুধ")</div>
+                                    <div class="ledger-cell-val">৳ @clinicalServicesCharges.ToString("N0")</div>
+                                </div>
+                                <div class="ledger-cell @(currentBalanceDue > 0 ? "due" : "")">
+                                    <div class="ledger-cell-label">@I18n.T("Balance Due", "বকেয়া")</div>
+                                    <div class="ledger-cell-val">৳ @currentBalanceDue.ToString("N0")</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Row 5 Left: Primary Diagnosis & Patient Category (Two-Column Row, Height: 30px) -->
+                        <div style="display:flex; gap:8px;">
+                            <div class="appt-field-group" style="flex:1.2; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("Primary Diagnosis", "প্রাথমিক রোগ নির্ণয়")</span>
+                                <input class="classic-input" value="@(selectedAdmission.Diagnosis ?? "--")" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                            <div class="appt-field-group" style="flex:0.8; min-width:0;">
+                                <span class="appt-field-label">@I18n.T("Category", "ক্যাটাগরি")</span>
+                                <input class="classic-input" value="@(selectedAdmission.PatientCategory ?? "General")" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; background: #f8fafc; border-radius: 5px !important;" />
+                            </div>
+                        </div>
+
+                        <!-- Row 6 Left: Admission Instructions & Remarks (Height: 30px) -->
+                        <div class="appt-field-group">
+                            <span class="appt-field-label">@I18n.T("Admission Instructions & Remarks", "ভর্তির বিশেষ নির্দেশনা")</span>
+                            <input class="classic-input" value="@(selectedAdmission.Comments ?? "--")" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; background: #f8fafc; border-radius: 5px !important;" />
                         </div>
                     }
                 </div>
 
-                <!-- Sticky Footer Actions -->
-                <div class="ipd-form-footer">
-                    <button class="btn btn-ghost" type="button" @onclick="Reset" style="font-size: 12px; padding: 5px 10px;">@I18n.T("Clear / Reset")</button>
+                <!-- =========================================================================
+                     Right Column: Service Entry Details (Synchronized 1:1 with Left)
+                     ========================================================================= -->
+                <div class="ipd-col-right">
+                    <!-- Row 1 Right: Service / Procedure Selection -->
+                    <div class="appt-field-group">
+                        <span class="appt-field-label">
+                            <span>@I18n.T("Service / Procedure / Test", "সেবা / পরীক্ষা / কার্যপদ্ধতি")<span class="req">*</span></span>
+                            <span style="font-size:10px; color:#64748b;">@availableServices.Count @I18n.T("Services Available")</span>
+                        </span>
+
+                        <div style="position:relative; width:100%;">
+                            <span style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:#64748b; pointer-events:none; font-size:12px; z-index:2;">🔍</span>
+                            <input class="classic-input @(serviceEntry.ServiceID > 0 ? "service-selected-input" : "")"
+                                   style="padding-left:30px !important; padding-right:26px !important; height:32px !important; font-size:12px !important; border-radius:5px !important;"
+                                   value="@serviceSearchQuery"
+                                   @oninput="HandleServiceSearchInput"
+                                   @onfocus="ShowServiceSuggestions"
+                                   @onkeydown="HandleServiceSearchKeyDown"
+                                   placeholder="@I18n.T("Search service / test by name (e.g. Doctor Round, Oxygen, CBC, Dressing)...")"
+                                   autocomplete="off" />
+
+                            @if (serviceEntry.ServiceID > 0 || !string.IsNullOrWhiteSpace(serviceSearchQuery))
+                            {
+                                <button type="button" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; color:#94a3b8; font-size:13px; cursor:pointer;" @onclick="ClearSelectedService" title="@I18n.T("Clear service")">✕</button>
+                            }
+
+                            @if (showServiceSuggestions && filteredServicesList.Any())
+                            {
+                                <div class="appt-dropdown-backdrop" style="position:fixed; inset:0; z-index:110;" @onclick="() => showServiceSuggestions = false"></div>
+                                <div class="appt-patient-suggestions" style="max-height:280px; overflow-y:auto; z-index:125; width:100%;">
+                                    <div style="padding:6px 10px; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-size:10.5px; font-weight:700; color:#64748b; display:flex; justify-content:space-between;">
+                                        <span>@I18n.T("Matching Services") (@filteredServicesList.Count)</span>
+                                        <span>↑↓ @I18n.T("Navigate") &bull; Enter @I18n.T("Select")</span>
+                                    </div>
+                                    @for (int i = 0; i < filteredServicesList.Count; i++)
+                                    {
+                                        var s = filteredServicesList[i];
+                                        var isHl = i == highlightedServiceIndex;
+                                        var catName = s.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn) ? cn : "Clinical Service";
+                                        <div class="appt-patient-clean-option @(isHl ? "selected" : "")"
+                                             style="padding:7px 10px; cursor:pointer; background:@(isHl ? "#e0f2fe" : "transparent");"
+                                             @onmousedown:preventDefault
+                                             @onclick="() => SelectService(s)">
+                                            <span style="font-weight:750; color:#0f172a; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">@s.Name</span>
+                                            <span class="pill" style="font-size:9.5px; background:#f1f5f9; color:#475569; padding:1px 6px; margin:0 6px;">@catName</span>
+                                            <span style="font-weight:800; color:#0284c7; font-size:12px;">@I18n.FormatCurrency(s.SaleRate ?? 0)</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <!-- Quick Favorite / Common Inpatient Service Chips -->
+                        <div style="display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;">
+                            <span style="font-size:10.5px; font-weight:700; color:#64748b; align-self:center;">@I18n.T("Quick Services"):</span>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Doctor Round", "Team Charge/Doctor Consultation", 500)'>🩺 Doctor Visit</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Nursing Care", "Clinical Service", 300)'>💉 Nursing Care</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Dressing", "Clinical Service", 200)'>🩹 Dressing</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Oxygen", "Clinical Service", 100)'>💨 Oxygen Flow</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Cannula", "Clinical Service", 150)'>💧 IV Cannula</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("Nebulization", "Clinical Service", 100)'>💊 Nebulization</button>
+                            <button type="button" class="service-quick-pill" @onclick='() => QuickSelectService("CBC", "Pathology", 400)'>🩸 CBC Test</button>
+                        </div>
+                    </div>
+
+                    <!-- Row 2 Right: Attending Doctor & Service Category (Two-Column Row, Height: 30px) -->
+                    <div style="display:flex; gap:8px;">
+                        <div class="appt-field-group" style="flex:1.2; min-width:0;">
+                            <span class="appt-field-label">@I18n.T("Attending / Ordering Doctor", "রেফারকারী / দায়িত্বরত ডাক্তার")</span>
+                            <select class="classic-input tickets-select" @bind="serviceEntry.DoctorID" style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; width: 100%; border-radius: 5px !important;">
+                                <option value="">@I18n.T("Not assigned / Hospital Routine")</option>
+                                @foreach (var d in doctors)
+                                {
+                                    <option value="@d.ID">@d.Title @d.Name</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="appt-field-group" style="flex:0.8; min-width:0;">
+                            <span class="appt-field-label">@I18n.T("Service Category", "সেবার ধরন")</span>
+                            <input class="classic-input" value="@selectedServiceCategoryName" readonly style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; background: #f8fafc; border-radius: 5px !important; font-weight: 600; color: #475569;" />
+                        </div>
+                    </div>
+
+                    <!-- Row 3 Right: Unit Rate, Quantity & Total (Three Inputs, Height: 30px) -->
+                    <div style="display:flex; gap:8px;">
+                        <div class="appt-field-group" style="flex:1; min-width:0;">
+                            <span class="appt-field-label">
+                                <span>@I18n.T("Unit Rate (৳)", "রেট")<span class="req">*</span></span>
+                            </span>
+                            <input type="number" step="any" min="0" class="classic-input"
+                                   @bind="serviceEntry.Rate"
+                                   @bind:event="oninput"
+                                   @bind:after="RecalculateTotal"
+                                   style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 700; border-radius: 5px !important;" />
+                        </div>
+                        <div class="appt-field-group" style="flex:1.2; min-width:0;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span class="appt-field-label">
+                                    <span>@I18n.T("Quantity", "পরিমাণ")<span class="req">*</span></span>
+                                </span>
+                                <div style="display:inline-flex; gap:2px;">
+                                    <button type="button" class="time-chip" @onclick="() => AdjustQty(1)">+1</button>
+                                    <button type="button" class="time-chip" @onclick="() => AdjustQty(2)">+2</button>
+                                    <button type="button" class="time-chip" @onclick="() => AdjustQty(5)">+5</button>
+                                </div>
+                            </div>
+                            <input type="number" min="1" max="999" class="classic-input"
+                                   @bind="serviceEntry.Quantity"
+                                   @bind:event="oninput"
+                                   @bind:after="RecalculateTotal"
+                                   style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 700; border-radius: 5px !important;" />
+                        </div>
+                        <div class="appt-field-group" style="flex:1; min-width:0;">
+                            <span class="appt-field-label">
+                                <span>@I18n.T("Total (৳)", "মোট টাকা")</span>
+                            </span>
+                            <input class="classic-input" value="@I18n.FormatCurrency(serviceEntry.Total)" readonly
+                                   style="height: 30px !important; min-height: 30px !important; font-size: 13px !important; font-weight: 900; color: #0284c7; background: #f0f9ff; border-radius: 5px !important; border: 1px solid #bae6fd !important;" />
+                        </div>
+                    </div>
+
+                    <!-- Row 4 Right: Service Date & Time (Height: 74px, aligned with Financial Ledger) -->
+                    <div class="appt-field-group" style="height: 74px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="appt-field-label">
+                                <span>@I18n.T("Service Date & Time", "তারিখ ও সময়")<span class="req">*</span></span>
+                            </span>
+                            <div class="tickets-time-chips">
+                                <button type="button" class="time-chip" @onclick="SetNow">@I18n.T("Now")</button>
+                                <button type="button" class="time-chip" @onclick="SetMorning">08:00 AM</button>
+                                <button type="button" class="time-chip" @onclick="SetEvening">06:00 PM</button>
+                            </div>
+                        </div>
+                        <input type="datetime-local" class="classic-input"
+                               style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; font-weight: 600; width: 100%; border-radius: 5px !important; border: 1px solid #cbd5e1 !important;"
+                               value="@serviceEntry.ServiceDate.ToString("yyyy-MM-ddTHH:mm")"
+                               @onchange="OnServiceDateChanged" />
+                        <div style="font-size: 10.5px; font-weight: 700; color: #047857; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            @(serviceEntry.Total > 0 ? CurrencyWordsHelper.ToTakaWords(serviceEntry.Total) : "")
+                        </div>
+                    </div>
+
+                    <!-- Row 5 Right: Clinical Notes & Findings (Height: 30px) -->
+                    <div class="appt-field-group">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span class="appt-field-label">@I18n.T("Clinical Notes / Shift / Findings", "ক্লিনিক্যাল মন্তব্য / শিফট")</span>
+                            <div style="display:inline-flex; gap:3px;">
+                                <button type="button" class="shift-preset-chip" @onclick='() => SetShift("Morning Shift")'>🌅 Morning</button>
+                                <button type="button" class="shift-preset-chip" @onclick='() => SetShift("Evening Shift")'>🌇 Evening</button>
+                                <button type="button" class="shift-preset-chip" @onclick='() => SetShift("Night Shift")'>🌙 Night</button>
+                            </div>
+                        </div>
+                        <input type="text" class="classic-input"
+                               placeholder="@I18n.T("e.g. Morning dressing, Oxygen 2L/min, IV cannula change...")"
+                               @bind="serviceEntry.Remarks"
+                               style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; border-radius: 5px !important; border: 1px solid #cbd5e1 !important;" />
+                    </div>
+
+                    <!-- Row 6 Right: Order Priority & Type (Height: 30px) -->
+                    <div class="appt-field-group">
+                        <span class="appt-field-label">@I18n.T("Order Priority & Care Plan", "সেবার অগ্রাধিকার ও নির্দেশিকা")</span>
+                        <input type="text" class="classic-input"
+                               value="@(serviceOrderType)"
+                               @onchange="@(e => serviceOrderType = e.Value?.ToString() ?? "Routine Inpatient Care")"
+                               placeholder="@I18n.T("Routine Inpatient Care / Emergency / Post-Op...")"
+                               style="height: 30px !important; min-height: 30px !important; font-size: 12px !important; border-radius: 5px !important; border: 1px solid #cbd5e1 !important;" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- =========================================================================
+                 Sticky Form Footer (Positioned identically to Doctor Appointments & OPD)
+                 ========================================================================= -->
+            <div class="appt-form-footer">
+                <div class="appt-footer-left-info">
                     @if (selectedAdmission != null)
                     {
-                        <span style="font-size: 11px; color: #64748b;">
-                            @selectedAdmission.RegNo &bull; @patientName
+                        <button class="btn btn-secondary appt-btn" type="button" @onclick="OpenPrescriptionModal" title="@I18n.T("Print Medication & Treatment Chart")">
+                            🖨️ @I18n.T("Medication Chart", "মেডিকেশন চার্ট")
+                        </button>
+                        <button class="btn btn-secondary appt-btn" type="button" @onclick="PrintServicesSlipAsync" title="@I18n.T("Print Inpatient Services Voucher Slip")">
+                            📄 @I18n.T("Service Slip", "সার্ভিস স্লিপ")
+                        </button>
+                        <span class="pill" style="font-size: 11px; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; font-weight: 700; padding: 4px 10px;">
+                            @I18n.T("Total"): @I18n.FormatCurrency(patientServices.Sum(x => x.Total)) (@patientServices.Count @I18n.T("items"))
                         </span>
                     }
+                </div>
+
+                <div class="appt-footer-right-actions">
+                    <button class="btn btn-ghost appt-btn" type="button" @onclick="Reset" title="@I18n.T("Clear Form")">
+                        @I18n.T("Clear / New")
+                    </button>
+
+                    <button class="btn btn-primary appt-btn appt-book-btn" type="button"
+                            @onclick="AddServiceAsync"
+                            disabled="@(isSaving || selectedAdmission == null || serviceEntry.ServiceID == 0 || serviceEntry.Rate < 0 || serviceEntry.Quantity <= 0)"
+                            title="@I18n.T("Add Service Charge (Ctrl+Enter / F9)")">
+                        @if (isSaving)
+                        {
+                            <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true" style="width:12px; height:12px; margin-right:4px;"></span>
+                            <span>@I18n.T("Saving...")</span>
+                        }
+                        else
+                        {
+                            <span>➕</span>
+                            <span>@I18n.T("Add Service Charge", "সেবা যুক্ত করুন")</span>
+                        }
+                    </button>
                 </div>
             </div>
         </div>
 
-        <!-- Right Panel: Services Rendered Queue Card -->
-        <div class="ipd-queue-card">
-            <div class="ipd-queue-top">
-                <h2>@I18n.T("Services Rendered During Stay")</h2>
-                <span class="pill pill-success" style="font-size: 10.5px; padding: 2px 7px;">
-                    @I18n.T("Sub Total"): @I18n.FormatCurrency(patientServices.Sum(x => x.Total))
-                </span>
+        <!-- =========================================================================
+             4. Services Rendered During Stay Table
+             ========================================================================= -->
+        <div class="services-card">
+            <div class="services-card-header" style="flex-wrap:wrap; gap:10px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h3 style="font-size: 14px; font-weight: 800; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 6px;">
+                        <span>📋</span>
+                        <span>@(selectedAdmission != null ? $"{I18n.T("Services Rendered for")} #{selectedAdmission.RegNo}" : I18n.T("Hospital Recent IPD Services Log (Today)", "হাসপাতালের আজকের সাম্প্রতিক সেবা লগ"))</span>
+                    </h3>
+                    <span class="pill" style="font-size: 11px; background: #f1f5f9; color: #334155; font-weight: 700;">
+                        @(selectedAdmission != null ? DisplayedPatientServices.Count() : recentHospitalServices.Count) @I18n.T("Services")
+                    </span>
+                </div>
+
+                @if (selectedAdmission != null)
+                {
+                    <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                        <button type="button" class="filter-category-pill @(tableCategoryFilter == "all" ? "active" : "")" @onclick='() => tableCategoryFilter = "all"'>
+                            @I18n.T("All") (@patientServices.Count)
+                        </button>
+                        <button type="button" class="filter-category-pill @(tableCategoryFilter == "doctor" ? "active" : "")" @onclick='() => tableCategoryFilter = "doctor"'>
+                            🩺 @I18n.T("Doctor Visits")
+                        </button>
+                        <button type="button" class="filter-category-pill @(tableCategoryFilter == "nursing" ? "active" : "")" @onclick='() => tableCategoryFilter = "nursing"'>
+                            💉 @I18n.T("Nursing Care")
+                        </button>
+                        <button type="button" class="filter-category-pill @(tableCategoryFilter == "clinical" ? "active" : "")" @onclick='() => tableCategoryFilter = "clinical"'>
+                            💨 @I18n.T("Clinical")
+                        </button>
+                        <button type="button" class="filter-category-pill @(tableCategoryFilter == "pathology" ? "active" : "")" @onclick='() => tableCategoryFilter = "pathology"'>
+                            🩸 @I18n.T("Lab/Tests")
+                        </button>
+
+                        <input type="text" class="classic-input"
+                               placeholder="@I18n.T("Filter services...")"
+                               @bind="tableSearchQuery"
+                               @bind:event="oninput"
+                               style="height:26px !important; width:130px; font-size:11px !important; border-radius:4px !important;" />
+
+                        @if (patientServices.Count > 0)
+                        {
+                            <button type="button" class="btn btn-secondary btn-sm" @onclick="PrintServicesSlipAsync" style="height:26px; padding:0 8px; font-size:11px; font-weight:700;">
+                                🖨️ @I18n.T("Print Voucher", "ভাউচার প্রিন্ট")
+                            </button>
+                            <span class="pill" style="font-size: 11px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-weight: 800; padding: 3px 8px;">
+                                @I18n.T("Sub Total"): @I18n.FormatCurrency(patientServices.Sum(x => x.Total))
+                            </span>
+                        }
+                    </div>
+                }
             </div>
 
-            <!-- Internal Scrollable Queue List -->
-            <div class="tickets-queue-list">
-                @if (patientServices.Count == 0)
-                {
-                    <div class="tickets-queue-empty">
-                        <span style="font-size: 2rem;">🩺</span>
-                        <span>@I18n.T("No services added for this admission yet.")</span>
-                    </div>
-                }
-                @foreach (var item in patientServices)
-                {
-                    <div class="tickets-queue-item">
-                        <span class="tickets-queue-serial" style="min-width: 45px; font-size: 11px;">#@item.ID</span>
-                        <div class="tickets-queue-info">
-                            <span class="tickets-queue-name">
-                                @item.ServiceName
-                                @if (!string.IsNullOrWhiteSpace(item.Remarks))
+            <div class="services-table-wrap">
+                <table class="services-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 45px;">#SL</th>
+                            <th style="width: 140px;">@I18n.T("Date & Time")</th>
+                            <th>@I18n.T("Service / Procedure")</th>
+                            <th style="width: 130px;">@I18n.T("Category")</th>
+                            <th style="width: 150px;">@I18n.T("Attending Doctor")</th>
+                            <th style="width: 90px; text-align: right;">@I18n.T("Rate (৳)")</th>
+                            <th style="width: 60px; text-align: center;">@I18n.T("Qty")</th>
+                            <th style="width: 100px; text-align: right;">@I18n.T("Total (৳)")</th>
+                            <th>@I18n.T("Notes / Shift")</th>
+                            <th style="width: 70px; text-align: center;">@I18n.T("Action")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (selectedAdmission != null)
+                        {
+                            @if (!DisplayedPatientServices.Any())
+                            {
+                                <tr>
+                                    <td colspan="10" style="text-align: center; padding: 36px 12px; color: #64748b;">
+                                        <div style="font-size: 28px; margin-bottom: 6px;">🩺</div>
+                                        <b style="font-size: 13px;">@I18n.T("No services added for this admission yet.")</b>
+                                        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 3px;">
+                                            @I18n.T("Select a procedure or service from the form above and click '+ Add Service Charge'.")
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                var sl = 1;
+                                foreach (var item in DisplayedPatientServices)
                                 {
-                                    <small class="tickets-queue-reg">(@item.Remarks)</small>
+                                    var currentItem = item;
+                                    var s = availableServices.FirstOrDefault(x => x.ID == currentItem.ServiceID);
+                                    var catName = s?.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn) ? cn : "Clinical Service";
+
+                                    <tr>
+                                        <td style="font-weight: 700; color: #64748b;">@(sl++)</td>
+                                        <td style="font-size: 11.5px; color: #334155; white-space: nowrap;">
+                                            @currentItem.ServiceDate.ToString("dd MMM yyyy hh:mm tt")
+                                        </td>
+                                        <td>
+                                            <span style="font-weight: 700; color: #0f172a;">@currentItem.ServiceName</span>
+                                        </td>
+                                        <td>
+                                            <span class="pill" style="font-size: 10px; background: #f1f5f9; color: #475569; padding: 2px 6px;">
+                                                @catName
+                                            </span>
+                                        </td>
+                                        <td style="font-size: 11.5px; color: #475569;">
+                                            @DoctorName(currentItem.DoctorID)
+                                        </td>
+                                        <td style="text-align: right; font-weight: 600; color: #334155;">
+                                            @I18n.FormatCurrency(currentItem.Rate)
+                                        </td>
+                                        <td style="text-align: center; font-weight: 700;">
+                                            @currentItem.Quantity
+                                        </td>
+                                        <td style="text-align: right; font-weight: 800; color: #0284c7;">
+                                            @I18n.FormatCurrency(currentItem.Total)
+                                        </td>
+                                        <td style="font-size: 11px; color: #64748b;">
+                                            @(string.IsNullOrWhiteSpace(currentItem.Remarks) ? "--" : currentItem.Remarks)
+                                        </td>
+                                        <td style="text-align: center;">
+                                            <button type="button" class="icon-btn danger" @onclick="() => DeleteServiceAsync(currentItem)" title="@I18n.T("Delete service")" style="background: none; border: none; cursor: pointer; color: #dc2626; font-size: 13px; padding: 2px 6px;">
+                                                ✕
+                                            </button>
+                                        </td>
+                                    </tr>
                                 }
-                            </span>
-                            <span class="tickets-queue-meta">
-                                @DoctorName(item.DoctorID) &bull; @item.ServiceDate.ToString("dd MMM yyyy hh:mm tt")
-                            </span>
-                        </div>
-                        <div class="tickets-queue-badges">
-                            <span class="tickets-queue-fee">
-                                @item.Quantity × @I18n.FormatCurrency(item.Rate) = @I18n.FormatCurrency(item.Total)
-                            </span>
-                        </div>
-                        <div class="tickets-queue-actions">
-                            <button class="icon-btn danger" @onclick="() => DeleteServiceAsync(item)" title="@I18n.T("Delete")">✕</button>
-                        </div>
-                    </div>
-                }
+
+                                <tr class="total-row">
+                                    <td colspan="6" style="text-align: right; font-size: 12px; text-transform: uppercase;">
+                                        @I18n.T("Sub Total Charges"):
+                                    </td>
+                                    <td style="text-align: center; font-size: 12px;">
+                                        @patientServices.Sum(x => x.Quantity)
+                                    </td>
+                                    <td style="text-align: right; font-size: 13px; color: #0284c7;">
+                                        @I18n.FormatCurrency(patientServices.Sum(x => x.Total))
+                                    </td>
+                                    <td colspan="2"></td>
+                                </tr>
+                            }
+                        }
+                        else
+                        {
+                            @if (recentHospitalServices.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="10" style="text-align: center; padding: 36px 12px; color: #64748b;">
+                                        <div style="font-size: 28px; margin-bottom: 6px;">🩺</div>
+                                        <b style="font-size: 13px;">@I18n.T("No recent inpatient services found.")</b>
+                                        <div style="font-size: 11.5px; color: #94a3b8; margin-top: 3px;">
+                                            @I18n.T("Search or select an admitted patient above to begin recording service charges.")
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                            else
+                            {
+                                var sl = 1;
+                                foreach (var item in recentHospitalServices)
+                                {
+                                    var currentItem = item;
+                                    var s = availableServices.FirstOrDefault(x => x.ID == currentItem.ServiceID);
+                                    var catName = s?.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn) ? cn : "Clinical Service";
+
+                                    <tr>
+                                        <td style="font-weight: 700; color: #64748b;">@(sl++)</td>
+                                        <td style="font-size: 11.5px; color: #334155; white-space: nowrap;">
+                                            @currentItem.ServiceDate.ToString("dd MMM hh:mm tt")
+                                        </td>
+                                        <td>
+                                            <span style="font-weight: 700; color: #0f172a;">@currentItem.ServiceName</span>
+                                            <small style="display: block; font-size: 10.5px; color: #0284c7;">Reg #@currentItem.RegNo</small>
+                                        </td>
+                                        <td>
+                                            <span class="pill" style="font-size: 10px; background: #f1f5f9; color: #475569; padding: 2px 6px;">
+                                                @catName
+                                            </span>
+                                        </td>
+                                        <td style="font-size: 11.5px; color: #475569;">
+                                            @DoctorName(currentItem.DoctorID)
+                                        </td>
+                                        <td style="text-align: right; font-weight: 600; color: #334155;">
+                                            @I18n.FormatCurrency(currentItem.Rate)
+                                        </td>
+                                        <td style="text-align: center; font-weight: 700;">
+                                            @currentItem.Quantity
+                                        </td>
+                                        <td style="text-align: right; font-weight: 800; color: #0284c7;">
+                                            @I18n.FormatCurrency(currentItem.Total)
+                                        </td>
+                                        <td style="font-size: 11px; color: #64748b;">
+                                            @(string.IsNullOrWhiteSpace(currentItem.Remarks) ? "--" : currentItem.Remarks)
+                                        </td>
+                                        <td style="text-align: center;">
+                                            <button type="button" class="appt-clear-link" @onclick="() => LoadAdmissionByRegNo(currentItem.RegNo)" title="@I18n.T("Select patient")">
+                                                @I18n.T("Select")
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            }
+                        }
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
 </div>
 
-@if (showPrescriptionModal && selectedAdmission != null)
-{
-    <div class="modal-backdrop" @onclick="ClosePrescriptionModal">
-        <div class="doc-preview-modal" @onclick:stopPropagation="true">
-            <div class="doc-preview-modal-header">
-                <div>
-                    <h3 style="font-size:16px; font-weight:800; margin:0; color:#0f172a;">
-                        @I18n.T("Inpatient Clinical Medication & Treatment Chart", "Inpatient Clinical Medication & Treatment Chart")
-                    </h3>
-                    <small style="color:#64748b;">Reg #@selectedAdmission.RegNo &bull; @patientName</small>
+<!-- =========================================================================
+     Hidden Printable Service Voucher for Inpatients
+     ========================================================================= -->
+<div id="ipd-service-voucher-print" style="display:none;">
+    @if (selectedAdmission != null)
+    {
+        <div style="padding:24px; font-family:'Segoe UI', sans-serif; color:#0f172a; max-width:780px; margin:0 auto;">
+            <div style="text-align:center; border-bottom:2px solid #0284c7; padding-bottom:10px; margin-bottom:14px;">
+                <h2 style="margin:0; font-size:20px; font-weight:900; color:#0284c7;">@Branding.HospitalName</h2>
+                <div style="font-size:11px; color:#475569;">@Branding.Tagline &bull; @Branding.Address &bull; Hotline: @Branding.Hotline</div>
+                <div style="margin-top:8px; font-size:14px; font-weight:800; text-transform:uppercase; letter-spacing:1px;">
+                    IPD PATIENT SERVICES & CLINICAL VOUCHER
                 </div>
-                <button type="button" class="icon-btn" @onclick="ClosePrescriptionModal">✕</button>
             </div>
 
-            <div class="doc-preview-modal-body" id="ipd-prescription-print-modal">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; margin-bottom:14px; background:#f8fafc; padding:10px; border-radius:6px; border:1px solid #e2e8f0;">
+                <div><strong>Patient ID:</strong> #@selectedAdmission.PatientID</div>
+                <div><strong>Reg No:</strong> @selectedAdmission.RegNo</div>
+                <div><strong>Patient Name:</strong> @patientName</div>
+                <div><strong>Age / Sex:</strong> @selectedAdmission.Age / @(patientSex ?? "—")</div>
+                <div><strong>Allocated Bed:</strong> @BedName(selectedAdmission.BedCabinID)</div>
+                <div><strong>Department:</strong> @DepartmentName(selectedAdmission.Department)</div>
+                <div><strong>Consultant:</strong> @DoctorName(selectedAdmission.Consultant)</div>
+                <div><strong>Admission Date:</strong> @(selectedAdmission.AdmissionDate?.ToString("dd MMM yyyy hh:mm tt") ?? "—")</div>
+            </div>
+
+            <table style="width:100%; border-collapse:collapse; font-size:11px; margin-bottom:14px;">
+                <thead>
+                    <tr style="background:#0284c7; color:#fff;">
+                        <th style="padding:6px; text-align:left;">#SL</th>
+                        <th style="padding:6px; text-align:left;">Date & Time</th>
+                        <th style="padding:6px; text-align:left;">Service / Procedure</th>
+                        <th style="padding:6px; text-align:left;">Doctor</th>
+                        <th style="padding:6px; text-align:right;">Rate</th>
+                        <th style="padding:6px; text-align:center;">Qty</th>
+                        <th style="padding:6px; text-align:right;">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var psl = 1; }
+                    @foreach (var s in patientServices)
+                    {
+                        <tr style="border-bottom:1px solid #e2e8f0;">
+                            <td style="padding:6px;">@(psl++)</td>
+                            <td style="padding:6px;">@s.ServiceDate.ToString("dd MMM, hh:mm tt")</td>
+                            <td style="padding:6px; font-weight:700;">@s.ServiceName</td>
+                            <td style="padding:6px;">@DoctorName(s.DoctorID)</td>
+                            <td style="padding:6px; text-align:right;">৳@s.Rate.ToString("N0")</td>
+                            <td style="padding:6px; text-align:center;">@s.Quantity</td>
+                            <td style="padding:6px; text-align:right; font-weight:700;">৳@s.Total.ToString("N0")</td>
+                        </tr>
+                    }
+                    <tr style="background:#f1f5f9; font-weight:800; font-size:12px;">
+                        <td colspan="6" style="padding:8px; text-align:right;">TOTAL SERVICES CHARGE:</td>
+                        <td style="padding:8px; text-align:right; color:#0284c7;">৳@patientServices.Sum(x => x.Total).ToString("N0")</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div style="display:flex; justify-content:space-between; margin-top:36px; padding-top:12px; font-size:11px; color:#475569; border-top:1px dashed #cbd5e1;">
+                <div>Prepared By: Inpatient Nurse / Staff</div>
+                <div>Authorized By: Hospital Accounts</div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- =========================================================================
+     5. Slide-Over Services Register Drawer (F2 / Quick Access)
+     ========================================================================= -->
+<div class="appt-drawer-backdrop @(isDrawerOpen ? "show" : "")" @onclick="ToggleDrawer"></div>
+<div class="appt-drawer-panel @(isDrawerOpen ? "show" : "")">
+    <div class="appt-drawer-header">
+        <div class="appt-drawer-title-wrap">
+            <span>📋</span>
+            <h3 class="appt-drawer-title">@I18n.T("Today's IPD Services Register", "আজকের আইপিডি সার্ভিস রেজিস্টার")</h3>
+        </div>
+        <button type="button" class="appt-drawer-close" @onclick="ToggleDrawer" title="@I18n.T("Close")">✕</button>
+    </div>
+
+    <div class="appt-drawer-body">
+        <div style="display: flex; gap: 8px;">
+            <input type="text" class="classic-input"
+                   placeholder="@I18n.T("Filter by Reg #, Service name...")"
+                   @bind="drawerSearchText"
+                   @bind:event="oninput"
+                   style="height: 30px !important; font-size: 12px !important;" />
+        </div>
+
+        <div style="font-size: 11px; font-weight: 700; color: #64748b;">
+            @I18n.T("Showing"): @FilteredDrawerServices.Count() @I18n.T("Services logged today")
+        </div>
+
+        @foreach (var sItem in FilteredDrawerServices)
+        {
+            var pReg = patientRegistrationsByReg.GetValueOrDefault(sItem.RegNo);
+            var pName = pReg?.Name ?? "Inpatient";
+
+            <div class="drawer-service-card" @onclick="() => SelectServiceCard(sItem)">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 800; color: #0284c7; font-size: 12px;">#@sItem.RegNo</span>
+                    <span style="font-weight: 900; color: #0f172a; font-size: 12.5px;">@I18n.FormatCurrency(sItem.Total)</span>
+                </div>
+                <div style="font-weight: 700; color: #1e293b; font-size: 12px;">
+                    @sItem.ServiceName
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #64748b;">
+                    <span>@pName</span>
+                    <span>@sItem.ServiceDate.ToString("hh:mm tt") &bull; @sItem.Quantity × ৳@sItem.Rate.ToString("N0")</span>
+                </div>
+            </div>
+        }
+
+        @if (!FilteredDrawerServices.Any())
+        {
+            <div style="padding: 24px; text-align: center; color: #64748b; font-size: 12px;">
+                @I18n.T("No services match the search filter.")
+            </div>
+        }
+    </div>
+</div>
+
+<!-- =========================================================================
+     6. Prescription / Medication Chart Print Preview Modal
+     ========================================================================= -->
+@if (showPrescriptionModal && selectedAdmission != null)
+{
+    <div class="modal-backdrop" @onclick="ClosePrescriptionModal" style="position: fixed; inset: 0; background: rgba(15,23,42,0.6); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 16px;">
+        <div class="doc-preview-modal" @onclick:stopPropagation="true">
+            <div class="doc-preview-modal-header" style="padding: 12px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h3 style="font-size:15px; font-weight:800; margin:0; color:#0f172a;">
+                        @I18n.T("Inpatient Clinical Medication & Treatment Chart", "আইপিডি মেডিকেশন ও ট্রিটমেন্ট চার্ট")
+                    </h3>
+                    <small style="color:#64748b; font-size: 11.5px;">Reg #@selectedAdmission.RegNo &bull; @patientName</small>
+                </div>
+                <button type="button" class="appt-drawer-close" @onclick="ClosePrescriptionModal">✕</button>
+            </div>
+
+            <div class="doc-preview-modal-body" id="ipd-prescription-print-modal" style="padding: 16px; overflow-y: auto; max-height: calc(88vh - 110px);">
                 <PrescriptionA4PrintSheet
                     Title="@I18n.T("INPATIENT CLINICAL MEDICATION & TREATMENT CHART", "INPATIENT CLINICAL MEDICATION & TREATMENT CHART")"
                     DocNo="@($"RX-IPD-{selectedAdmission.RegNo}")"
@@ -275,12 +1639,12 @@
                     MedicationItems="@prescriptionMedications" />
             </div>
 
-            <div class="doc-preview-modal-footer">
-                <button type="button" class="btn btn-secondary" @onclick="ClosePrescriptionModal">
+            <div class="doc-preview-modal-footer" style="padding: 10px 16px; background: #f8fafc; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 8px;">
+                <button type="button" class="btn btn-secondary appt-btn" @onclick="ClosePrescriptionModal">
                     @I18n.T("Close")
                 </button>
-                <button type="button" class="btn btn-primary" @onclick="PrintPrescriptionModalAsync">
-                    🖨️ @I18n.T("Print A4 Prescription", "Print A4 Prescription")
+                <button type="button" class="btn btn-primary appt-btn" @onclick="PrintPrescriptionModalAsync">
+                    🖨️ @I18n.T("Print A4 Prescription", "প্রিন্ট করুন")
                 </button>
             </div>
         </div>
@@ -288,68 +1652,206 @@
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "regNo")]
+    public string? QueryRegNo { get; set; }
+
     private IpdPatientServiceItem serviceEntry = NewServiceItem();
     private List<IpdPatientServiceItem> patientServices = [];
+    private List<IpdPatientServiceItem> todayServices = [];
+    private List<IpdPatientServiceItem> recentHospitalServices = [];
     private List<Service> availableServices = [];
+    private List<ServiceCategory> serviceCategories = [];
+    private Dictionary<int, string> serviceCategoryNames = [];
     private List<BedCabin> beds = [];
+    private List<BedCategory> bedCategories = [];
     private List<DoctorsProfile> doctors = [];
     private List<Department> departments = [];
+    private List<PatientAdmission> activeAdmissions = [];
+    private List<PatientAdmission> suggestedAdmissions = [];
+    private Dictionary<string, Registration?> patientRegistrationsByReg = new(StringComparer.OrdinalIgnoreCase);
 
     private PatientAdmission? selectedAdmission;
-    private string searchQuery = "";
+    private Registration? selectedPatient;
+    private string patientSearchText = "";
+    private bool showPatientSuggestions;
     private string patientName = "";
     private string? patientSex;
     private string? patientBloodGroup;
     private string? patientContact;
+    private string selectedServiceCategoryName = "Clinical Service";
+    private string serviceOrderType = "Routine Inpatient Care";
 
+    // Searchable Service Combobox
+    private string serviceSearchQuery = "";
+    private bool showServiceSuggestions = false;
+    private int highlightedServiceIndex = 0;
+
+    // Table Category & Search Filters
+    private string tableCategoryFilter = "all";
+    private string tableSearchQuery = "";
+
+    // Financial running ledger fields
+    private int lengthOfStayDays = 1;
+    private decimal estimatedBedCharges;
+    private decimal clinicalServicesCharges;
+    private decimal totalAdvancePaid;
+    private decimal currentBalanceDue;
+
+    // KPI Banner Metrics
+    private decimal todayServicesTotal;
+    private int totalServicesCount;
+    private int activeAdmissionsCount;
+    private decimal totalHospitalServicesValue;
+
+    // Drawer & Modals
+    private bool isDrawerOpen;
+    private string drawerSearchText = "";
+    private bool isSaving;
     private bool showPrescriptionModal;
     private List<PrescriptionA4PrintSheet.PrescriptionMedItem> prescriptionMedications = [];
     private List<string> prescriptionAdvisedTests = [];
 
     private string message = "";
     private string messageClass = "success";
+    private string? loadedQueryRegNo;
 
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        beds = await db.BedCabins.AsNoTracking().ToListAsync();
-        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
-        departments = await db.Departments.AsNoTracking().ToListAsync();
-        availableServices = await db.Services.AsNoTracking().OrderBy(x => x.Name).Take(200).ToListAsync();
+        await LoadDataAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrWhiteSpace(QueryRegNo) || string.Equals(QueryRegNo, loadedQueryRegNo, StringComparison.OrdinalIgnoreCase)) return;
+        loadedQueryRegNo = QueryRegNo;
+        patientSearchText = QueryRegNo.Trim();
+        await SearchAdmissionAsync();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
-    private async Task HandleSearchKeyDown(KeyboardEventArgs e)
+    private async Task LoadDataAsync()
     {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(searchQuery))
+        await using var db = await DbFactory.CreateDbContextAsync();
+        beds = await db.BedCabins.AsNoTracking().ToListAsync();
+        bedCategories = await db.BedCategories.AsNoTracking().ToListAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        departments = await db.Departments.AsNoTracking().ToListAsync();
+        serviceCategories = await db.ServiceCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        serviceCategoryNames = serviceCategories.ToDictionary(x => x.ID, x => x.Name);
+        availableServices = await db.Services.AsNoTracking().Where(x => x.Name != null && x.Name != "").OrderBy(x => x.Name).ToListAsync();
+
+        activeAdmissions = await db.PatientAdmissions.AsNoTracking()
+            .Where(x => x.ReleaseDate == null || x.ReleaseDate > DateTime.Today.AddDays(-3))
+            .OrderByDescending(x => x.AdmissionDate)
+            .Take(150)
+            .ToListAsync();
+
+        var patientIds = activeAdmissions.Where(x => x.PatientID != null).Select(x => x.PatientID!).Distinct().ToArray();
+        var patientMap = patientIds.Length == 0 ? new Dictionary<string, Registration>(StringComparer.OrdinalIgnoreCase)
+            : await db.Registrations.AsNoTracking().Where(x => patientIds.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x, StringComparer.OrdinalIgnoreCase);
+
+        patientRegistrationsByReg = activeAdmissions.ToDictionary(
+            x => x.RegNo,
+            x => x.PatientID != null && patientMap.TryGetValue(x.PatientID, out var r) ? r : null,
+            StringComparer.OrdinalIgnoreCase);
+
+        suggestedAdmissions = activeAdmissions.Take(25).ToList();
+
+        var today = DateTime.Today;
+        todayServices = await db.IpdPatientServiceItems.AsNoTracking()
+            .Where(x => x.ServiceDate >= today)
+            .OrderByDescending(x => x.ServiceDate)
+            .ToListAsync();
+
+        todayServicesTotal = todayServices.Sum(x => x.Total);
+        totalServicesCount = await db.IpdPatientServiceItems.CountAsync();
+        activeAdmissionsCount = activeAdmissions.Count(x => x.ReleaseDate == null);
+
+        recentHospitalServices = await db.IpdPatientServiceItems.AsNoTracking()
+            .OrderByDescending(x => x.ServiceDate)
+            .Take(30)
+            .ToListAsync();
+
+        totalHospitalServicesValue = recentHospitalServices.Sum(x => x.Total);
+    }
+
+    private void HandlePatientSearchInputAsync(ChangeEventArgs e)
+    {
+        patientSearchText = e.Value?.ToString() ?? "";
+        UpdatePatientSuggestions();
+    }
+
+    private void ShowPatientSuggestions()
+    {
+        showPatientSuggestions = true;
+        UpdatePatientSuggestions();
+    }
+
+    private void HidePatientSuggestions()
+    {
+        showPatientSuggestions = false;
+    }
+
+    private void UpdatePatientSuggestions()
+    {
+        var term = patientSearchText.Trim();
+        if (string.IsNullOrWhiteSpace(term))
         {
-            await SearchAdmissionAsync();
+            suggestedAdmissions = activeAdmissions.Take(25).ToList();
         }
+        else
+        {
+            suggestedAdmissions = activeAdmissions
+                .Where(a => (a.RegNo?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                         || (a.PatientID?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                         || (patientRegistrationsByReg.TryGetValue(a.RegNo, out var reg) && reg != null && reg.Name.Contains(term, StringComparison.OrdinalIgnoreCase))
+                         || (patientRegistrationsByReg.TryGetValue(a.RegNo, out var r2) && r2 != null && !string.IsNullOrWhiteSpace(r2.Contact) && r2.Contact.Contains(term))
+                         || BedName(a.BedCabinID).Contains(term, StringComparison.OrdinalIgnoreCase))
+                .Take(25)
+                .ToList();
+        }
+        showPatientSuggestions = true;
+    }
+
+    private async Task HandlePatientSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            if (suggestedAdmissions.Count == 1)
+            {
+                await SelectAdmissionSuggestion(suggestedAdmissions[0]);
+            }
+            else if (!string.IsNullOrWhiteSpace(patientSearchText))
+            {
+                await SearchAdmissionAsync();
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            showPatientSuggestions = false;
+        }
+    }
+
+    private async Task SelectAdmissionSuggestion(PatientAdmission adm)
+    {
+        showPatientSuggestions = false;
+        await SelectAdmissionAsync(adm);
     }
 
     private async Task SearchAdmissionAsync()
     {
-        if (string.IsNullOrWhiteSpace(searchQuery))
+        if (string.IsNullOrWhiteSpace(patientSearchText))
         {
             Fail(I18n.IsBangla ? "আইপিডি রেজি. নং বা পেশেন্ট আইডি লিখুন।" : "Enter an IPD Reg No or Patient ID to search.");
             return;
         }
 
-        var raw = searchQuery.Trim();
+        var raw = patientSearchText.Trim();
 
-        // 1. Check if it is an IPD QR payload or Wristband payload
-        if (raw.StartsWith("HPM:IPD|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:WB|", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = raw.Split('|');
-            var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
-            if (regPart != null)
-            {
-                raw = regPart.Substring(4).Trim();
-            }
-        }
-        else if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
+        // Check if barcode or wristband payload
+        if (raw.StartsWith("HPM:IPD|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:WB|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
         {
             var parts = raw.Split('|');
             var regPart = parts.FirstOrDefault(p => p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase));
@@ -369,64 +1871,71 @@
             return;
         }
 
+        await SelectAdmissionAsync(adm);
+        message = "";
+    }
+
+    private async Task SelectAdmissionAsync(PatientAdmission adm)
+    {
         selectedAdmission = adm;
         serviceEntry.RegNo = adm.RegNo;
         serviceEntry.PatientID = adm.PatientID;
 
-        var patient = adm.PatientID == null ? null : await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == adm.PatientID);
-        patientName = patient?.Name ?? "—";
-        patientSex = patient?.Sex;
-        patientBloodGroup = patient?.BloodGroup;
-        patientContact = patient?.Contact;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        selectedPatient = adm.PatientID == null ? null : await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == adm.PatientID);
+        patientName = selectedPatient?.Name ?? "—";
+        patientSex = selectedPatient?.Sex;
+        patientBloodGroup = selectedPatient?.BloodGroup;
+        patientContact = selectedPatient?.Contact;
+
+        if (adm.Consultant != null)
+        {
+            serviceEntry.DoctorID = adm.Consultant;
+        }
+
+        // Calculate Length of Stay and Bed Charges
+        var admDate = adm.AdmissionDate ?? adm.TransDate ?? DateTime.Today;
+        lengthOfStayDays = Math.Max(1, (int)Math.Ceiling((DateTime.Today - admDate.Date).TotalDays));
+
+        var bed = beds.FirstOrDefault(x => x.ID == adm.BedCabinID);
+        var bedCat = bed == null ? null : bedCategories.FirstOrDefault(x => x.ID == bed.CategoryID);
+        var bedRate = bedCat?.Rate ?? 0;
+        estimatedBedCharges = bedRate * lengthOfStayDays;
 
         await LoadPatientServicesAsync();
-        message = "";
+        await RecalculateLedgerAsync(db);
+    }
+
+    private async Task RecalculateLedgerAsync(HpmDbContext db)
+    {
+        if (selectedAdmission == null) return;
+        var medicineAndOtherCharges = await db.PatientTransactions.AsNoTracking()
+            .Where(x => x.RegNo == selectedAdmission.RegNo)
+            .SumAsync(x => (decimal?)(x.ServiceRate * x.Quantity)) ?? 0;
+        clinicalServicesCharges = patientServices.Sum(x => x.Total) + medicineAndOtherCharges;
+        totalAdvancePaid = await db.IpdMoneyReceipts.AsNoTracking()
+            .Where(x => x.RegNo == selectedAdmission.RegNo && x.Against == "Advance")
+            .SumAsync(x => (decimal?)x.Amount) ?? 0;
+
+        currentBalanceDue = Math.Max(0, (estimatedBedCharges + clinicalServicesCharges) - totalAdvancePaid);
     }
 
     private async Task LoadPatientServicesAsync()
     {
         if (selectedAdmission == null) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        
+
         patientServices = await db.IpdPatientServiceItems.AsNoTracking()
             .Where(x => x.RegNo == selectedAdmission.RegNo)
             .OrderByDescending(x => x.ServiceDate)
             .ToListAsync();
 
-        var legacyTransactions = await db.PatientTransactions.AsNoTracking()
-            .Where(x => x.RegNo == selectedAdmission.RegNo)
-            .ToListAsync();
-
-        var allServices = await db.Services.AsNoTracking().ToListAsync();
-
         prescriptionMedications.Clear();
         prescriptionAdvisedTests.Clear();
 
-        // 1. Process legacy transactions
-        foreach (var tx in legacyTransactions)
-        {
-            var s = allServices.FirstOrDefault(x => x.ID == tx.ServiceID);
-            if (IsMedication(s))
-            {
-                prescriptionMedications.Add(new PrescriptionA4PrintSheet.PrescriptionMedItem
-                {
-                    MedicineName = s?.Name ?? $"Medicine #{tx.ServiceID}",
-                    Quantity = tx.Quantity,
-                    Dosage = "Daily IV / Routine Dose",
-                    Duration = "Bed Stay",
-                    Instruction = "Administered by Nursing Staff"
-                });
-            }
-            else if (s?.InvestigationModuleID != null || (s?.CategoryID != null && s.CategoryID == 2))
-            {
-                if (s?.Name != null && !prescriptionAdvisedTests.Contains(s.Name))
-                {
-                    prescriptionAdvisedTests.Add(s.Name);
-                }
-            }
-        }
+        var allServices = availableServices;
 
-        // 2. Process new service items
+        // Populate medication and tests for medication chart
         foreach (var sItem in patientServices)
         {
             var s = allServices.FirstOrDefault(x => x.ID == sItem.ServiceID);
@@ -441,7 +1950,367 @@
                     Instruction = sItem.Remarks ?? "As instructed"
                 });
             }
+            else if (s?.InvestigationModuleID != null || (s?.CategoryID != null && s.CategoryID == 2))
+            {
+                if (!string.IsNullOrWhiteSpace(sItem.ServiceName) && !prescriptionAdvisedTests.Contains(sItem.ServiceName))
+                {
+                    prescriptionAdvisedTests.Add(sItem.ServiceName);
+                }
+            }
         }
+    }
+
+    private void ClearSelectedPatient()
+    {
+        selectedAdmission = null;
+        selectedPatient = null;
+        patientSearchText = "";
+        patientName = "";
+        showPatientSuggestions = false;
+        patientServices.Clear();
+        serviceEntry = NewServiceItem();
+        serviceSearchQuery = "";
+        showServiceSuggestions = false;
+        prescriptionMedications.Clear();
+        prescriptionAdvisedTests.Clear();
+        estimatedBedCharges = 0;
+        clinicalServicesCharges = 0;
+        totalAdvancePaid = 0;
+        currentBalanceDue = 0;
+    }
+
+    private void ServiceSelected(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var sId) && sId > 0)
+        {
+            var s = availableServices.FirstOrDefault(x => x.ID == sId);
+            if (s != null)
+            {
+                serviceEntry.ServiceID = s.ID;
+                serviceEntry.ServiceName = s.Name ?? string.Empty;
+                serviceEntry.Rate = s.SaleRate ?? 0;
+                if (s.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn))
+                {
+                    selectedServiceCategoryName = cn;
+                }
+                else
+                {
+                    selectedServiceCategoryName = "Clinical Service";
+                }
+                RecalculateTotal();
+            }
+        }
+    }
+
+    private void RecalculateTotal()
+    {
+        serviceEntry.Total = serviceEntry.Rate * Math.Max(1, serviceEntry.Quantity);
+    }
+
+    private void SetNow() => serviceEntry.ServiceDate = DateTime.Now;
+    private void SetMorning() => serviceEntry.ServiceDate = DateTime.Today.AddHours(8);
+    private void SetEvening() => serviceEntry.ServiceDate = DateTime.Today.AddHours(18);
+
+    private void OnServiceDateChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var dt))
+        {
+            serviceEntry.ServiceDate = dt;
+        }
+    }
+
+    private async Task AddServiceAsync()
+    {
+        if (selectedAdmission == null)
+        {
+            Fail(I18n.IsBangla ? "প্রথমে একজন ভর্তি রোগী নির্বাচন করুন।" : "Please select an admitted patient first.");
+            return;
+        }
+
+        if (serviceEntry.ServiceID == 0)
+        {
+            Fail(I18n.IsBangla ? "একটি সঠিক সেবা নির্বাচন করুন।" : "Select a valid service to add.");
+            return;
+        }
+
+        if (serviceEntry.Rate < 0 || serviceEntry.Quantity <= 0)
+        {
+            Fail(I18n.IsBangla ? "সঠিক রেট ও পরিমাণ লিখুন।" : "Enter valid rate and quantity.");
+            return;
+        }
+
+        isSaving = true;
+        try
+        {
+            var userId = await CurrentUserIdAsync();
+            serviceEntry.RegNo = selectedAdmission.RegNo;
+            serviceEntry.PatientID = selectedAdmission.PatientID;
+            serviceEntry.Total = serviceEntry.Rate * serviceEntry.Quantity;
+            serviceEntry.EnteredBy = userId;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.IpdPatientServiceItems.Add(serviceEntry);
+            await db.SaveChangesAsync();
+
+            Success(I18n.IsBangla ? $"সেবা '{serviceEntry.ServiceName}' সফলভাবে যোগ করা হয়েছে।" : $"Service '{serviceEntry.ServiceName}' added successfully.");
+
+            var currentDoc = serviceEntry.DoctorID;
+            serviceEntry = NewServiceItem();
+            serviceEntry.RegNo = selectedAdmission.RegNo;
+            serviceEntry.PatientID = selectedAdmission.PatientID;
+            serviceEntry.DoctorID = currentDoc;
+
+            await LoadDataAsync();
+            await LoadPatientServicesAsync();
+            await RecalculateLedgerAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? $"সেবা যোগ করা যায়নি: {ex.Message}" : $"Could not add service: {ex.Message}");
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task DeleteServiceAsync(IpdPatientServiceItem item)
+    {
+        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে '{item.ServiceName}' সেবাটি মুছে ফেলতে চান?" : $"Remove service '{item.ServiceName}'?";
+        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.IpdPatientServiceItems.FindAsync(item.ID);
+        if (entity == null) return;
+
+        db.IpdPatientServiceItems.Remove(entity);
+        await db.SaveChangesAsync();
+
+        Success(I18n.IsBangla ? "সেবা সফলভাবে মুছে ফেলা হয়েছে।" : "Service removed successfully.");
+        await LoadDataAsync();
+        await LoadPatientServicesAsync();
+        await RecalculateLedgerAsync(db);
+    }
+
+    private async Task LoadAdmissionByRegNo(string regNo)
+    {
+        patientSearchText = regNo;
+        await SearchAdmissionAsync();
+    }
+
+    private async Task SelectServiceCard(IpdPatientServiceItem item)
+    {
+        isDrawerOpen = false;
+        patientSearchText = item.RegNo;
+        await SearchAdmissionAsync();
+    }
+
+    private void ToggleDrawer() => isDrawerOpen = !isDrawerOpen;
+
+    private IEnumerable<IpdPatientServiceItem> FilteredDrawerServices
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(drawerSearchText))
+                return todayServices;
+
+            var term = drawerSearchText.Trim();
+            return todayServices.Where(s =>
+                s.RegNo.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                s.ServiceName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (s.Remarks != null && s.Remarks.Contains(term, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    private async Task HandleFormKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "F2")
+        {
+            ToggleDrawer();
+        }
+        else if (e.CtrlKey && e.Key == "Enter")
+        {
+            if (!isSaving && selectedAdmission != null && serviceEntry.ServiceID > 0)
+            {
+                await AddServiceAsync();
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            if (isDrawerOpen) isDrawerOpen = false;
+            if (showPatientSuggestions) showPatientSuggestions = false;
+        }
+    }
+
+    private void Reset()
+    {
+        ClearSelectedPatient();
+        message = "";
+    }
+
+
+    // Service Autocomplete & Filter
+    private List<Service> filteredServicesList
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(serviceSearchQuery))
+                return availableServices.Take(30).ToList();
+
+            var query = serviceSearchQuery.Trim();
+            return availableServices
+                .Where(s => (s.Name != null && s.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                         || (s.DiagnosticType != null && s.DiagnosticType.Contains(query, StringComparison.OrdinalIgnoreCase))
+                         || s.ID.ToString().Contains(query))
+                .Take(40)
+                .ToList();
+        }
+    }
+
+    private void HandleServiceSearchInput(ChangeEventArgs e)
+    {
+        serviceSearchQuery = e.Value?.ToString() ?? "";
+        showServiceSuggestions = true;
+        highlightedServiceIndex = 0;
+    }
+
+    private void ShowServiceSuggestions()
+    {
+        showServiceSuggestions = true;
+        highlightedServiceIndex = 0;
+    }
+
+    private void HandleServiceSearchKeyDown(KeyboardEventArgs e)
+    {
+        var list = filteredServicesList;
+        if (e.Key == "ArrowDown")
+        {
+            if (list.Count > 0)
+                highlightedServiceIndex = Math.Min(highlightedServiceIndex + 1, list.Count - 1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            if (list.Count > 0)
+                highlightedServiceIndex = Math.Max(highlightedServiceIndex - 1, 0);
+        }
+        else if (e.Key == "Enter")
+        {
+            if (showServiceSuggestions && list.Count > 0 && highlightedServiceIndex >= 0 && highlightedServiceIndex < list.Count)
+            {
+                SelectService(list[highlightedServiceIndex]);
+            }
+        }
+        else if (e.Key == "Escape")
+        {
+            showServiceSuggestions = false;
+        }
+    }
+
+    private void SelectService(Service s)
+    {
+        serviceEntry.ServiceID = s.ID;
+        serviceEntry.ServiceName = s.Name ?? string.Empty;
+        serviceEntry.Rate = s.SaleRate ?? 0;
+        serviceSearchQuery = $"{s.Name} ({I18n.FormatCurrency(s.SaleRate ?? 0)})";
+        showServiceSuggestions = false;
+
+        if (s.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn))
+        {
+            selectedServiceCategoryName = cn;
+        }
+        else
+        {
+            selectedServiceCategoryName = "Clinical Service";
+        }
+
+        RecalculateTotal();
+    }
+
+    private void QuickSelectService(string matchKeyword, string defaultCategory, decimal fallbackRate)
+    {
+        var match = availableServices.FirstOrDefault(s => s.Name != null && s.Name.Contains(matchKeyword, StringComparison.OrdinalIgnoreCase));
+        if (match != null)
+        {
+            SelectService(match);
+        }
+        else
+        {
+            serviceEntry.ServiceID = 99999;
+            serviceEntry.ServiceName = matchKeyword;
+            serviceEntry.Rate = fallbackRate;
+            selectedServiceCategoryName = defaultCategory;
+            serviceSearchQuery = $"{matchKeyword} ({I18n.FormatCurrency(fallbackRate)})";
+            RecalculateTotal();
+        }
+    }
+
+    private void ClearSelectedService()
+    {
+        serviceEntry.ServiceID = 0;
+        serviceEntry.ServiceName = "";
+        serviceEntry.Rate = 0;
+        serviceSearchQuery = "";
+        showServiceSuggestions = false;
+        RecalculateTotal();
+    }
+
+    private void AdjustQty(int delta)
+    {
+        serviceEntry.Quantity = Math.Max(1, serviceEntry.Quantity + delta);
+        RecalculateTotal();
+    }
+
+    private void SetShift(string shiftName)
+    {
+        if (string.IsNullOrWhiteSpace(serviceEntry.Remarks))
+            serviceEntry.Remarks = shiftName;
+        else if (!serviceEntry.Remarks.Contains(shiftName))
+            serviceEntry.Remarks = $"{shiftName} - {serviceEntry.Remarks}";
+    }
+
+    private async Task OnAdmittedDropdownSelected(ChangeEventArgs e)
+    {
+        var regNo = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(regNo))
+        {
+            var adm = activeAdmissions.FirstOrDefault(x => x.RegNo == regNo);
+            if (adm != null)
+            {
+                await SelectAdmissionAsync(adm);
+            }
+        }
+    }
+
+    private IEnumerable<IpdPatientServiceItem> DisplayedPatientServices
+    {
+        get
+        {
+            var list = patientServices.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(tableCategoryFilter) && tableCategoryFilter != "all")
+            {
+                list = list.Where(x =>
+                {
+                    var s = availableServices.FirstOrDefault(s => s.ID == x.ServiceID);
+                    var cat = s?.CategoryID is int cId && serviceCategoryNames.TryGetValue(cId, out var cn) ? cn : "Clinical Service";
+                    return cat.Contains(tableCategoryFilter, StringComparison.OrdinalIgnoreCase);
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(tableSearchQuery))
+            {
+                var q = tableSearchQuery.Trim();
+                list = list.Where(x => x.ServiceName.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                    || (x.Remarks != null && x.Remarks.Contains(q, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            return list.OrderByDescending(x => x.ServiceDate);
+        }
+    }
+
+    private async Task PrintServicesSlipAsync()
+    {
+        if (selectedAdmission == null) return;
+        await JS.InvokeVoidAsync("hpm.printElement", "ipd-service-voucher-print", $"IPD Services - {patientName} (Reg #{selectedAdmission.RegNo})");
     }
 
     private static bool IsMedication(Service? s)
@@ -465,93 +2334,10 @@
         await JS.InvokeVoidAsync("hpm.printElement", "ipd-prescription-print-modal", $"Prescription - {patientName} (Reg #{selectedAdmission?.RegNo})");
     }
 
-    private void ServiceSelected(ChangeEventArgs e)
+    private async Task<int> CurrentUserIdAsync()
     {
-        if (int.TryParse(e.Value?.ToString(), out var sId) && sId > 0)
-        {
-            var s = availableServices.FirstOrDefault(x => x.ID == sId);
-            if (s != null)
-            {
-                serviceEntry.ServiceID = s.ID;
-                serviceEntry.ServiceName = s.Name ?? string.Empty;
-                serviceEntry.Rate = s.SaleRate ?? 0;
-                RecalculateTotal();
-            }
-        }
-    }
-
-    private void RecalculateTotal()
-    {
-        serviceEntry.Total = serviceEntry.Rate * Math.Max(1, serviceEntry.Quantity);
-    }
-
-    private async Task AddServiceAsync()
-    {
-        if (selectedAdmission == null || serviceEntry.ServiceID == 0)
-        {
-            Fail(I18n.IsBangla ? "একটি সঠিক সেবা নির্বাচন করুন।" : "Select a valid service to add.");
-            return;
-        }
-
-        if (serviceEntry.Rate < 0 || serviceEntry.Quantity <= 0)
-        {
-            Fail(I18n.IsBangla ? "সঠিক রেট ও পরিমাণ লিখুন।" : "Enter valid rate and quantity.");
-            return;
-        }
-
-        serviceEntry.RegNo = selectedAdmission.RegNo;
-        serviceEntry.PatientID = selectedAdmission.PatientID;
-        serviceEntry.Total = serviceEntry.Rate * serviceEntry.Quantity;
-        serviceEntry.EnteredBy = 1;
-
-        await using var db = await DbFactory.CreateDbContextAsync();
-        db.IpdPatientServiceItems.Add(serviceEntry);
-
-        try
-        {
-            await db.SaveChangesAsync();
-            Success(I18n.IsBangla ? $"সেবা '{serviceEntry.ServiceName}' সফলভাবে যোগ করা হয়েছে।" : $"Service '{serviceEntry.ServiceName}' added successfully.");
-            serviceEntry = NewServiceItem();
-            serviceEntry.RegNo = selectedAdmission.RegNo;
-            serviceEntry.PatientID = selectedAdmission.PatientID;
-            await LoadPatientServicesAsync();
-        }
-        catch (Exception ex)
-        {
-            Fail(I18n.IsBangla ? $"সেবা যোগ করা যায়নি: {ex.Message}" : $"Could not add service: {ex.Message}");
-        }
-    }
-
-    private async Task DeleteServiceAsync(IpdPatientServiceItem item)
-    {
-        var confirmMsg = I18n.IsBangla ? $"আপনি কি নিশ্চিত যে '{item.ServiceName}' সেবাটি মুছে ফেলতে চান?" : $"Remove service '{item.ServiceName}'?";
-        if (!await JS.InvokeAsync<bool>("hpm.confirm", confirmMsg)) return;
-
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var entity = await db.IpdPatientServiceItems.FindAsync(item.ID);
-        if (entity == null) return;
-
-        db.IpdPatientServiceItems.Remove(entity);
-        await db.SaveChangesAsync();
-
-        Success(I18n.IsBangla ? "সেবা মুছে ফেলা হয়েছে।" : "Service removed.");
-        await LoadPatientServicesAsync();
-    }
-
-    private void Reset()
-    {
-        selectedAdmission = null;
-        patientName = "";
-        patientSex = null;
-        patientBloodGroup = null;
-        patientContact = null;
-        searchQuery = "";
-        serviceEntry = NewServiceItem();
-        patientServices.Clear();
-        prescriptionMedications.Clear();
-        prescriptionAdvisedTests.Clear();
-        showPrescriptionModal = false;
-        message = "";
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
     }
 
     private static IpdPatientServiceItem NewServiceItem() => new()
@@ -584,8 +2370,8 @@
         return dept?.Name ?? "Inpatient Medicine (IPD)";
     }
 
-    private void Success(string text) { messageClass = "alert success"; message = text; }
-    private void Fail(string text) { messageClass = "alert danger"; message = text; }
+    private void Success(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
 
     public void Dispose()
     {

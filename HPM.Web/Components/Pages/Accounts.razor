@@ -1,230 +1,1687 @@
 @page "/accounts"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
-@rendermode InteractiveServer
 @implements IDisposable
 @using HPM.Web.Components.Common
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
 @using HPM.Web.Services
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
-@using System.Security.Claims
 
-<PageTitle>@I18n.T("Hospital Accounts & Ledger", "Accounts & Finance") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Hospital Accounts, Vouchers & General Ledger", "অ্যাকাউন্টস, ভাউচার ও জেনারেল লেজার") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div><span class="eyebrow">@I18n.T("Accounts & Finance", "Accounts & finance")</span><h1>@I18n.T("Financial Control Centre", "Financial Control Centre")</h1><p>@I18n.T("Approval, immutable reversal, day closing, period lock and cash-to-ledger reconciliation.", "Approval, immutable reversal, day closing, period lock and cash-to-ledger reconciliation.")</p></div>
-    <button class="btn btn-secondary" @onclick="PrintLedgerAsync">@I18n.T("Print ledger", "Print ledger")</button>
-</div>
-@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
-
-<div class="panel" style="margin-bottom:20px">
-    <div class="panel-heading">
-        <div>
-            <h2>@I18n.T("Reporting period", "Reporting period")</h2>
-            <p>@I18n.T("Financial statement and cash movement date range.", "Financial statement and cash movement date range.")</p>
-        </div>
-    </div>
-    <div class="report-filter">
-        <label><span>@I18n.T("From date", "From date")</span><InputDate @bind-Value="fromDate"/></label>
-        <label><span>@I18n.T("To date", "To date")</span><InputDate @bind-Value="toDate"/></label>
-        <button class="btn btn-primary" @onclick="LoadAsync">@I18n.T("Apply", "Apply")</button>
-    </div>
-</div>
-
-<div class="metric-grid" style="margin-bottom:24px">
-    <div class="metric-card accent-blue"><span>@I18n.T("Central cash", "Central cash")</span><strong>@I18n.FormatCurrency(cashCollection)</strong><small>@I18n.T("Operational collection", "Operational collection")</small></div>
-    <div class="metric-card accent-teal"><span>@I18n.T("GL cash movement", "GL cash movement")</span><strong>@I18n.FormatCurrency(glCash)</strong><small>@I18n.T("Approved journals", "Approved journals")</small></div>
-    <div class="metric-card @(cashDifference == 0 ? "accent-violet" : "accent-red")"><span>@I18n.T("Cash variance", "Cash variance")</span><strong>@I18n.FormatCurrency(cashDifference)</strong><small>@I18n.T("Central cash − GL", "Central cash − GL")</small></div>
-    <div class="metric-card accent-violet"><span>@I18n.T("Pending vouchers", "Pending vouchers")</span><strong>@pendingCount</strong><small>@I18n.T("Awaiting approval", "Awaiting approval")</small></div>
-</div>
-
-<div class="module-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading"><div><h2>@I18n.T("Prepare manual voucher", "Prepare manual voucher")</h2><p>@I18n.T("Saved as pending; Administrator approval is required", "Saved as pending; Administrator approval is required")</p></div><button class="icon-btn" @onclick="ResetVoucher">@I18n.T("New", "New")</button></div>
-        <div class="form-grid">
-            <label><span>@I18n.T("Voucher type *", "Voucher type *")</span><select @bind="voucherType"><option value="Receipt">@I18n.T("Receipt", "Receipt")</option><option value="Payment">@I18n.T("Payment", "Payment")</option><option value="Expense">@I18n.T("Expense", "Expense")</option><option value="Journal">@I18n.T("Journal", "Journal")</option></select></label>
-            <label><span>@I18n.T("Voucher date *", "Voucher date *")</span><InputDate @bind-Value="voucherDate"/></label>
-            <label><span>@I18n.T("Reference", "Reference")</span><input @bind="reference"/></label>
-            <label><span>@I18n.T("Narration *", "Narration *")</span><input @bind="narration"/></label>
-        </div>
-        <div class="form-section-title">@I18n.T("Journal line", "Journal line")</div>
-        <div class="form-grid three">
-            <label><span>@I18n.T("Account *", "Account *")</span><select @bind="lineAccountId"><option value="0">@I18n.T("Select", "Select")</option>@foreach (var x in accounts.Where(x => x.IsActive)) { <option value="@x.ID">@x.Code · @x.Name</option> }</select></label>
-            <label><span>@I18n.T("Debit", "Debit")</span><InputNumber @bind-Value="lineDebit"/></label>
-            <label><span>@I18n.T("Credit", "Credit")</span><InputNumber @bind-Value="lineCredit"/></label>
-        </div>
-        <div class="form-actions"><button class="btn btn-secondary" @onclick="AddVoucherLine">+ @I18n.T("Add line", "Add line")</button></div>
-        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Account", "Account")</th><th class="num">@I18n.T("Debit", "Debit")</th><th class="num">@I18n.T("Credit", "Credit")</th><th></th></tr></thead><tbody>
-            @foreach (var x in voucherLines) { <tr><td>@AccountName(x.AccountID)</td><td class="num">@I18n.FormatCurrency(x.Debit)</td><td class="num">@I18n.FormatCurrency(x.Credit)</td><td><button class="icon-btn" @onclick="() => voucherLines.Remove(x)">@I18n.T("Remove", "Remove")</button></td></tr> }
-            <tr><td><b>@I18n.T("Total", "Total")</b></td><td class="num"><b>@I18n.FormatCurrency(voucherLines.Sum(x => x.Debit))</b></td><td class="num"><b>@I18n.FormatCurrency(voucherLines.Sum(x => x.Credit))</b></td><td></td></tr>
-        </tbody></table></div>
-        <div class="form-actions"><button class="btn btn-primary" @onclick="SubmitVoucherAsync">@I18n.T("Submit for approval", "Submit for approval")</button></div>
-    </div>
-
-    <div>
-        <div class="panel form-panel">
-            <div class="panel-heading"><div><h2>@I18n.T("Cashier day closing", "Cashier day closing")</h2><p>@handoverDate.ToString("dd MMM yyyy") · @I18n.T("System cash", "System cash") @I18n.FormatCurrency(handoverSystem)</p></div>@if (currentHandover?.IsLocked == true) { <span class="badge">@I18n.T("LOCKED", "LOCKED")</span> }</div>
-            <div class="form-grid">
-                <label><span>@I18n.T("Business date", "Business date")</span><InputDate @bind-Value="handoverDate" @bind-Value:after="CalculateHandoverAsync"/></label>
-                <label><span>@I18n.T("Declared handover *", "Declared handover *")</span><InputNumber @bind-Value="handedAmount" disabled="@(currentHandover?.IsLocked == true)"/></label>
-                <label class="span-2"><span>@I18n.T("Notes", "Notes")</span><input @bind="handoverNotes" disabled="@(currentHandover?.IsLocked == true)"/></label>
-            </div>
-            <div class="form-actions">
-                @if (currentHandover?.IsLocked != true) { <button class="btn btn-primary" @onclick="CloseDayAsync">@I18n.T("Close & lock day", "Close & lock day")</button> }
-                else if (isAdministrator) { <button class="btn btn-secondary" @onclick="ReopenCurrentDayAsync">@I18n.T("Reopen day", "Reopen day")</button> }
-            </div>
-            @if (isAdministrator && recentHandovers.Count > 0)
-            {
-                <div class="form-section-title">@I18n.T("Recent cashier closing records", "Recent cashier closing records")</div>
-                @foreach (var x in recentHandovers.Take(10))
-                {
-                    <div class="patient-summary"><div><b>@x.BusinessDate.ToString("dd MMM yyyy") · @I18n.T("Cashier", "Cashier") #@x.CashierID</b><small style="display:block">@I18n.T("System", "System") @I18n.FormatCurrency(x.SystemAmount) · @I18n.T("Declared", "Declared") @I18n.FormatCurrency(x.HandedOverAmount) · @(x.IsLocked ? I18n.T("Locked", "Locked") : I18n.T("Open", "Open"))</small></div>@if (x.IsLocked) { <button class="icon-btn" @onclick="() => ReopenHandoverAsync(x)">@I18n.T("Reopen", "Reopen")</button> }</div>
-                }
-            }
-        </div>
-
-        @if (isAdministrator)
-        {
-            <div class="panel form-panel">
-                <div class="panel-heading"><div><h2>@I18n.T("Financial period lock", "Financial period lock")</h2><p>@I18n.T("Prevents posting into a closed period", "Prevents posting into a closed period")</p></div></div>
-                <div class="form-grid"><label><span>@I18n.T("From *", "From *")</span><InputDate @bind-Value="lockFrom"/></label><label><span>@I18n.T("To *", "To *")</span><InputDate @bind-Value="lockTo"/></label><label class="span-2"><span>@I18n.T("Reason *", "Reason *")</span><input @bind="lockReason"/></label></div>
-                <div class="form-actions"><button class="btn btn-primary" @onclick="LockPeriodAsync">@I18n.T("Lock period", "Lock period")</button></div>
-                @foreach (var x in periodLocks.Where(x => x.IsActive))
-                {
-                    <div class="patient-summary"><div><b>@x.FromDate.ToString("dd MMM yyyy") – @x.ToDate.ToString("dd MMM yyyy")</b><small style="display:block">@x.Reason</small></div><button class="icon-btn" @onclick="() => UnlockPeriodAsync(x)">@I18n.T("Unlock", "Unlock")</button></div>
-                }
-            </div>
-        }
-    </div>
-</div>
-
-<div class="panel" style="margin-top:24px">
-    <div class="panel-heading">
-        <div>
-            <h2>@I18n.T("Voucher approval & control", "Voucher approval & control")</h2>
-            <p>@I18n.T("Posted vouchers are never edited or deleted; cancellation creates an equal opposite journal.", "Posted vouchers are never edited or deleted; cancellation creates an equal opposite journal.")</p>
-        </div>
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <div class="scanner-search-group" style="min-width:280px;">
-                <span class="scanner-icon">⚡</span>
-                <input type="text" class="form-control" style="font-size:12px; padding:5px 8px;" placeholder="@I18n.T("Scan / Search Voucher (VCH-XXXXXX)...")" @bind="voucherSearchScan" @bind:event="oninput" @onkeydown="HandleVoucherScanKeyDownAsync" />
-            </div>
-            <input placeholder="@I18n.T("Reason for reject/reversal", "Reason for reject/reversal")" @bind="actionReason" style="min-width:220px"/>
-        </div>
-    </div>
-    <div class="data-table-wrap">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>@I18n.T("Date / Voucher", "Date / Voucher")</th>
-                    <th>@I18n.T("Type", "Type")</th>
-                    <th>@I18n.T("Reference / Narration", "Reference / Narration")</th>
-                    <th>@I18n.T("Status", "Status")</th>
-                    <th class="num">@I18n.T("Amount", "Amount")</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                @if (!FilteredVouchers.Any()) { <tr><td colspan="6"><div class="empty-state small">@I18n.T("No vouchers in this period.", "No vouchers in this period.")</div></td></tr> }
-                @foreach (var x in FilteredVouchers.OrderByDescending(x => x.ID))
-                {
-                    <tr>
-                        <td>@x.VoucherDate.ToString("dd MMM yy")<br/><small>@x.VoucherNo</small></td>
-                        <td>@I18n.T(x.VoucherType, x.VoucherType)</td>
-                        <td>@x.Reference<br/><small>@x.Narration</small></td>
-                        <td><span class="pill">@I18n.T(x.Status, x.Status)</span></td>
-                        <td class="num">@I18n.FormatCurrency(VoucherAmount(x.ID))</td>
-                        <td>
-                            <button class="icon-btn" @onclick="() => SelectVoucherAsync(x)">@I18n.T("Print", "Print")</button>
-                            @if (isAdministrator && x.Status == "Pending") { <button class="icon-btn" @onclick="() => ApproveVoucherAsync(x)">@I18n.T("Approve", "Approve")</button><button class="icon-btn" @onclick="() => RejectVoucherAsync(x)">@I18n.T("Reject", "Reject")</button> }
-                            @if (isAdministrator && x.Status == "Approved" && x.ReversalOfVoucherID == null) { <button class="icon-btn" @onclick="() => ReverseVoucherAsync(x)">@I18n.T("Reverse", "Reverse")</button> }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </div>
-</div>
-
-<div class="panel" style="margin-top:24px">
-    <div class="panel-heading"><div><h2>@I18n.T("Cash vs General Ledger reconciliation", "Cash vs General Ledger reconciliation")</h2><p>@I18n.T("Daily comparison; zero variance means central collection and cash account agree.", "Daily comparison; zero variance means central collection and cash account agree.")</p></div><button class="btn btn-secondary" @onclick="BackfillOperationalJournalsAsync" disabled="@(!isAdministrator)">@I18n.T("Post missing operational journals", "Post missing operational journals")</button></div>
-    <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Date", "Date")</th><th class="num">@I18n.T("Central cash", "Central cash")</th><th class="num">@I18n.T("GL cash", "GL cash")</th><th class="num">@I18n.T("Variance", "Variance")</th><th>@I18n.T("Status", "Status")</th></tr></thead><tbody>
-        @foreach (var x in reconciliationRows) { <tr><td>@x.Date.ToString("dd MMM yyyy")</td><td class="num">@I18n.FormatCurrency(x.CentralCash)</td><td class="num">@I18n.FormatCurrency(x.GlCash)</td><td class="num">@I18n.FormatCurrency(x.Variance)</td><td><span class="pill">@(x.Variance == 0 ? I18n.T("MATCHED", "MATCHED") : I18n.T("REVIEW", "REVIEW"))</span></td></tr> }
-    </tbody></table></div>
-</div>
-
-@if (isAdministrator)
-{
-    <div class="panel form-panel" style="margin-top:24px">
-        <div class="panel-heading"><div><h2>@(accountEditor.ID == 0 ? I18n.T("Add account head", "Add account head") : I18n.T("Edit account head", "Edit account head"))</h2><p>@I18n.T("Chart of Accounts", "Chart of Accounts")</p></div><button class="icon-btn" @onclick="ResetAccount">@I18n.T("New", "New")</button></div>
-        <div class="form-grid"><label><span>@I18n.T("Code *", "Code *")</span><input @bind="accountEditor.Code"/></label><span>@I18n.T("Name *", "Name *")</span><input @bind="accountEditor.Name"/><label><span>@I18n.T("Type *", "Type *")</span><select @bind="accountEditor.AccountType"><option value="Asset">@I18n.T("Asset", "Asset")</option><option value="Liability">@I18n.T("Liability", "Liability")</option><option value="Equity">@I18n.T("Equity", "Equity")</option><option value="Income">@I18n.T("Income", "Income")</option><option value="Expense">@I18n.T("Expense", "Expense")</option></select></label><label><span>@I18n.T("Active", "Active")</span><InputCheckbox @bind-Value="accountEditor.IsActive"/></label></div>
-        <div class="form-actions"><button class="btn btn-primary" @onclick="SaveAccountAsync">@I18n.T("Save account", "Save account")</button></div>
-        <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Code", "Code")</th><th>@I18n.T("Account", "Account")</th><th>@I18n.T("Type", "Type")</th><th></th></tr></thead><tbody>@foreach (var x in accounts) { <tr><td>@x.Code</td><td>@x.Name</td><td><span class="pill">@I18n.T(x.AccountType, x.AccountType)</span></td><td><button class="icon-btn" @onclick="() => SelectAccount(x)">@I18n.T("Edit", "Edit")</button></td></tr> }</tbody></table></div>
-    </div>
+<style>
+.acc-container {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 12px 18px 48px;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    color: #1e293b;
+    outline: none;
 }
 
-<div id="accounts-ledger-print" class="panel print-sheet" style="margin-top:24px">
-    <div class="print-brand"><div><h1>@Branding.HospitalName</h1><p>@I18n.T("Accounts & Finance", "Accounts & Finance")</p></div><div><b>@I18n.T("General Ledger", "General Ledger")</b><br/><small>@fromDate.ToString("dd MMM yyyy") – @toDate.ToString("dd MMM yyyy")</small></div></div>
-    <div class="panel-heading"><div><h2>@I18n.T("General ledger", "General ledger")</h2><p>@I18n.T("Approved and reversal entries", "Approved and reversal entries")</p></div><select @bind="ledgerAccountId"><option value="0">@I18n.T("All accounts", "All accounts")</option>@foreach (var x in accounts) { <option value="@x.ID">@x.Code · @x.Name</option> }</select></div>
-    <div class="data-table-wrap"><table class="data-table"><thead><tr><th>@I18n.T("Date / Voucher", "Date / Voucher")</th><th>@I18n.T("Account", "Account")</th><th>@I18n.T("Narration", "Narration")</th><th class="num">@I18n.T("Debit", "Debit")</th><th class="num">@I18n.T("Credit", "Credit")</th></tr></thead><tbody>@foreach (var x in LedgerRows) { <tr><td>@x.Date.ToString("dd MMM yy")<br/><small>@x.VoucherNo</small></td><td>@AccountName(x.AccountID)</td><td>@x.Narration</td><td class="num">@I18n.FormatCurrency(x.Debit)</td><td class="num">@I18n.FormatCurrency(x.Credit)</td></tr> }</tbody></table></div>
-</div>
+/* 1. Top Flow Navigation & Header */
+.acc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.acc-nav-links {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+.acc-nav-link {
+    color: #0284c7;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    transition: all 0.15s ease;
+}
+.acc-nav-link:hover {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+    text-decoration: none;
+}
+.acc-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.acc-title {
+    font-size: 20px;
+    font-weight: 850;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.acc-sub {
+    font-size: 11.5px;
+    color: #64748b;
+    margin: 2px 0 0;
+}
 
-@if (selectedVoucher is not null)
-{
-    <div id="voucher-print" class="print-sheet panel">
-        <div class="print-brand">
-            <div>
-                <h1>@Branding.HospitalName</h1>
-                <p>@I18n.T("Accounts & Finance", "Accounts & Finance")</p>
+/* Print Toolbar Buttons */
+.acc-print-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.acc-print-btn {
+    padding: 5px 11px;
+    font-size: 11.5px;
+    font-weight: 750;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #0f172a;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.12s;
+}
+.acc-print-btn:hover {
+    background: #f0f9ff;
+    border-color: #0284c7;
+    color: #0284c7;
+}
+.acc-print-btn.primary {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+}
+.acc-print-btn.primary:hover {
+    background: #0369a1;
+}
+
+/* 2. Filter & Period Card */
+.acc-filter-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.acc-presets-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.acc-preset-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #475569;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.acc-preset-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+.acc-preset-btn.active {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+}
+.acc-date-inputs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.acc-date-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #475569;
+}
+
+/* 3. KPI Metric Grid */
+.acc-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+}
+@@media (max-width: 1280px) {
+    .acc-kpi-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+@@media (max-width: 680px) {
+    .acc-kpi-grid {
+        grid-template-columns: 1fr;
+    }
+}
+.acc-kpi-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 5px rgba(15,23,42,0.04);
+}
+.acc-kpi-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.3px;
+}
+.acc-kpi-val {
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 1.2;
+    margin-top: 2px;
+}
+.acc-kpi-sub {
+    font-size: 10.5px;
+    color: #64748b;
+    margin-top: 2px;
+}
+.acc-kpi-icon {
+    font-size: 23px;
+    opacity: 0.85;
+}
+
+/* 4. Interactive Main Tabs */
+.acc-tabs-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid #cbd5e1;
+    margin-bottom: 14px;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.acc-tabs-left {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+}
+.acc-tab-btn {
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 800;
+    color: #64748b;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-bottom: none;
+    border-radius: 7px 7px 0 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+.acc-tab-btn:hover {
+    color: #0284c7;
+    background: #f0f9ff;
+}
+.acc-tab-btn.active {
+    background: #ffffff;
+    color: #0284c7;
+    border-color: #0284c7;
+    border-top: 3px solid #0284c7;
+    margin-bottom: -2px;
+    padding-bottom: 9px;
+}
+
+/* 5. Workspace Grid & Cards */
+.acc-grid-2col {
+    display: grid;
+    grid-template-columns: minmax(380px, 470px) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+}
+@@media (max-width: 1080px) {
+    .acc-grid-2col {
+        grid-template-columns: 1fr;
+    }
+}
+.acc-card {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 3px 10px rgba(15,23,42,0.05);
+    overflow: hidden;
+    margin-bottom: 14px;
+}
+.acc-card-header {
+    padding: 10px 14px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.acc-card-title {
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.acc-card-body {
+    padding: 14px;
+}
+
+/* Filter Pills */
+.acc-pill-filter {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 20px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.12s;
+}
+.acc-pill-filter:hover {
+    background: #f1f5f9;
+}
+.acc-pill-filter.active {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #0284c7;
+}
+
+/* Tables */
+.acc-table-wrap {
+    overflow-x: auto;
+    width: 100%;
+}
+.acc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.acc-table th {
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 800;
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 2px solid #cbd5e1;
+    white-space: nowrap;
+}
+.acc-table th.num, .acc-table td.num {
+    text-align: right;
+}
+.acc-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: middle;
+}
+.acc-table tr:hover td {
+    background: #f8fafc;
+}
+.acc-table tr.total-row td {
+    background: #f1f5f9;
+    font-weight: 900;
+    border-top: 2px solid #cbd5e1;
+    color: #0f172a;
+}
+
+/* Form Elements */
+.acc-field-label {
+    font-size: 11px;
+    font-weight: 750;
+    color: #334155;
+    margin-bottom: 3px;
+    display: block;
+}
+.acc-chip-btn {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #bae6fd;
+    background: #f0f9ff;
+    color: #0369a1;
+    cursor: pointer;
+}
+.acc-chip-btn:hover {
+    background: #0284c7;
+    color: #ffffff;
+}
+
+/* Searchable Account Head Dropdown */
+.acc-head-picker {
+    position: relative;
+}
+.acc-head-dropdown {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    max-height: 230px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #0284c7;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(15,23,42,0.15);
+    z-index: 120;
+}
+.acc-head-option {
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-bottom: 1px solid #f1f5f9;
+    background: #ffffff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11.5px;
+}
+.acc-head-option:hover {
+    background: #f0f9ff;
+}
+</style>
+
+<div class="acc-container" @onkeydown="HandleGlobalKeyDown" tabindex="0">
+    <!-- 1. Top Header & Unified Flow Navigation -->
+    <div class="acc-header">
+        <div>
+            <div class="acc-nav-links">
+                <span style="color:#64748b; font-weight:750;">@I18n.T("Finance & Reporting Flow", "ফাইন্যান্স ও রিপোর্ট ফ্লো"):</span>
+                <span class="acc-nav-link" style="background:#0284c7; color:#fff; border-color:#0284c7; font-weight:750;">
+                    💳 @I18n.T("Accounts & General Ledger (Current)", "অ্যাকাউন্টস ও লেজার")
+                </span>
+                <span>&bull;</span>
+                <a href="/reports/financial" class="acc-nav-link">💰 @I18n.T("Financial & Revenue Reports", "ফাইন্যান্সিয়াল রিপোর্ট")</a>
+                <span>&bull;</span>
+                <a href="/reports/mis" class="acc-nav-link">📊 @I18n.T("MIS & Operational Analytics", "এমআইএস রিপোর্ট")</a>
+                <span>&bull;</span>
+                <a href="/reports" class="acc-nav-link">🏛️ @I18n.T("Reports Portal Hub", "রিপোর্টস হাব")</a>
             </div>
-            <div style="display:flex; align-items:center; gap:16px;">
-                <BarcodeQrView Code="@($"VCH-{selectedVoucher.ID}")"
-                               QrPayload="@BarcodeQr.GenerateVoucherQrPayload(selectedVoucher.ID, selectedVoucher.VoucherType ?? "Journal", VoucherAmount(selectedVoucher.ID), selectedVoucher.VoucherDate)"
-                               Layout="side-by-side"
-                               BarHeight="28"
-                               QrPixelsPerModule="3" />
-                <div style="text-align:right;">
-                    <b>@selectedVoucher.VoucherNo</b>
-                    <br /><small>@selectedVoucher.VoucherDate.ToString("dd MMM yyyy")</small>
+
+            <div class="acc-title-row">
+                <h1 class="acc-title">
+                    <span>💳</span>
+                    <span>@I18n.T("Hospital Accounts, Vouchers & General Ledger Center", "হাসপাতাল অ্যাকাউন্টস, ভাউচার ও জেনারেল লেজার সেন্টার")</span>
+                </h1>
+                <span class="pill" style="font-size:11px; background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-weight:750;">
+                    📅 @fromDate.ToString("dd MMM yyyy") — @toDate.ToString("dd MMM yyyy")
+                </span>
+            </div>
+            <p class="acc-sub">
+                @I18n.T("Double-entry voucher posting, approval control, general ledger statements, cashier shift closing, and chart of accounts.", "ডাবল-এন্ট্রি ভাউচার, অনুমোদন, জেনারেল লেজার স্টেটমেন্ট, ক্যাশিয়ার ডে-ক্লোজিং এবং চার্ট অফ অ্যাকাউন্টস।")
+            </p>
+        </div>
+
+        <!-- Multi-Format Print Toolbar -->
+        <div class="acc-print-bar">
+            <span style="font-size:11px; font-weight:750; color:#64748b;">@I18n.T("Print Active Report", "প্রিন্ট ফরম্যাট"):</span>
+            <button type="button" class="acc-print-btn primary" @onclick='() => PrintActiveReportAsync("a4")' title="@I18n.T("Print Standard A4 Statement")">
+                🖨️ @I18n.T("A4 Full Sheet", "A4 প্রিন্ট")
+            </button>
+            <button type="button" class="acc-print-btn" @onclick='() => PrintActiveReportAsync("a5")' title="@I18n.T("Print Compact A5 Statement")">
+                📄 @I18n.T("A5 Compact", "A5 প্রিন্ট")
+            </button>
+            <button type="button" class="acc-print-btn" @onclick='() => PrintActiveReportAsync("80mm")' title="@I18n.T("Print 80mm POS Thermal Slip")">
+                🧾 @I18n.T("80mm Thermal", "80mm থার্মাল")
+            </button>
+            <button type="button" class="acc-print-btn" @onclick="LoadAsync" title="@I18n.T("Refresh Data")">
+                🔄
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert @messageClass" style="padding:8px 14px; font-size:12px; font-weight:700; margin-bottom:12px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+            <span>@message</span>
+            <button type="button" style="background:none; border:none; cursor:pointer; font-weight:800; color:inherit;" @onclick='() => message = ""'>✕</button>
+        </div>
+    }
+
+    <!-- 2. Date Period Filter Bar -->
+    <div class="acc-filter-card">
+        <div class="acc-presets-bar">
+            <span style="font-size:11px; font-weight:800; color:#475569; margin-right:4px;">@I18n.T("Quick Period", "কুইক পিরিয়ড"):</span>
+            <button type="button" class="acc-preset-btn @(currentPreset == "today" ? "active" : "")" @onclick='() => ApplyDatePresetAsync("today")'>@I18n.T("Today", "আজ")</button>
+            <button type="button" class="acc-preset-btn @(currentPreset == "yesterday" ? "active" : "")" @onclick='() => ApplyDatePresetAsync("yesterday")'>@I18n.T("Yesterday", "গতকাল")</button>
+            <button type="button" class="acc-preset-btn @(currentPreset == "7days" ? "active" : "")" @onclick='() => ApplyDatePresetAsync("7days")'>@I18n.T("Last 7 Days", "বিগত ৭ দিন")</button>
+            <button type="button" class="acc-preset-btn @(currentPreset == "month" ? "active" : "")" @onclick='() => ApplyDatePresetAsync("month")'>@I18n.T("This Month", "চলতি মাস")</button>
+            <button type="button" class="acc-preset-btn @(currentPreset == "year" ? "active" : "")" @onclick='() => ApplyDatePresetAsync("year")'>@I18n.T("This Year", "চলতি বছর")</button>
+        </div>
+
+        <div class="acc-date-inputs">
+            <div class="acc-date-group">
+                <span>@I18n.T("From", "শুরু"):</span>
+                <input type="date" class="classic-input" style="height:28px !important; font-size:11.5px !important; width:135px;" value="@fromDate.ToString("yyyy-MM-dd")" @onchange="OnFromDateChanged" />
+            </div>
+            <div class="acc-date-group">
+                <span>@I18n.T("To", "শেষ"):</span>
+                <input type="date" class="classic-input" style="height:28px !important; font-size:11.5px !important; width:135px;" value="@toDate.ToString("yyyy-MM-dd")" @onchange="OnToDateChanged" />
+            </div>
+            <button type="button" class="btn btn-primary" style="height:28px; font-size:11.5px; font-weight:750; padding:0 14px;" @onclick="LoadAsync">
+                @I18n.T("Apply Filter", "লোড করুন")
+            </button>
+        </div>
+    </div>
+
+    <!-- 3. Real-Time Executive KPI Cards -->
+    <div class="acc-kpi-grid">
+        <div class="acc-kpi-card" style="border-left:4px solid #0284c7;">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("Central Cash", "সেন্ট্রাল ক্যাশ আদায়")</div>
+                <div class="acc-kpi-val" style="color:#0369a1;">@I18n.FormatCurrency(cashCollection)</div>
+                <div class="acc-kpi-sub">@I18n.T("Operational collection", "কাউন্টার নগদ আদায়")</div>
+            </div>
+            <div class="acc-kpi-icon">💰</div>
+        </div>
+
+        <div class="acc-kpi-card" style="border-left:4px solid #0d9488;">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("GL Cash Movement", "জিএল ক্যাশ ব্যালেন্স")</div>
+                <div class="acc-kpi-val" style="color:#0f766e;">@I18n.FormatCurrency(glCash)</div>
+                <div class="acc-kpi-sub">@I18n.T("Approved journals", "অনুমোদিত লেজার")</div>
+            </div>
+            <div class="acc-kpi-icon">📒</div>
+        </div>
+
+        <div class="acc-kpi-card" style="border-left:4px solid @(cashDifference == 0 ? "#10b981" : "#ef4444");">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("Cash Variance", "ক্যাশ ও লেজার পার্থক্য")</div>
+                <div class="acc-kpi-val" style="color:@(cashDifference == 0 ? "#047857" : "#dc2626");">@I18n.FormatCurrency(cashDifference)</div>
+                <div class="acc-kpi-sub">@(cashDifference == 0 ? I18n.T("✓ Reconciled", "✓ সম্পূর্ণ মিলেছে") : I18n.T("⚠ Needs review", "⚠ যাচাই প্রয়োজন"))</div>
+            </div>
+            <div class="acc-kpi-icon">@(cashDifference == 0 ? "✅" : "⚠️")</div>
+        </div>
+
+        <div class="acc-kpi-card" style="border-left:4px solid #10b981;">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("Posted Income", "মোট অনুমোদিত আয়")</div>
+                <div class="acc-kpi-val" style="color:#047857;">@I18n.FormatCurrency(income)</div>
+                <div class="acc-kpi-sub">@I18n.T("GL revenue heads", "লেজার আয় খাত")</div>
+            </div>
+            <div class="acc-kpi-icon">📈</div>
+        </div>
+
+        <div class="acc-kpi-card" style="border-left:4px solid #f59e0b;">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("Posted Expense", "মোট অনুমোদিত ব্যয়")</div>
+                <div class="acc-kpi-val" style="color:#b45309;">@I18n.FormatCurrency(expense)</div>
+                <div class="acc-kpi-sub">@I18n.T("GL expense heads", "লেজার ব্যয় খাত")</div>
+            </div>
+            <div class="acc-kpi-icon">💸</div>
+        </div>
+
+        <div class="acc-kpi-card" style="border-left:4px solid #8b5cf6;">
+            <div>
+                <div class="acc-kpi-label">@I18n.T("Pending Vouchers", "অপেক্ষমাণ ভাউচার")</div>
+                <div class="acc-kpi-val" style="color:#6d28d9;">@pendingCount</div>
+                <div class="acc-kpi-sub">@I18n.T("Awaiting approval", "অনুমোদনের অপেক্ষায়")</div>
+            </div>
+            <div class="acc-kpi-icon">🧾</div>
+        </div>
+    </div>
+
+    <!-- 4. Interactive Main Tab Bar -->
+    <div class="acc-tabs-bar">
+        <div class="acc-tabs-left">
+            <button type="button" class="acc-tab-btn @(activeTab == "voucher" ? "active" : "")" @onclick='() => SwitchTab("voucher")'>
+                <span>🧾</span>
+                <span>@I18n.T("1. Vouchers & Approval Control", "১. ভাউচার এন্ট্রি ও অনুমোদন")</span>
+                <span class="pill" style="font-size:10px; background:#e0f2fe; color:#0369a1;">@vouchers.Count</span>
+            </button>
+            <button type="button" class="acc-tab-btn @(activeTab == "report" ? "active" : "")" @onclick='() => SwitchTab("report")'>
+                <span>📒</span>
+                <span>@I18n.T("2. General Ledger, Reconciliation & Closing", "২. জেনারেল লেজার, রিকনসিলিয়েশন ও ডে-ক্লোজিং")</span>
+                <span class="pill" style="font-size:10px; background:#d1fae5; color:#047857;">@LedgerRows.Count()</span>
+            </button>
+            <button type="button" class="acc-tab-btn @(activeTab == "particulars" ? "active" : "")" @onclick='() => SwitchTab("particulars")'>
+                <span>🗂️</span>
+                <span>@I18n.T("3. Particulars Head (Chart of Accounts)", "৩. হিসাব খাত (Particulars Head / COA)")</span>
+                <span class="pill" style="font-size:10px; background:#ede9fe; color:#6d28d9;">@accounts.Count</span>
+            </button>
+        </div>
+
+        <div style="font-size:11px; color:#64748b; padding-bottom:4px;">
+            ⌨️ <b>1-3:</b> @I18n.T("Switch Tabs") &bull; <b>Ctrl+P:</b> @I18n.T("Print A4")
+        </div>
+    </div>
+
+    <!-- =========================================================================
+         TAB 1: VOUCHERS, JOURNAL ENTRY & APPROVAL CONTROL
+         ========================================================================= -->
+    @if (activeTab == "voucher")
+    {
+        <div class="acc-grid-2col">
+            <!-- Left: Prepare Manual Voucher -->
+            <div class="acc-card">
+                <div class="acc-card-header">
+                    <h2 class="acc-card-title">
+                        <span>✍️ @I18n.T("Prepare Double-Entry Voucher", "নতুন ভাউচার তৈরি করুন")</span>
+                    </h2>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;" @onclick="ResetVoucher">
+                        🧹 @I18n.T("Clear / Reset", "রিসেট")
+                    </button>
+                </div>
+
+                <div class="acc-card-body">
+                    <!-- Voucher Type Selector -->
+                    <div style="margin-bottom:10px;">
+                        <span class="acc-field-label">@I18n.T("Voucher Type *", "ভাউচারের ধরন *")</span>
+                        <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:6px;">
+                            @foreach (var vt in new[] { ("Receipt", "📥 Receipt"), ("Payment", "📤 Payment"), ("Expense", "💸 Expense"), ("Journal", "📒 Journal") })
+                            {
+                                <button type="button"
+                                        class="acc-preset-btn @(voucherType == vt.Item1 ? "active" : "")"
+                                        style="padding:6px 4px; text-align:center;"
+                                        @onclick='() => voucherType = vt.Item1'>
+                                    @vt.Item2
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                        <div>
+                            <span class="acc-field-label">@I18n.T("Voucher Date *", "ভাউচারের তারিখ *")</span>
+                            <InputDate class="classic-input" style="height:30px !important;" @bind-Value="voucherDate" />
+                        </div>
+                        <div>
+                            <span class="acc-field-label">@I18n.T("Reference / Invoice #", "রেফারেন্স নং")</span>
+                            <input class="classic-input" style="height:30px !important;" @bind="reference" placeholder="e.g. INV-1024, BILL-09..." />
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+                            <span class="acc-field-label" style="margin:0;">@I18n.T("Narration / Particulars *", "ভাউচারের বিবরণ *")</span>
+                            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                                <button type="button" class="acc-chip-btn" @onclick='() => SetQuickNarration("Daily cash deposited to bank account")'>🏦 Bank Deposit</button>
+                                <button type="button" class="acc-chip-btn" @onclick='() => SetQuickNarration("Hospital utility & electricity bill payment")'>⚡ Utility</button>
+                                <button type="button" class="acc-chip-btn" @onclick='() => SetQuickNarration("Office stationery & medical supplies expense")'>📎 Stationery</button>
+                            </div>
+                        </div>
+                        <input class="classic-input" style="height:30px !important;" @bind="narration" placeholder="@I18n.T("Enter clear accounting narration...")" />
+                    </div>
+
+                    <!-- Add Journal Line Section with Searchable Account Head Picker -->
+                    <div style="background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:10px; margin-bottom:12px;">
+                        <div style="font-size:11.5px; font-weight:800; color:#0f172a; margin-bottom:8px;">
+                            ➕ @I18n.T("Add Journal Line (Debit / Credit)", "জার্নাল লাইন যোগ করুন")
+                        </div>
+
+                        <!-- Searchable Account Head Picker -->
+                        <div style="margin-bottom:8px;" class="acc-head-picker">
+                            <span class="acc-field-label">@I18n.T("Account Head *", "হিসাব খাত নির্বাচন করুন *")</span>
+                            <div style="position:relative;">
+                                <input type="text"
+                                       class="classic-input"
+                                       style="height:30px !important; padding-right:26px !important;"
+                                       placeholder="@I18n.T("Search account head by code or name...")"
+                                       value="@accountHeadSearchText"
+                                       @onfocus="() => showAccountDropdown = true"
+                                       @oninput="OnAccountHeadSearchInput" />
+                                @if (lineAccountId > 0 || !string.IsNullOrWhiteSpace(accountHeadSearchText))
+                                {
+                                    <button type="button"
+                                            style="position:absolute; right:6px; top:50%; transform:translateY(-50%); border:none; background:none; color:#64748b; cursor:pointer;"
+                                            @onclick="ClearSelectedLineAccount">✕</button>
+                                }
+                            </div>
+
+                            @if (showAccountDropdown)
+                            {
+                                <div style="position:fixed; inset:0; z-index:110;" @onclick="() => showAccountDropdown = false"></div>
+                                <div class="acc-head-dropdown">
+                                    @foreach (var acc in FilteredPickerAccounts)
+                                    {
+                                        <button type="button" class="acc-head-option" @onclick="() => ChooseLineAccount(acc)">
+                                            <div>
+                                                <strong style="color:#0284c7;">@acc.Code</strong> &mdash; <b>@acc.Name</b>
+                                            </div>
+                                            <span class="pill" style="font-size:9.5px; background:#f1f5f9; color:#475569;">@acc.AccountType</span>
+                                        </button>
+                                    }
+                                    @if (!FilteredPickerAccounts.Any())
+                                    {
+                                        <div style="padding:10px; font-size:11px; color:#64748b; text-align:center;">
+                                            @I18n.T("No matching active account head found.")
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:8px; align-items:end;">
+                            <div>
+                                <span class="acc-field-label">@I18n.T("Debit Amount (৳)", "ডেবিট (৳)")</span>
+                                <InputNumber class="classic-input" style="height:30px !important;" @bind-Value="lineDebit" />
+                            </div>
+                            <div>
+                                <span class="acc-field-label">@I18n.T("Credit Amount (৳)", "ক্রেডিট (৳)")</span>
+                                <InputNumber class="classic-input" style="height:30px !important;" @bind-Value="lineCredit" />
+                            </div>
+                            <button type="button" class="btn btn-secondary" style="height:30px; font-size:11.5px; font-weight:750;" @onclick="AddVoucherLine">
+                                + @I18n.T("Add Line", "যোগ করুন")
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Voucher Lines Table -->
+                    <div class="acc-table-wrap" style="border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
+                        <table class="acc-table">
+                            <thead>
+                                <tr>
+                                    <th>@I18n.T("Account Head", "হিসাব খাত")</th>
+                                    <th class="num">@I18n.T("Debit (৳)", "ডেবিট")</th>
+                                    <th class="num">@I18n.T("Credit (৳)", "ক্রেডিট")</th>
+                                    <th style="width:40px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @if (voucherLines.Count == 0)
+                                {
+                                    <tr>
+                                        <td colspan="4" style="text-align:center; padding:16px; color:#94a3b8; font-size:11.5px;">
+                                            @I18n.T("Add at least two balanced debit/credit lines above.")
+                                        </td>
+                                    </tr>
+                                }
+                                @foreach (var x in voucherLines)
+                                {
+                                    <tr>
+                                        <td><strong>@AccountCodeAndName(x.AccountID)</strong></td>
+                                        <td class="num">@(x.Debit > 0 ? I18n.FormatCurrency(x.Debit) : "—")</td>
+                                        <td class="num">@(x.Credit > 0 ? I18n.FormatCurrency(x.Credit) : "—")</td>
+                                        <td style="text-align:center;">
+                                            <button type="button" style="border:none; background:none; color:#dc2626; cursor:pointer; font-weight:800;" @onclick="() => voucherLines.Remove(x)" title="Remove">✕</button>
+                                        </td>
+                                    </tr>
+                                }
+                                @{
+                                    var totalDr = voucherLines.Sum(x => x.Debit);
+                                    var totalCr = voucherLines.Sum(x => x.Credit);
+                                    var diff = Math.Abs(totalDr - totalCr);
+                                    var isBalanced = voucherLines.Count >= 2 && totalDr > 0 && totalDr == totalCr;
+                                }
+                                <tr class="total-row">
+                                    <td>
+                                        @I18n.T("Total", "মোট"):
+                                        @if (voucherLines.Count > 0)
+                                        {
+                                            <span class="pill" style="margin-left:6px; font-size:10px; background:@(isBalanced ? "#d1fae5" : "#fee2e2"); color:@(isBalanced ? "#047857" : "#b91c1c");">
+                                                @(isBalanced ? "✓ Balanced" : $"Diff: {I18n.FormatCurrency(diff)}")
+                                            </span>
+                                        }
+                                    </td>
+                                    <td class="num">@I18n.FormatCurrency(totalDr)</td>
+                                    <td class="num">@I18n.FormatCurrency(totalCr)</td>
+                                    <td></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <button type="button" class="btn btn-primary" style="width:100%; height:34px; font-weight:800; font-size:12.5px;" @onclick="SubmitVoucherAsync">
+                        ✓ @I18n.T("Submit Voucher for Approval", "ভাউচার অনুমোদনের জন্য জমা দিন")
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right: Voucher Approval & Audit Control Register -->
+            <div class="acc-card">
+                <div class="acc-card-header">
+                    <div>
+                        <h2 class="acc-card-title">
+                            <span>🧾 @I18n.T("Voucher Approval & Control Register", "ভাউচার অনুমোদন ও অডিট রেজিস্টার")</span>
+                        </h2>
+                        <div style="font-size:10.5px; color:#64748b; margin-top:2px;">
+                            @I18n.T("Posted vouchers are immutable; cancellation generates an equal opposite reversal journal.")
+                        </div>
+                    </div>
+                    <span class="pill" style="background:#e0f2fe; color:#0369a1; font-weight:800; font-size:11px;">
+                        @FilteredVouchers.Count() @I18n.T("Vouchers")
+                    </span>
+                </div>
+
+                <!-- Search & Filter Bar -->
+                <div style="padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; flex-direction:column; gap:8px;">
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <div style="position:relative; flex:1; min-width:220px;">
+                            <input type="text"
+                                   class="classic-input"
+                                   style="height:30px !important; padding-left:28px !important; padding-right:24px !important;"
+                                   placeholder="@I18n.T("Scan barcode (VCH-XXXX) or search voucher no, ref, narration...")"
+                                   @bind="voucherSearchScan"
+                                   @bind:event="oninput"
+                                   @onkeydown="HandleVoucherScanKeyDownAsync" />
+                            <span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); font-size:12px; color:#64748b;">🔍</span>
+                            @if (!string.IsNullOrWhiteSpace(voucherSearchScan))
+                            {
+                                <button type="button" style="position:absolute; right:7px; top:50%; transform:translateY(-50%); border:none; background:none; color:#94a3b8; cursor:pointer;" @onclick='() => voucherSearchScan = ""'>✕</button>
+                            }
+                        </div>
+
+                        <select class="classic-input" style="height:30px !important; width:135px; font-size:11.5px !important;" @bind="voucherTypeFilter">
+                            <option value="ALL">@I18n.T("All Types", "সব ধরন")</option>
+                            <option value="Receipt">Receipt</option>
+                            <option value="Payment">Payment</option>
+                            <option value="Expense">Expense</option>
+                            <option value="Journal">Journal</option>
+                        </select>
+
+                        @if (isAdministrator)
+                        {
+                            <input class="classic-input"
+                                   style="height:30px !important; width:210px; font-size:11.5px !important;"
+                                   placeholder="@I18n.T("Reason for Reject / Reversal...")"
+                                   @bind="actionReason" />
+                        }
+                    </div>
+
+                    <!-- Status Filter Pills -->
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                        <span style="font-size:10.5px; font-weight:750; color:#64748b;">@I18n.T("Status"):</span>
+                        @foreach (var st in new[] { ("ALL", "All"), ("Pending", "⏳ Pending"), ("Approved", "✓ Approved"), ("Rejected", "✕ Rejected"), ("Cancelled", "↩ Reversed") })
+                        {
+                            <button type="button"
+                                    class="acc-pill-filter @(voucherStatusFilter == st.Item1 ? "active" : "")"
+                                    @onclick='() => voucherStatusFilter = st.Item1'>
+                                @st.Item2
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Vouchers Table -->
+                <div class="acc-table-wrap" style="max-height:560px; overflow-y:auto;">
+                    <table class="acc-table">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("Date / Voucher No", "তারিখ ও ভাউচার নং")</th>
+                                <th>@I18n.T("Type", "ধরন")</th>
+                                <th>@I18n.T("Reference & Narration", "রেফারেন্স ও বিবরণ")</th>
+                                <th>@I18n.T("Status", "স্ট্যাটাস")</th>
+                                <th class="num">@I18n.T("Amount (৳)", "পরিমাণ")</th>
+                                <th style="text-align:right;">@I18n.T("Print & Actions", "প্রিন্ট ও অ্যাকশন")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!FilteredVouchers.Any())
+                            {
+                                <tr>
+                                    <td colspan="6" style="text-align:center; padding:32px; color:#64748b;">
+                                        @I18n.T("No vouchers found matching your filter criteria.")
+                                    </td>
+                                </tr>
+                            }
+                            @foreach (var x in FilteredVouchers.OrderByDescending(x => x.ID))
+                            {
+                                var statusBg = x.Status == "Approved" ? "#d1fae5" : x.Status == "Pending" ? "#fef3c7" : "#fee2e2";
+                                var statusFg = x.Status == "Approved" ? "#047857" : x.Status == "Pending" ? "#b45309" : "#b91c1c";
+                                <tr>
+                                    <td>
+                                        <div style="font-weight:800; color:#0f172a;">@x.VoucherNo</div>
+                                        <div style="font-size:10.5px; color:#64748b;">@x.VoucherDate.ToString("dd MMM yyyy")</div>
+                                    </td>
+                                    <td>
+                                        <span class="pill" style="font-size:10.5px; background:#f1f5f9; color:#334155; font-weight:750;">
+                                            @x.VoucherType
+                                        </span>
+                                    </td>
+                                    <td style="max-width:260px;">
+                                        @if (!string.IsNullOrWhiteSpace(x.Reference))
+                                        {
+                                            <div style="font-size:10.5px; font-weight:750; color:#0284c7;">Ref: @x.Reference</div>
+                                        }
+                                        <div style="font-size:11.5px; color:#1e293b;">@x.Narration</div>
+                                    </td>
+                                    <td>
+                                        <span class="pill" style="font-size:10.5px; background:@statusBg; color:@statusFg; font-weight:800;">
+                                            @x.Status
+                                        </span>
+                                    </td>
+                                    <td class="num" style="font-weight:800; color:#0f172a;">
+                                        @I18n.FormatCurrency(VoucherAmount(x.ID))
+                                    </td>
+                                    <td style="text-align:right; white-space:nowrap;">
+                                        <div style="display:inline-flex; gap:4px; align-items:center;">
+                                            <button type="button" class="acc-print-btn" style="padding:2px 7px; font-size:10.5px;" @onclick='() => PrintVoucherFormatAsync(x, "a4")' title="Print A4 Voucher">🖨️ A4</button>
+                                            <button type="button" class="acc-print-btn" style="padding:2px 7px; font-size:10.5px;" @onclick='() => PrintVoucherFormatAsync(x, "a5")' title="Print A5 Voucher">📄 A5</button>
+                                            <button type="button" class="acc-print-btn" style="padding:2px 7px; font-size:10.5px;" @onclick='() => PrintVoucherFormatAsync(x, "80mm")' title="Print 80mm POS Slip">🧾 80mm</button>
+
+                                            @if (isAdministrator && x.Status == "Pending")
+                                            {
+                                                <button type="button" class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:10.5px; background:#059669; border-color:#059669;" @onclick="() => ApproveVoucherAsync(x)">✓ Approve</button>
+                                                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 8px; font-size:10.5px; color:#dc2626;" @onclick="() => RejectVoucherAsync(x)">✕ Reject</button>
+                                            }
+                                            @if (isAdministrator && x.Status == "Approved" && x.ReversalOfVoucherID == null)
+                                            {
+                                                <button type="button" class="btn btn-secondary btn-sm" style="padding:2px 8px; font-size:10.5px; color:#b45309;" @onclick="() => ReverseVoucherAsync(x)">↩ Reverse</button>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
-        <h2 class="print-title">@I18n.T(selectedVoucher.VoucherType, selectedVoucher.VoucherType) @I18n.T("Voucher", "Voucher")</h2>
-        <div class="print-grid">
-            <div><span>@I18n.T("Status:", "Status:")</span> <b>@I18n.T(selectedVoucher.Status, selectedVoucher.Status)</b></div>
-            <div><span>@I18n.T("Reference:", "Reference:")</span> <b>@selectedVoucher.Reference</b></div>
-            <div class="span-2"><span>@I18n.T("Narration:", "Narration:")</span> <b>@selectedVoucher.Narration</b></div>
+    }
+
+    <!-- =========================================================================
+         TAB 2: GENERAL LEDGER, CASH RECONCILIATION & SHIFT CLOSING
+         ========================================================================= -->
+    else if (activeTab == "report")
+    {
+        <!-- 2A. General Ledger Statement Card -->
+        <div class="acc-card">
+            <div class="acc-card-header">
+                <div>
+                    <h2 class="acc-card-title">
+                        <span>📒 @I18n.T("General Ledger Statement", "জেনারেল লেজার স্টেটমেন্ট")</span>
+                    </h2>
+                    <div style="font-size:11px; color:#64748b;">
+                        @I18n.T("Approved and reversal journal entries across selected account heads.")
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="acc-print-btn primary" @onclick='() => PrintLedgerFormatAsync("a4")'>🖨️ @I18n.T("Print A4 Ledger")</button>
+                    <button type="button" class="acc-print-btn" @onclick='() => PrintLedgerFormatAsync("a5")'>📄 @I18n.T("Print A5 Ledger")</button>
+                    <button type="button" class="acc-print-btn" @onclick='() => PrintLedgerFormatAsync("80mm")'>🧾 @I18n.T("80mm Summary")</button>
+                </div>
+            </div>
+
+            <!-- Ledger Search & Account Filter Bar -->
+            <div style="padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:6px; min-width:260px;">
+                    <span style="font-size:11.5px; font-weight:750; color:#334155; white-space:nowrap;">@I18n.T("Account Head"):</span>
+                    <select class="classic-input" style="height:30px !important; font-size:12px !important;" @bind="ledgerAccountId">
+                        <option value="0">@I18n.T("All Account Heads", "সকল হিসাব খাত")</option>
+                        @foreach (var x in accounts)
+                        {
+                            <option value="@x.ID">@x.Code · @x.Name (@x.AccountType)</option>
+                        }
+                    </select>
+                </div>
+
+                <div style="position:relative; flex:1; min-width:220px;">
+                    <input type="text"
+                           class="classic-input"
+                           style="height:30px !important; padding-left:28px !important;"
+                           placeholder="@I18n.T("Search ledger by voucher no, account name, or narration...")"
+                           @bind="ledgerSearchText"
+                           @bind:event="oninput" />
+                    <span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); font-size:12px; color:#64748b;">🔍</span>
+                </div>
+
+                <span class="pill" style="background:#e0f2fe; color:#0369a1; font-weight:800; font-size:11px;">
+                    @FilteredLedgerRows.Count() @I18n.T("Entries")
+                </span>
+            </div>
+
+            <div class="acc-table-wrap" style="max-height:460px; overflow-y:auto;">
+                <table class="acc-table">
+                    <thead>
+                        <tr>
+                            <th>@I18n.T("Date", "তারিখ")</th>
+                            <th>@I18n.T("Voucher No", "ভাউচার নং")</th>
+                            <th>@I18n.T("Account Head", "হিসাব খাত")</th>
+                            <th>@I18n.T("Narration / Particulars", "বিবরণ")</th>
+                            <th class="num">@I18n.T("Debit (৳)", "ডেবিট")</th>
+                            <th class="num">@I18n.T("Credit (৳)", "ক্রেডিট")</th>
+                            <th class="num">@I18n.T("Net (Dr - Cr)", "নিট ব্যালেন্স")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!FilteredLedgerRows.Any())
+                        {
+                            <tr>
+                                <td colspan="7" style="text-align:center; padding:28px; color:#64748b;">
+                                    @I18n.T("No ledger entries found for this period and filter.")
+                                </td>
+                            </tr>
+                        }
+                        @{
+                            decimal runningNet = 0m;
+                            var orderedLedger = FilteredLedgerRows.OrderBy(x => x.Date).ThenBy(x => x.VoucherNo).ToList();
+                        }
+                        @foreach (var x in orderedLedger)
+                        {
+                            runningNet += (x.Debit - x.Credit);
+                            <tr>
+                                <td style="white-space:nowrap;">@x.Date.ToString("dd MMM yyyy")</td>
+                                <td><strong style="color:#0284c7;">@x.VoucherNo</strong></td>
+                                <td><strong>@AccountCodeAndName(x.AccountID)</strong></td>
+                                <td>@x.Narration</td>
+                                <td class="num" style="font-weight:700;">@(x.Debit > 0 ? I18n.FormatCurrency(x.Debit) : "—")</td>
+                                <td class="num" style="font-weight:700;">@(x.Credit > 0 ? I18n.FormatCurrency(x.Credit) : "—")</td>
+                                <td class="num" style="font-weight:800; color:@(runningNet >= 0 ? "#047857" : "#b91c1c");">
+                                    @I18n.FormatCurrency(runningNet)
+                                </td>
+                            </tr>
+                        }
+                        @if (orderedLedger.Count > 0)
+                        {
+                            var sumDr = orderedLedger.Sum(x => x.Debit);
+                            var sumCr = orderedLedger.Sum(x => x.Credit);
+                            <tr class="total-row">
+                                <td colspan="4" style="text-align:right;">@I18n.T("Period Ledger Total", "সর্বমোট"):</td>
+                                <td class="num">@I18n.FormatCurrency(sumDr)</td>
+                                <td class="num">@I18n.FormatCurrency(sumCr)</td>
+                                <td class="num">@I18n.FormatCurrency(sumDr - sumCr)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <table class="data-table" style="margin-top:12px;">
+
+        <!-- 2B. Two-Column Grid: Reconciliation & Cashier Day Closing -->
+        <div class="acc-grid-2col">
+            <!-- Left: Cashier Day Closing & Financial Period Lock -->
+            <div>
+                <div class="acc-card">
+                    <div class="acc-card-header">
+                        <div>
+                            <h2 class="acc-card-title">
+                                <span>🔒 @I18n.T("Cashier Shift & Day Closing", "ক্যাশিয়ার ডে-ক্লোজিং ও হ্যান্ডওভার")</span>
+                            </h2>
+                            <div style="font-size:11px; color:#64748b;">
+                                @handoverDate.ToString("dd MMM yyyy") &bull; @I18n.T("System Cash"): <b>@I18n.FormatCurrency(handoverSystem)</b>
+                            </div>
+                        </div>
+                        @if (currentHandover?.IsLocked == true)
+                        {
+                            <span class="pill" style="background:#fee2e2; color:#b91c1c; font-weight:800;">🔒 LOCKED</span>
+                        }
+                        else
+                        {
+                            <span class="pill" style="background:#d1fae5; color:#047857; font-weight:800;">🔓 OPEN</span>
+                        }
+                    </div>
+
+                    <div class="acc-card-body">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                            <div>
+                                <span class="acc-field-label">@I18n.T("Business Date", "তারিখ")</span>
+                                <InputDate class="classic-input" style="height:30px !important;" @bind-Value="handoverDate" @bind-Value:after="CalculateHandoverAsync" />
+                            </div>
+                            <div>
+                                <span class="acc-field-label">@I18n.T("Declared Handover (৳) *", "হস্তান্তরিত নগদ (৳) *")</span>
+                                <InputNumber class="classic-input" style="height:30px !important;" @bind-Value="handedAmount" disabled="@(currentHandover?.IsLocked == true)" />
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <span class="acc-field-label">@I18n.T("Shift Handover Notes", "মন্তব্য / নোট")</span>
+                            <input class="classic-input" style="height:30px !important;" @bind="handoverNotes" disabled="@(currentHandover?.IsLocked == true)" placeholder="e.g. Handed over to Accounts Officer..." />
+                        </div>
+
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            @if (currentHandover?.IsLocked != true)
+                            {
+                                <button type="button" class="btn btn-primary" style="flex:1; height:32px; font-weight:800;" @onclick="CloseDayAsync">
+                                    🔒 @I18n.T("Close & Lock Shift", "শিফট সমাপ্ত ও লক করুন")
+                                </button>
+                            }
+                            else if (isAdministrator)
+                            {
+                                <button type="button" class="btn btn-secondary" style="flex:1; height:32px; font-weight:800;" @onclick="ReopenCurrentDayAsync">
+                                    🔓 @I18n.T("Reopen Shift", "পুনরায় খুলুন")
+                                </button>
+                            }
+                            <button type="button" class="acc-print-btn" @onclick='() => PrintLedgerFormatAsync("80mm")'>
+                                🧾 @I18n.T("Print 80mm Closing Slip")
+                            </button>
+                        </div>
+
+                        @if (isAdministrator && recentHandovers.Count > 0)
+                        {
+                            <div style="margin-top:14px; border-top:1px solid #e2e8f0; padding-top:10px;">
+                                <div style="font-size:11.5px; font-weight:800; color:#334155; margin-bottom:6px;">
+                                    📋 @I18n.T("Recent Cashier Closing Records", "সাম্প্রতিক ক্যাশিয়ার ক্লোজিং")
+                                </div>
+                                <div style="max-height:190px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;">
+                                    @foreach (var x in recentHandovers.Take(10))
+                                    {
+                                        <div style="display:flex; justify-content:space-between; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:6px 10px; font-size:11px;">
+                                            <div>
+                                                <strong>@x.BusinessDate.ToString("dd MMM yyyy") &bull; Cashier #@x.CashierID</strong>
+                                                <div style="color:#64748b; font-size:10.5px;">
+                                                    System: @I18n.FormatCurrency(x.SystemAmount) &bull; Handed: @I18n.FormatCurrency(x.HandedOverAmount) &bull;
+                                                    <b>@(x.IsLocked ? "🔒 Locked" : "🔓 Open")</b>
+                                                </div>
+                                            </div>
+                                            @if (x.IsLocked)
+                                            {
+                                                <button type="button" class="acc-chip-btn" @onclick="() => ReopenHandoverAsync(x)">Reopen</button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                @if (isAdministrator)
+                {
+                    <div class="acc-card">
+                        <div class="acc-card-header">
+                            <h2 class="acc-card-title">
+                                <span>🛡️ @I18n.T("Financial Period Lock", "আর্থিক সময়কাল লক")</span>
+                            </h2>
+                        </div>
+                        <div class="acc-card-body">
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px;">
+                                <div>
+                                    <span class="acc-field-label">@I18n.T("Lock From *", "শুরুর তারিখ *")</span>
+                                    <InputDate class="classic-input" style="height:30px !important;" @bind-Value="lockFrom" />
+                                </div>
+                                <div>
+                                    <span class="acc-field-label">@I18n.T("Lock To *", "শেষের তারিখ *")</span>
+                                    <InputDate class="classic-input" style="height:30px !important;" @bind-Value="lockTo" />
+                                </div>
+                            </div>
+                            <div style="margin-bottom:10px;">
+                                <span class="acc-field-label">@I18n.T("Audit Lock Reason *", "লক করার কারণ *")</span>
+                                <input class="classic-input" style="height:30px !important;" @bind="lockReason" placeholder="e.g. Monthly audit completed..." />
+                            </div>
+                            <button type="button" class="btn btn-primary" style="width:100%; height:30px; font-size:12px; font-weight:750;" @onclick="LockPeriodAsync">
+                                🛡️ @I18n.T("Lock Financial Period", "পিরিয়ড লক করুন")
+                            </button>
+
+                            @foreach (var x in periodLocks.Where(x => x.IsActive))
+                            {
+                                <div style="margin-top:8px; display:flex; justify-content:space-between; align-items:center; background:#fff1f2; border:1px solid #fecdd3; border-radius:6px; padding:6px 10px; font-size:11px;">
+                                    <div>
+                                        <strong style="color:#b91c1c;">🔒 @x.FromDate.ToString("dd MMM yyyy") – @x.ToDate.ToString("dd MMM yyyy")</strong>
+                                        <div style="font-size:10px; color:#64748b;">@x.Reason</div>
+                                    </div>
+                                    <button type="button" class="acc-chip-btn" @onclick="() => UnlockPeriodAsync(x)">Unlock</button>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <!-- Right: Cash vs General Ledger Daily Reconciliation -->
+            <div class="acc-card">
+                <div class="acc-card-header">
+                    <div>
+                        <h2 class="acc-card-title">
+                            <span>⚖️ @I18n.T("Cash vs General Ledger Reconciliation", "সেন্ট্রাল ক্যাশ ও জিএল রিকনসিলিয়েশন")</span>
+                        </h2>
+                        <div style="font-size:11px; color:#64748b;">
+                            @I18n.T("Daily comparison between Central Cash Collection and General Ledger Cash Head.")
+                        </div>
+                    </div>
+                    @if (isAdministrator)
+                    {
+                        <button type="button" class="btn btn-secondary btn-sm" style="font-size:11px; font-weight:750;" @onclick="BackfillOperationalJournalsAsync">
+                            ⚡ @I18n.T("Sync Operational Journals", "অপারেশনাল জার্নাল সিঙ্ক")
+                        </button>
+                    }
+                </div>
+
+                <div style="padding:8px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; gap:6px; align-items:center;">
+                    <span style="font-size:11px; font-weight:750; color:#64748b;">@I18n.T("Filter"):</span>
+                    <button type="button" class="acc-pill-filter @(reconFilter == "all" ? "active" : "")" @onclick='() => reconFilter = "all"'>All Days (@reconciliationRows.Count)</button>
+                    <button type="button" class="acc-pill-filter @(reconFilter == "matched" ? "active" : "")" @onclick='() => reconFilter = "matched"'>✓ Matched (@reconciliationRows.Count(x => x.Variance == 0))</button>
+                    <button type="button" class="acc-pill-filter @(reconFilter == "variance" ? "active" : "")" @onclick='() => reconFilter = "variance"'>⚠ Variance (@reconciliationRows.Count(x => x.Variance != 0))</button>
+                </div>
+
+                <div class="acc-table-wrap" style="max-height:460px; overflow-y:auto;">
+                    <table class="acc-table">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("Business Date", "তারিখ")</th>
+                                <th class="num">@I18n.T("Central Cash (৳)", "সেন্ট্রাল ক্যাশ")</th>
+                                <th class="num">@I18n.T("GL Cash (৳)", "জিএল ক্যাশ")</th>
+                                <th class="num">@I18n.T("Variance (৳)", "পার্থক্য")</th>
+                                <th style="text-align:center;">@I18n.T("Status", "স্ট্যাটাস")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var x in FilteredReconciliationRows)
+                            {
+                                <tr>
+                                    <td style="font-weight:750;">@x.Date.ToString("dd MMM yyyy")</td>
+                                    <td class="num">@I18n.FormatCurrency(x.CentralCash)</td>
+                                    <td class="num">@I18n.FormatCurrency(x.GlCash)</td>
+                                    <td class="num" style="font-weight:800; color:@(x.Variance == 0 ? "#047857" : "#dc2626");">
+                                        @I18n.FormatCurrency(x.Variance)
+                                    </td>
+                                    <td style="text-align:center;">
+                                        <span class="pill" style="font-size:10px; font-weight:800; background:@(x.Variance == 0 ? "#d1fae5" : "#fee2e2"); color:@(x.Variance == 0 ? "#047857" : "#b91c1c");">
+                                            @(x.Variance == 0 ? "✓ MATCHED" : "⚠ REVIEW")
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- =========================================================================
+         TAB 3: PARTICULARS HEAD / CHART OF ACCOUNTS (COA)
+         ========================================================================= -->
+    else if (activeTab == "particulars")
+    {
+        <div class="acc-grid-2col">
+            <!-- Left: Add / Edit Account Head -->
+            <div class="acc-card">
+                <div class="acc-card-header">
+                    <h2 class="acc-card-title">
+                        <span>🗂️ @(accountEditor.ID == 0 ? I18n.T("Add New Particulars Head", "নতুন হিসাব খাত যোগ করুন") : I18n.T("Edit Particulars Head", "হিসাব খাত সম্পাদনা"))</span>
+                    </h2>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;" @onclick="ResetAccount">
+                        + @I18n.T("New Head", "নতুন")
+                    </button>
+                </div>
+
+                <div class="acc-card-body">
+                    <div style="margin-bottom:10px;">
+                        <span class="acc-field-label">@I18n.T("Account Classification / Type *", "হিসাবের শ্রেণি *")</span>
+                        <div style="display:grid; grid-template-columns:repeat(5, 1fr); gap:5px;">
+                            @foreach (var t in new[] { "Asset", "Liability", "Equity", "Income", "Expense" })
+                            {
+                                <button type="button"
+                                        class="acc-preset-btn @(accountEditor.AccountType == t ? "active" : "")"
+                                        style="padding:5px 2px; text-align:center;"
+                                        @onclick='() => SetAccountEditorType(t)'>
+                                    @t
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns:130px 1fr; gap:10px; margin-bottom:10px;">
+                        <div>
+                            <span class="acc-field-label">@I18n.T("Account Code *", "হিসাব কোড *")</span>
+                            <input class="classic-input" style="height:30px !important; font-weight:800;" @bind="accountEditor.Code" placeholder="e.g. 1010" />
+                        </div>
+                        <div>
+                            <span class="acc-field-label">@I18n.T("Particulars / Account Head Name *", "হিসাব খাতের নাম *")</span>
+                            <input class="classic-input" style="height:30px !important;" @bind="accountEditor.Name" placeholder="e.g. Cash in Hand, Diagnostic Revenue..." />
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+                        <InputCheckbox id="acc-active-chk" @bind-Value="accountEditor.IsActive" />
+                        <label for="acc-active-chk" style="font-size:12px; font-weight:700; color:#334155; cursor:pointer;">
+                            @I18n.T("Active for Voucher Posting", "ভাউচার পোস্টিংয়ের জন্য সক্রিয়")
+                        </label>
+                    </div>
+
+                    @if (isAdministrator)
+                    {
+                        <button type="button" class="btn btn-primary" style="width:100%; height:34px; font-weight:800;" @onclick="SaveAccountAsync">
+                            💾 @(accountEditor.ID == 0 ? I18n.T("Save Particulars Head", "হিসাব খাত সংরক্ষণ করুন") : I18n.T("Update Particulars Head", "হিসাব খাত আপডেট করুন"))
+                        </button>
+                    }
+                    else
+                    {
+                        <div style="padding:10px; background:#fef3c7; color:#b45309; border-radius:6px; font-size:11.5px; font-weight:700;">
+                            🔒 @I18n.T("Administrator permission is required to add or modify Chart of Accounts.")
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Right: Searchable Chart of Accounts Directory & Balances -->
+            <div class="acc-card">
+                <div class="acc-card-header">
+                    <div>
+                        <h2 class="acc-card-title">
+                            <span>📋 @I18n.T("Chart of Accounts (Particulars Directory & Period Balances)", "চার্ট অফ অ্যাকাউন্টস ও ব্যালেন্স তালিকা")</span>
+                        </h2>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button type="button" class="acc-print-btn primary" @onclick='() => PrintCoaFormatAsync("a4")'>🖨️ @I18n.T("Print A4 COA")</button>
+                        <button type="button" class="acc-print-btn" @onclick='() => PrintCoaFormatAsync("a5")'>📄 @I18n.T("Print A5 COA")</button>
+                    </div>
+                </div>
+
+                <!-- Search & Type Filter Bar -->
+                <div style="padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; flex-direction:column; gap:8px;">
+                    <div style="position:relative; width:100%;">
+                        <input type="text"
+                               class="classic-input"
+                               style="height:30px !important; padding-left:28px !important;"
+                               placeholder="@I18n.T("Search particulars head by code, name, or classification...")"
+                               @bind="coaSearchText"
+                               @bind:event="oninput" />
+                        <span style="position:absolute; left:9px; top:50%; transform:translateY(-50%); font-size:12px; color:#64748b;">🔍</span>
+                    </div>
+
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                        <span style="font-size:10.5px; font-weight:750; color:#64748b;">@I18n.T("Filter Type"):</span>
+                        @foreach (var t in new[] { "ALL", "Asset", "Liability", "Equity", "Income", "Expense" })
+                        {
+                            <button type="button"
+                                    class="acc-pill-filter @(coaTypeFilter == t ? "active" : "")"
+                                    @onclick='() => coaTypeFilter = t'>
+                                @(t == "ALL" ? $"All ({accounts.Count})" : $"{t} ({accounts.Count(a => a.AccountType == t)})")
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <div class="acc-table-wrap" style="max-height:520px; overflow-y:auto;">
+                    <table class="acc-table">
+                        <thead>
+                            <tr>
+                                <th style="width:90px;">@I18n.T("Code", "কোড")</th>
+                                <th>@I18n.T("Particulars Head Name", "হিসাব খাতের নাম")</th>
+                                <th>@I18n.T("Type", "শ্রেণি")</th>
+                                <th class="num">@I18n.T("Period Debit", "ডেবিট")</th>
+                                <th class="num">@I18n.T("Period Credit", "ক্রেডিট")</th>
+                                <th>@I18n.T("Status", "অবস্থা")</th>
+                                <th style="text-align:right;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var x in FilteredCoaAccounts)
+                            {
+                                var dr = AccountPeriodDebit(x.ID);
+                                var cr = AccountPeriodCredit(x.ID);
+                                <tr>
+                                    <td><strong style="color:#0284c7;">@x.Code</strong></td>
+                                    <td><strong>@x.Name</strong></td>
+                                    <td>
+                                        <span class="pill" style="font-size:10px; background:#f1f5f9; color:#334155; font-weight:750;">
+                                            @x.AccountType
+                                        </span>
+                                    </td>
+                                    <td class="num">@(dr > 0 ? I18n.FormatCurrency(dr) : "—")</td>
+                                    <td class="num">@(cr > 0 ? I18n.FormatCurrency(cr) : "—")</td>
+                                    <td>
+                                        <span class="pill" style="font-size:10px; background:@(x.IsActive ? "#d1fae5" : "#f1f5f9"); color:@(x.IsActive ? "#047857" : "#64748b");">
+                                            @(x.IsActive ? "Active" : "Inactive")
+                                        </span>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <button type="button" class="acc-chip-btn" @onclick="() => SelectAccount(x)">✎ Edit</button>
+                                        <button type="button" class="acc-chip-btn" style="margin-left:4px;" @onclick="() => ViewAccountInLedger(x.ID)">📒 Ledger</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<!-- =========================================================================
+     HIDDEN PRINT SHEETS (A4, A5, AND 80MM THERMAL)
+     ========================================================================= -->
+
+<!-- 1. VOUCHER PRINT SHEETS (A4, A5, 80MM) -->
+@if (selectedVoucher is not null)
+{
+    <!-- 1A: A4 Official Voucher -->
+    <div id="voucher-print-a4" class="print-sheet" style="display:none;">
+        <PrintDocumentHeader Title="@($"{selectedVoucher.VoucherType?.ToUpperInvariant()} VOUCHER")"
+                             Subtitle="Hospital Accounts & General Ledger Control"
+                             DocNo="@selectedVoucher.VoucherNo"
+                             DocNoLabel="Voucher #"
+                             BarcodeCode="@($"VCH-{selectedVoucher.ID}")" />
+
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:10px 12px; margin:12px 0; font-size:11.5px;">
+            <div><span style="color:#64748b; font-weight:700;">Voucher No:</span> <strong>@selectedVoucher.VoucherNo</strong></div>
+            <div><span style="color:#64748b; font-weight:700;">Voucher Date:</span> <strong>@selectedVoucher.VoucherDate.ToString("dd MMM yyyy")</strong></div>
+            <div><span style="color:#64748b; font-weight:700;">Status:</span> <strong>@selectedVoucher.Status</strong></div>
+            <div><span style="color:#64748b; font-weight:700;">Reference:</span> <strong>@(string.IsNullOrWhiteSpace(selectedVoucher.Reference) ? "—" : selectedVoucher.Reference)</strong></div>
+            <div style="grid-column:span 2;"><span style="color:#64748b; font-weight:700;">Narration:</span> <strong>@selectedVoucher.Narration</strong></div>
+        </div>
+
+        <table style="width:100%; border-collapse:collapse; font-size:11.5px; margin-top:8px;" border="1" cellpadding="7">
             <thead>
-                <tr>
-                    <th>@I18n.T("Account", "Account")</th>
-                    <th class="num">@I18n.T("Debit", "Debit")</th>
-                    <th class="num">@I18n.T("Credit", "Credit")</th>
+                <tr style="background:#f1f5f9;">
+                    <th style="text-align:left;">Account Head (Code & Name)</th>
+                    <th style="text-align:right; width:140px;">Debit (৳)</th>
+                    <th style="text-align:right; width:140px;">Credit (৳)</th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var x in selectedVoucherLines)
                 {
                     <tr>
-                        <td>@AccountName(x.AccountID)</td>
-                        <td class="num">@I18n.FormatCurrency(x.Debit)</td>
-                        <td class="num">@I18n.FormatCurrency(x.Credit)</td>
+                        <td><b>@AccountCodeAndName(x.AccountID)</b></td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Debit)</td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Credit)</td>
                     </tr>
                 }
-                <tr style="background:#f8fafc; font-weight:750;">
-                    <td><b>@I18n.T("Total", "Total")</b></td>
-                    <td class="num"><b>@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Debit))</b></td>
-                    <td class="num"><b>@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Credit))</b></td>
+                <tr style="background:#f8fafc; font-weight:900;">
+                    <td style="text-align:right;">TOTAL:</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Debit))</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Credit))</td>
                 </tr>
             </tbody>
         </table>
-        <div class="print-footer"><span class="print-sign">@I18n.T("Prepared By", "Prepared By")</span><span class="print-sign">@I18n.T("Approved By", "Approved By")</span><span class="print-sign">@I18n.T("Receiver", "Receiver")</span></div>
+
+        <div style="display:flex; justify-content:space-between; margin-top:48px; font-size:11px;">
+            <div style="border-top:1px solid #0f172a; width:150px; text-align:center; padding-top:4px;">Prepared By</div>
+            <div style="border-top:1px solid #0f172a; width:150px; text-align:center; padding-top:4px;">Checked / Accounts</div>
+            <div style="border-top:1px solid #0f172a; width:150px; text-align:center; padding-top:4px;">Approved By</div>
+            <div style="border-top:1px solid #0f172a; width:150px; text-align:center; padding-top:4px;">Receiver Signature</div>
+        </div>
+    </div>
+
+    <!-- 1B: A5 Half-Sheet Voucher -->
+    <div id="voucher-print-a5" class="print-a5-sheet" style="display:none;">
+        <div style="text-align:center; border-bottom:1.5px solid #0f172a; padding-bottom:6px; margin-bottom:8px;">
+            <div style="font-size:15px; font-weight:900;">@Branding.HospitalName</div>
+            <div style="font-size:10px; color:#475569;">@Branding.Address &bull; @Branding.Phone</div>
+            <div style="font-size:12px; font-weight:800; margin-top:3px; text-transform:uppercase;">@selectedVoucher.VoucherType VOUCHER (@selectedVoucher.VoucherNo)</div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:10px; margin-bottom:6px;">
+            <span><b>Date:</b> @selectedVoucher.VoucherDate.ToString("dd MMM yyyy")</span>
+            <span><b>Status:</b> @selectedVoucher.Status</span>
+            <span><b>Ref:</b> @(string.IsNullOrWhiteSpace(selectedVoucher.Reference) ? "—" : selectedVoucher.Reference)</span>
+        </div>
+        <div style="font-size:10px; margin-bottom:8px; padding:4px 6px; background:#f8fafc; border:1px solid #cbd5e1;">
+            <b>Narration:</b> @selectedVoucher.Narration
+        </div>
+        <table style="width:100%; border-collapse:collapse; font-size:10px;" border="1" cellpadding="4">
+            <thead>
+                <tr style="background:#f1f5f9;">
+                    <th style="text-align:left;">Account Head</th>
+                    <th style="text-align:right;">Debit (৳)</th>
+                    <th style="text-align:right;">Credit (৳)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in selectedVoucherLines)
+                {
+                    <tr>
+                        <td>@AccountCodeAndName(x.AccountID)</td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Debit)</td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Credit)</td>
+                    </tr>
+                }
+                <tr style="font-weight:800; background:#f8fafc;">
+                    <td style="text-align:right;">Total:</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Debit))</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Credit))</td>
+                </tr>
+            </tbody>
+        </table>
+        <div style="display:flex; justify-content:space-between; margin-top:28px; font-size:9.5px;">
+            <span style="border-top:1px solid #000; width:100px; text-align:center; padding-top:2px;">Prepared By</span>
+            <span style="border-top:1px solid #000; width:100px; text-align:center; padding-top:2px;">Approved By</span>
+            <span style="border-top:1px solid #000; width:100px; text-align:center; padding-top:2px;">Receiver</span>
+        </div>
+    </div>
+
+    <!-- 1C: 80mm Thermal POS Slip Voucher -->
+    <div id="voucher-print-80mm" class="pos-receipt-80mm" style="display:none;">
+        <div style="text-align:center; border-bottom:1px dashed #000; padding-bottom:6px; margin-bottom:6px;">
+            <div style="font-size:13px; font-weight:900;">@Branding.HospitalName</div>
+            <div style="font-size:9.5px;">@Branding.Address</div>
+            <div style="font-size:11px; font-weight:800; margin-top:3px;">@selectedVoucher.VoucherType?.ToUpperInvariant() VOUCHER</div>
+        </div>
+        <div style="font-size:10px; line-height:1.4; margin-bottom:6px;">
+            <div><b>No:</b> @selectedVoucher.VoucherNo</div>
+            <div><b>Date:</b> @selectedVoucher.VoucherDate.ToString("dd-MMM-yyyy") | <b>Status:</b> @selectedVoucher.Status</div>
+            @if (!string.IsNullOrWhiteSpace(selectedVoucher.Reference)) { <div><b>Ref:</b> @selectedVoucher.Reference</div> }
+            <div><b>Note:</b> @selectedVoucher.Narration</div>
+        </div>
+        <table style="width:100%; border-collapse:collapse; font-size:9.5px; border-top:1px dashed #000; border-bottom:1px dashed #000;">
+            <thead>
+                <tr style="border-bottom:1px dashed #000;">
+                    <th style="text-align:left; padding:3px 0;">Account</th>
+                    <th style="text-align:right; padding:3px 0;">Dr</th>
+                    <th style="text-align:right; padding:3px 0;">Cr</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in selectedVoucherLines)
+                {
+                    <tr>
+                        <td style="padding:2px 0;">@AccountName(x.AccountID)</td>
+                        <td style="text-align:right;">@(x.Debit > 0 ? x.Debit.ToString("N0") : "-")</td>
+                        <td style="text-align:right;">@(x.Credit > 0 ? x.Credit.ToString("N0") : "-")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div style="display:flex; justify-content:space-between; font-weight:900; font-size:11px; margin-top:4px;">
+            <span>TOTAL AMOUNT:</span>
+            <span>@I18n.FormatCurrency(selectedVoucherLines.Sum(x => x.Debit))</span>
+        </div>
+        <div style="margin-top:20px; display:flex; justify-content:space-between; font-size:9px; text-align:center;">
+            <span style="border-top:1px dashed #000; width:45%; padding-top:2px;">Prepared</span>
+            <span style="border-top:1px dashed #000; width:45%; padding-top:2px;">Approved</span>
+        </div>
     </div>
 }
 
+<!-- 2. GENERAL LEDGER & RECONCILIATION PRINT SHEETS (A4, A5, 80MM) -->
+<div id="accounts-ledger-print-a4" class="print-sheet" style="display:none;">
+    <PrintDocumentHeader Title="GENERAL LEDGER & CASH RECONCILIATION STATEMENT"
+                         Subtitle="@($"Reporting Period: {fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")"
+                         DocNo="@($"GL-{fromDate:yyyyMMdd}-{toDate:yyyyMMdd}")"
+                         DocNoLabel="Period #" />
+
+    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin:10px 0; font-size:11px;">
+        <div style="border:1px solid #cbd5e1; padding:6px 8px; border-radius:4px;"><b>Central Cash:</b> @I18n.FormatCurrency(cashCollection)</div>
+        <div style="border:1px solid #cbd5e1; padding:6px 8px; border-radius:4px;"><b>GL Cash:</b> @I18n.FormatCurrency(glCash)</div>
+        <div style="border:1px solid #cbd5e1; padding:6px 8px; border-radius:4px;"><b>Posted Income:</b> @I18n.FormatCurrency(income)</div>
+        <div style="border:1px solid #cbd5e1; padding:6px 8px; border-radius:4px;"><b>Posted Expense:</b> @I18n.FormatCurrency(expense)</div>
+    </div>
+
+    <table style="width:100%; border-collapse:collapse; font-size:10.5px;" border="1" cellpadding="5">
+        <thead>
+            <tr style="background:#f1f5f9;">
+                <th>Date</th>
+                <th>Voucher No</th>
+                <th>Account Head</th>
+                <th>Narration</th>
+                <th style="text-align:right;">Debit (৳)</th>
+                <th style="text-align:right;">Credit (৳)</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var x in FilteredLedgerRows)
+            {
+                <tr>
+                    <td>@x.Date.ToString("dd MMM yy")</td>
+                    <td>@x.VoucherNo</td>
+                    <td>@AccountCodeAndName(x.AccountID)</td>
+                    <td>@x.Narration</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(x.Debit)</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(x.Credit)</td>
+                </tr>
+            }
+            <tr style="background:#f1f5f9; font-weight:900;">
+                <td colspan="4" style="text-align:right;">TOTAL:</td>
+                <td style="text-align:right;">@I18n.FormatCurrency(FilteredLedgerRows.Sum(x => x.Debit))</td>
+                <td style="text-align:right;">@I18n.FormatCurrency(FilteredLedgerRows.Sum(x => x.Credit))</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div style="display:flex; justify-content:space-between; margin-top:40px; font-size:11px;">
+        <div style="border-top:1px solid #000; width:150px; text-align:center; padding-top:4px;">Prepared By</div>
+        <div style="border-top:1px solid #000; width:150px; text-align:center; padding-top:4px;">Accounts Officer</div>
+        <div style="border-top:1px solid #000; width:150px; text-align:center; padding-top:4px;">Managing Director</div>
+    </div>
+</div>
+
+<div id="accounts-ledger-print-a5" class="print-a5-sheet" style="display:none;">
+    <div style="text-align:center; border-bottom:1.5px solid #000; padding-bottom:4px; margin-bottom:6px;">
+        <div style="font-size:14px; font-weight:900;">@Branding.HospitalName</div>
+        <div style="font-size:11px; font-weight:800;">GENERAL LEDGER STATEMENT (@fromDate.ToString("dd MMM yy") - @toDate.ToString("dd MMM yy"))</div>
+    </div>
+    <table style="width:100%; border-collapse:collapse; font-size:9.5px;" border="1" cellpadding="3">
+        <thead>
+            <tr style="background:#f1f5f9;">
+                <th>Date / Voucher</th>
+                <th>Account Head</th>
+                <th>Narration</th>
+                <th style="text-align:right;">Debit</th>
+                <th style="text-align:right;">Credit</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var x in FilteredLedgerRows)
+            {
+                <tr>
+                    <td>@x.Date.ToString("dd/MM/yy") (@x.VoucherNo)</td>
+                    <td>@AccountName(x.AccountID)</td>
+                    <td>@x.Narration</td>
+                    <td style="text-align:right;">@x.Debit.ToString("N0")</td>
+                    <td style="text-align:right;">@x.Credit.ToString("N0")</td>
+                </tr>
+            }
+            <tr style="font-weight:800; background:#f8fafc;">
+                <td colspan="3" style="text-align:right;">Total:</td>
+                <td style="text-align:right;">@FilteredLedgerRows.Sum(x => x.Debit).ToString("N0")</td>
+                <td style="text-align:right;">@FilteredLedgerRows.Sum(x => x.Credit).ToString("N0")</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div id="accounts-ledger-print-80mm" class="pos-receipt-80mm" style="display:none;">
+    <div style="text-align:center; border-bottom:1px dashed #000; padding-bottom:6px; margin-bottom:6px;">
+        <div style="font-size:13px; font-weight:900;">@Branding.HospitalName</div>
+        <div style="font-size:10px; font-weight:800;">ACCOUNTS & CASH CLOSING SUMMARY</div>
+        <div style="font-size:9.5px;">@fromDate.ToString("dd MMM yyyy") - @toDate.ToString("dd MMM yyyy")</div>
+    </div>
+    <div style="font-size:10.5px; line-height:1.5; border-bottom:1px dashed #000; padding-bottom:6px; margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between;"><span>Central Cash:</span><b>@I18n.FormatCurrency(cashCollection)</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>GL Cash Movement:</span><b>@I18n.FormatCurrency(glCash)</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>Cash Variance:</span><b>@I18n.FormatCurrency(cashDifference)</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>Posted Income:</span><b>@I18n.FormatCurrency(income)</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>Posted Expense:</span><b>@I18n.FormatCurrency(expense)</b></div>
+        <div style="display:flex; justify-content:space-between;"><span>Handover (@handoverDate.ToString("dd MMM")):</span><b>@I18n.FormatCurrency(handedAmount)</b></div>
+    </div>
+    <div style="text-align:center; font-size:9px; margin-top:16px;">
+        Printed: @DateTime.Now.ToString("dd-MMM-yyyy hh:mm tt")
+    </div>
+</div>
+
+<!-- 3. CHART OF ACCOUNTS PRINT SHEETS (A4 & A5) -->
+<div id="accounts-coa-print-a4" class="print-sheet" style="display:none;">
+    <PrintDocumentHeader Title="CHART OF ACCOUNTS (PARTICULARS HEAD DIRECTORY)"
+                         Subtitle="@($"Period Activity: {fromDate:dd MMM yyyy} - {toDate:dd MMM yyyy}")"
+                         DocNo="@($"COA-{DateTime.Today:yyyyMMdd}")" />
+    <table style="width:100%; border-collapse:collapse; font-size:11px; margin-top:10px;" border="1" cellpadding="6">
+        <thead>
+            <tr style="background:#f1f5f9;">
+                <th>Code</th>
+                <th>Particulars / Account Head Name</th>
+                <th>Classification</th>
+                <th style="text-align:right;">Period Debit (৳)</th>
+                <th style="text-align:right;">Period Credit (৳)</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var x in FilteredCoaAccounts)
+            {
+                <tr>
+                    <td><b>@x.Code</b></td>
+                    <td><b>@x.Name</b></td>
+                    <td>@x.AccountType</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(AccountPeriodDebit(x.ID))</td>
+                    <td style="text-align:right;">@I18n.FormatCurrency(AccountPeriodCredit(x.ID))</td>
+                    <td>@(x.IsActive ? "Active" : "Inactive")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+<div id="accounts-coa-print-a5" class="print-a5-sheet" style="display:none;">
+    <div style="text-align:center; border-bottom:1.5px solid #000; padding-bottom:4px; margin-bottom:6px;">
+        <div style="font-size:14px; font-weight:900;">@Branding.HospitalName</div>
+        <div style="font-size:11px; font-weight:800;">CHART OF ACCOUNTS DIRECTORY</div>
+    </div>
+    <table style="width:100%; border-collapse:collapse; font-size:9.5px;" border="1" cellpadding="4">
+        <thead>
+            <tr style="background:#f1f5f9;">
+                <th>Code</th>
+                <th>Particulars Name</th>
+                <th>Type</th>
+                <th style="text-align:right;">Debit</th>
+                <th style="text-align:right;">Credit</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var x in FilteredCoaAccounts)
+            {
+                <tr>
+                    <td><b>@x.Code</b></td>
+                    <td>@x.Name</td>
+                    <td>@x.AccountType</td>
+                    <td style="text-align:right;">@AccountPeriodDebit(x.ID).ToString("N0")</td>
+                    <td style="text-align:right;">@AccountPeriodCredit(x.ID).ToString("N0")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
 @code {
+    [SupplyParameterFromQuery(Name = "view")]
+    public string? ViewParam { get; set; }
+
     private List<AccountHead> accounts = [];
     private List<AccountVoucher> vouchers = [];
     private List<AccountVoucherLine> allLines = [];
@@ -233,23 +1690,65 @@
     private List<FinancialPeriodLock> periodLocks = [];
     private List<CashierHandover> recentHandovers = [];
     private List<ReconciliationRow> reconciliationRows = [];
+
     private AccountVoucher? selectedVoucher;
     private AccountHead accountEditor = new() { AccountType = "Asset", IsActive = true };
     private CashierHandover? currentHandover;
+
     private DateTime fromDate = DateTime.Today.AddDays(-30), toDate = DateTime.Today;
     private DateTime voucherDate = DateTime.Today, handoverDate = DateTime.Today;
     private DateTime lockFrom = new(DateTime.Today.Year, DateTime.Today.Month, 1), lockTo = DateTime.Today;
+    private string currentPreset = "month";
+
     private decimal cashCollection, glCash, cashDifference, income, expense, lineDebit, lineCredit, handoverSystem, handedAmount;
     private int lineAccountId, ledgerAccountId, pendingCount;
     private string voucherType = "Journal", reference = "", narration = "", handoverNotes = "", actionReason = "", lockReason = "", message = "", messageClass = "success";
+
+    // Active tab & search filters
+    private string activeTab = "voucher";
     private string voucherSearchScan = "";
+    private string voucherStatusFilter = "ALL";
+    private string voucherTypeFilter = "ALL";
+
+    private string accountHeadSearchText = "";
+    private bool showAccountDropdown = false;
+
+    private string ledgerSearchText = "";
+    private string reconFilter = "all";
+
+    private string coaSearchText = "";
+    private string coaTypeFilter = "ALL";
+
     private bool isAdministrator;
+
+    private IEnumerable<AccountHead> FilteredPickerAccounts
+    {
+        get
+        {
+            var active = accounts.Where(x => x.IsActive);
+            if (string.IsNullOrWhiteSpace(accountHeadSearchText)) return active;
+            var q = accountHeadSearchText.Trim();
+            return active.Where(x =>
+                x.Code.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                x.AccountType.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
 
     private IEnumerable<AccountVoucher> FilteredVouchers
     {
         get
         {
-            if (string.IsNullOrWhiteSpace(voucherSearchScan)) return vouchers;
+            var qList = vouchers.AsEnumerable();
+
+            if (voucherStatusFilter != "ALL")
+                qList = qList.Where(x => string.Equals(x.Status, voucherStatusFilter, StringComparison.OrdinalIgnoreCase));
+
+            if (voucherTypeFilter != "ALL")
+                qList = qList.Where(x => string.Equals(x.VoucherType, voucherTypeFilter, StringComparison.OrdinalIgnoreCase));
+
+            if (string.IsNullOrWhiteSpace(voucherSearchScan)) return qList;
+
             var q = voucherSearchScan.Trim();
             long? matchedId = null;
             if (q.StartsWith("HPM:VCH|", StringComparison.OrdinalIgnoreCase))
@@ -266,24 +1765,12 @@
                 matchedId = id;
             }
 
-            return vouchers.Where(x =>
+            return qList.Where(x =>
                 (matchedId.HasValue && x.ID == matchedId.Value) ||
                 (x.VoucherNo != null && x.VoucherNo.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
                 (x.Reference != null && x.Reference.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
                 (x.Narration != null && x.Narration.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
                 (x.VoucherType != null && x.VoucherType.Contains(q, StringComparison.OrdinalIgnoreCase)));
-        }
-    }
-
-    private async Task HandleVoucherScanKeyDownAsync(KeyboardEventArgs e)
-    {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(voucherSearchScan))
-        {
-            var target = FilteredVouchers.FirstOrDefault();
-            if (target != null)
-            {
-                await SelectVoucherAsync(target);
-            }
         }
     }
 
@@ -294,6 +1781,43 @@
         orderby v.VoucherDate descending, v.ID descending
         select new LedgerRow(v.VoucherDate, v.VoucherNo, l.AccountID, v.Narration, l.Debit, l.Credit);
 
+    private IEnumerable<LedgerRow> FilteredLedgerRows
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(ledgerSearchText)) return LedgerRows;
+            var q = ledgerSearchText.Trim();
+            return LedgerRows.Where(x =>
+                (x.VoucherNo != null && x.VoucherNo.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (x.Narration != null && x.Narration.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                AccountCodeAndName(x.AccountID).Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private IEnumerable<ReconciliationRow> FilteredReconciliationRows => reconFilter switch
+    {
+        "matched" => reconciliationRows.Where(x => x.Variance == 0),
+        "variance" => reconciliationRows.Where(x => x.Variance != 0),
+        _ => reconciliationRows
+    };
+
+    private IEnumerable<AccountHead> FilteredCoaAccounts
+    {
+        get
+        {
+            var qList = accounts.AsEnumerable();
+            if (coaTypeFilter != "ALL")
+                qList = qList.Where(x => string.Equals(x.AccountType, coaTypeFilter, StringComparison.OrdinalIgnoreCase));
+
+            if (string.IsNullOrWhiteSpace(coaSearchText)) return qList;
+            var q = coaSearchText.Trim();
+            return qList.Where(x =>
+                x.Code.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                x.AccountType.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
@@ -303,11 +1827,133 @@
         await CalculateHandoverAsync();
     }
 
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrWhiteSpace(ViewParam))
+        {
+            var v = ViewParam.Trim().ToLowerInvariant();
+            if (v is "voucher" or "report" or "particulars")
+            {
+                activeTab = v;
+            }
+        }
+    }
+
+    private void SwitchTab(string tab)
+    {
+        activeTab = tab;
+    }
+
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
     public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
+    private async Task ApplyDatePresetAsync(string preset)
+    {
+        currentPreset = preset;
+        var today = DateTime.Today;
+        switch (preset)
+        {
+            case "today":
+                fromDate = today;
+                toDate = today;
+                break;
+            case "yesterday":
+                fromDate = today.AddDays(-1);
+                toDate = today.AddDays(-1);
+                break;
+            case "7days":
+                fromDate = today.AddDays(-6);
+                toDate = today;
+                break;
+            case "month":
+                fromDate = new DateTime(today.Year, today.Month, 1);
+                toDate = today;
+                break;
+            case "year":
+                fromDate = new DateTime(today.Year, 1, 1);
+                toDate = today;
+                break;
+        }
+        await LoadAsync();
+    }
+
+    private async Task OnFromDateChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d))
+        {
+            fromDate = d;
+            currentPreset = "custom";
+            await LoadAsync();
+        }
+    }
+
+    private async Task OnToDateChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse(e.Value?.ToString(), out var d))
+        {
+            toDate = d;
+            currentPreset = "custom";
+            await LoadAsync();
+        }
+    }
+
+    private void OnAccountHeadSearchInput(ChangeEventArgs e)
+    {
+        accountHeadSearchText = e.Value?.ToString() ?? "";
+        lineAccountId = 0;
+        showAccountDropdown = true;
+    }
+
+    private void ChooseLineAccount(AccountHead acc)
+    {
+        lineAccountId = acc.ID;
+        accountHeadSearchText = $"{acc.Code} · {acc.Name}";
+        showAccountDropdown = false;
+    }
+
+    private void ClearSelectedLineAccount()
+    {
+        lineAccountId = 0;
+        accountHeadSearchText = "";
+        showAccountDropdown = true;
+    }
+
+    private void SetQuickNarration(string text)
+    {
+        narration = text;
+    }
+
+    private void SetAccountEditorType(string type)
+    {
+        accountEditor.AccountType = type;
+        if (accountEditor.ID == 0 && string.IsNullOrWhiteSpace(accountEditor.Code))
+        {
+            var prefix = type switch
+            {
+                "Asset" => "1",
+                "Liability" => "2",
+                "Equity" => "3",
+                "Income" => "4",
+                "Expense" => "5",
+                _ => "1"
+            };
+            accountEditor.Code = $"{prefix}{accounts.Count(a => a.AccountType == type) + 1:D3}";
+        }
+    }
+
+    private void ViewAccountInLedger(int accountId)
+    {
+        ledgerAccountId = accountId;
+        activeTab = "report";
+    }
+
     private async Task LoadAsync()
     {
+        if (fromDate > toDate)
+        {
+            (fromDate, toDate) = (toDate, fromDate);
+        }
+
         await using var db = await DbFactory.CreateDbContextAsync();
         accounts = await db.AccountHeads.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
         var end = toDate.Date.AddDays(1);
@@ -340,15 +1986,27 @@
 
     private void AddVoucherLine()
     {
-        if (lineAccountId <= 0 || lineDebit < 0 || lineCredit < 0 || (lineDebit == 0 && lineCredit == 0) || (lineDebit > 0 && lineCredit > 0)) { Fail(I18n.IsBangla ? "হিসাব খাত নির্বাচন করুন এবং ডেবিট অথবা ক্রেডিট পরিমাণ লিখুন।" : "Select an account and enter either debit or credit."); return; }
+        if (lineAccountId <= 0 || lineDebit < 0 || lineCredit < 0 || (lineDebit == 0 && lineCredit == 0) || (lineDebit > 0 && lineCredit > 0))
+        {
+            Fail(I18n.IsBangla ? "হিসাব খাত নির্বাচন করুন এবং ডেবিট অথবা ক্রেডিট পরিমাণ লিখুন।" : "Select an account head and enter either debit or credit.");
+            return;
+        }
         voucherLines.Add(new AccountVoucherLine { AccountID = lineAccountId, Debit = lineDebit, Credit = lineCredit });
-        lineAccountId = 0; lineDebit = 0; lineCredit = 0;
+        lineAccountId = 0;
+        accountHeadSearchText = "";
+        lineDebit = 0;
+        lineCredit = 0;
     }
 
     private async Task SubmitVoucherAsync()
     {
-        var debit = voucherLines.Sum(x => x.Debit); var credit = voucherLines.Sum(x => x.Credit);
-        if (voucherLines.Count < 2 || debit <= 0 || debit != credit || string.IsNullOrWhiteSpace(narration)) { Fail(I18n.IsBangla ? "ভাউচারের জন্য বিবরণ এবং কমপক্ষে দুটি সমপরিমাণ ডেবিট/ক্রেডিট লাইন আবশ্যক।" : "Voucher requires narration and at least two balanced lines."); return; }
+        var debit = voucherLines.Sum(x => x.Debit);
+        var credit = voucherLines.Sum(x => x.Credit);
+        if (voucherLines.Count < 2 || debit <= 0 || debit != credit || string.IsNullOrWhiteSpace(narration))
+        {
+            Fail(I18n.IsBangla ? "ভাউচারের জন্য বিবরণ এবং কমপক্ষে দুটি সমপরিমাণ ডেবিট/ক্রেডিট লাইন আবশ্যক।" : "Voucher requires narration and at least two balanced lines.");
+            return;
+        }
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
@@ -356,13 +2014,22 @@
             await FinancialControl.EnsurePostingAllowedAsync(db, voucherDate, uid);
             var v = new AccountVoucher
             {
-                VoucherNo = $"V{DateTime.Now:yyMMddHHmmssfff}", VoucherType = voucherType, VoucherDate = voucherDate.Date,
-                Narration = narration.Trim(), Reference = reference.Trim(), IsPosted = false, Status = "Pending",
-                EnteredBy = uid, TransDate = DateTime.Now,
+                VoucherNo = $"V{DateTime.Now:yyMMddHHmmssfff}",
+                VoucherType = voucherType,
+                VoucherDate = voucherDate.Date,
+                Narration = narration.Trim(),
+                Reference = reference.Trim(),
+                IsPosted = false,
+                Status = "Pending",
+                EnteredBy = uid,
+                TransDate = DateTime.Now,
                 Lines = voucherLines.Select(x => new AccountVoucherLine { AccountID = x.AccountID, Debit = x.Debit, Credit = x.Credit }).ToList()
             };
-            db.AccountVouchers.Add(v); await db.SaveChangesAsync();
-            Success(I18n.IsBangla ? $"ভাউচার {v.VoucherNo} অনুমোদনের জন্য জমা দেওয়া হয়েছে।" : $"Voucher {v.VoucherNo} submitted for approval."); ResetVoucher(); await LoadAsync();
+            db.AccountVouchers.Add(v);
+            await db.SaveChangesAsync();
+            Success(I18n.IsBangla ? $"ভাউচার {v.VoucherNo} অনুমোদনের জন্য জমা দেওয়া হয়েছে।" : $"Voucher {v.VoucherNo} submitted for approval.");
+            ResetVoucher();
+            await LoadAsync();
         }
         catch (Exception ex) { Fail(ex.GetBaseException().Message); }
     }
@@ -371,10 +2038,14 @@
     {
         if (!isAdministrator) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        var x = await db.AccountVouchers.FindAsync(row.ID); if (x is null || x.Status != "Pending") { Fail(I18n.IsBangla ? "ভাউচারটি আর পেন্ডিং অবস্থায় নেই।" : "Voucher is no longer pending."); return; }
-        var uid = await CurrentUserIdAsync(); await FinancialControl.EnsurePostingAllowedAsync(db, x.VoucherDate, uid);
+        var x = await db.AccountVouchers.FindAsync(row.ID);
+        if (x is null || x.Status != "Pending") { Fail(I18n.IsBangla ? "ভাউচারটি আর পেন্ডিং অবস্থায় নেই।" : "Voucher is no longer pending."); return; }
+        var uid = await CurrentUserIdAsync();
+        await FinancialControl.EnsurePostingAllowedAsync(db, x.VoucherDate, uid);
         x.Status = "Approved"; x.IsPosted = true; x.ApprovedBy = uid; x.ApprovedAt = DateTime.Now;
-        await db.SaveChangesAsync(); Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} অনুমোদিত ও পোস্ট হয়েছে।" : $"Voucher {x.VoucherNo} approved and posted."); await LoadAsync();
+        await db.SaveChangesAsync();
+        Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} অনুমোদিত ও পোস্ট হয়েছে।" : $"Voucher {x.VoucherNo} approved and posted.");
+        await LoadAsync();
     }
 
     private async Task RejectVoucherAsync(AccountVoucher row)
@@ -383,7 +2054,9 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         var x = await db.AccountVouchers.FindAsync(row.ID); if (x is null || x.Status != "Pending") return;
         x.Status = "Rejected"; x.IsPosted = false; x.CancelledBy = await CurrentUserIdAsync(); x.CancelledAt = DateTime.Now; x.CancellationReason = actionReason.Trim();
-        await db.SaveChangesAsync(); actionReason = ""; Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} বাতিল করা হয়েছে।" : $"Voucher {x.VoucherNo} rejected."); await LoadAsync();
+        await db.SaveChangesAsync(); actionReason = "";
+        Success(I18n.IsBangla ? $"ভাউচার {x.VoucherNo} বাতিল করা হয়েছে।" : $"Voucher {x.VoucherNo} rejected.");
+        await LoadAsync();
     }
 
     private async Task ReverseVoucherAsync(AccountVoucher row)
@@ -402,16 +2075,95 @@
                 await db.SaveChangesAsync();
                 return true;
             });
-            actionReason = ""; Success(I18n.IsBangla ? $"{x.VoucherNo} রিভার্সাল {reversal.VoucherNo} এর মাধ্যমে বাতিল করা হয়েছে।" : $"{x.VoucherNo} cancelled through reversal {reversal.VoucherNo}."); await LoadAsync();
+            actionReason = "";
+            Success(I18n.IsBangla ? $"{x.VoucherNo} রিভার্সাল {reversal.VoucherNo} এর মাধ্যমে বাতিল করা হয়েছে।" : $"{x.VoucherNo} cancelled through reversal {reversal.VoucherNo}.");
+            await LoadAsync();
         }
         catch (Exception ex) { Fail(ex.GetBaseException().Message); }
     }
 
-    private async Task SelectVoucherAsync(AccountVoucher row)
+    private async Task PrintVoucherFormatAsync(AccountVoucher row, string format)
     {
-        selectedVoucher = row; await using var db = await DbFactory.CreateDbContextAsync();
+        selectedVoucher = row;
+        await using var db = await DbFactory.CreateDbContextAsync();
         selectedVoucherLines = await db.AccountVoucherLines.AsNoTracking().Where(x => x.VoucherID == row.ID).ToListAsync();
-        await InvokeAsync(StateHasChanged); await Task.Delay(50); await JS.InvokeVoidAsync("hpm.printElement", "voucher-print", row.VoucherNo);
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(60);
+        var elementId = format switch
+        {
+            "a5" => "voucher-print-a5",
+            "80mm" => "voucher-print-80mm",
+            _ => "voucher-print-a4"
+        };
+        await JS.InvokeVoidAsync("hpm.printElement", elementId, row.VoucherNo);
+    }
+
+    private async Task PrintLedgerFormatAsync(string format)
+    {
+        var elementId = format switch
+        {
+            "a5" => "accounts-ledger-print-a5",
+            "80mm" => "accounts-ledger-print-80mm",
+            _ => "accounts-ledger-print-a4"
+        };
+        await JS.InvokeVoidAsync("hpm.printElement", elementId, "General Ledger");
+    }
+
+    private async Task PrintCoaFormatAsync(string format)
+    {
+        var elementId = format == "a5" ? "accounts-coa-print-a5" : "accounts-coa-print-a4";
+        await JS.InvokeVoidAsync("hpm.printElement", elementId, "Chart of Accounts");
+    }
+
+    private async Task PrintActiveReportAsync(string format)
+    {
+        if (activeTab == "voucher")
+        {
+            var target = selectedVoucher ?? FilteredVouchers.OrderByDescending(x => x.ID).FirstOrDefault();
+            if (target != null)
+            {
+                await PrintVoucherFormatAsync(target, format);
+            }
+            else
+            {
+                await PrintLedgerFormatAsync(format);
+            }
+        }
+        else if (activeTab == "particulars")
+        {
+            if (format == "80mm")
+                await PrintLedgerFormatAsync("80mm");
+            else
+                await PrintCoaFormatAsync(format);
+        }
+        else
+        {
+            await PrintLedgerFormatAsync(format);
+        }
+    }
+
+    private async Task HandleVoucherScanKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(voucherSearchScan))
+        {
+            var target = FilteredVouchers.FirstOrDefault();
+            if (target != null)
+            {
+                await PrintVoucherFormatAsync(target, "a4");
+            }
+        }
+    }
+
+    private async Task HandleGlobalKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            showAccountDropdown = false;
+        }
+        else if ((e.CtrlKey || e.MetaKey) && (e.Key == "p" || e.Key == "P"))
+        {
+            await PrintActiveReportAsync("a4");
+        }
     }
 
     private async Task CalculateHandoverAsync()
@@ -473,38 +2225,38 @@
             var uid = await CurrentUserIdAsync();
             await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
-            var end = toDate.Date.AddDays(1);
-            var opd = await db.OPDTickets.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
-            foreach (var x in opd) await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
-            var memos = await db.EmergencyMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && (x.ModuleID == 11 || x.ModuleID == 2)).ToListAsync();
-            foreach (var x in memos)
-            {
-                var diagnostic = x.ModuleID == 2; var prefix = diagnostic ? "DIAGNOSTIC" : "EMERGENCY";
-                var flag = diagnostic ? AccountingPosting.ModuleFlags.Diagnostic : AccountingPosting.ModuleFlags.Emergency;
-                var netAmount = Math.Max(0, x.Total - x.Discount);
-                var paidAmount = Math.Min(x.Paid, netAmount);
-                await OperationalAccounting.SyncSplitRevenueAsync(db, $"{prefix}:{x.ID}", x.ID, netAmount, paidAmount, x.TransDate, uid, $"{prefix} memo #{x.ID}", x.PatientType == "1" ? flag : null);
-            }
-            var ot = await db.OTCashMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
-            foreach (var x in ot)
-            {
-                var debit = x.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
-                await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{x.ID}", x.ID, Math.Max(0, x.Total - x.Discount), x.TransDate, uid, $"OT cash memo #{x.ID}", debit, x.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null);
-            }
-            var reversedIds = await db.FinancialReversals.Where(x => x.EntityType == "IPD Money Receipt").Select(x => x.EntityID).ToListAsync();
-            var receipts = await db.IpdMoneyReceipts.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && !reversedIds.Contains(x.ID)).ToListAsync();
-            foreach (var x in receipts)
-            {
-                var reference = $"IPD-RECEIPT:{x.ID}";
-                if (!await db.AccountVouchers.AnyAsync(v => v.Reference == reference && v.Status != "Cancelled"))
+                var end = toDate.Date.AddDays(1);
+                var opd = await db.OPDTickets.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
+                foreach (var x in opd) await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
+                var memos = await db.EmergencyMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && (x.ModuleID == 11 || x.ModuleID == 2)).ToListAsync();
+                foreach (var x in memos)
                 {
-                    var credit = x.Against == "Advance" ? AccountingPosting.PatientAdvance : AccountingPosting.PatientReceivable;
-                    AccountingPosting.AddPostedVoucher(db, "Receipt", x.TransDate, $"IPD {x.Against} receipt {x.RegNo}", reference, uid,
-                        (AccountingPosting.Cash, x.Amount, 0), (credit, 0, x.Amount));
+                    var diagnostic = x.ModuleID == 2; var prefix = diagnostic ? "DIAGNOSTIC" : "EMERGENCY";
+                    var flag = diagnostic ? AccountingPosting.ModuleFlags.Diagnostic : AccountingPosting.ModuleFlags.Emergency;
+                    var netAmount = Math.Max(0, x.Total - x.Discount);
+                    var paidAmount = Math.Min(x.Paid, netAmount);
+                    await OperationalAccounting.SyncSplitRevenueAsync(db, $"{prefix}:{x.ID}", x.ID, netAmount, paidAmount, x.TransDate, uid, $"{prefix} memo #{x.ID}", x.PatientType == "1" ? flag : null);
                 }
-            }
-            await db.SaveChangesAsync();
-            return true;
+                var ot = await db.OTCashMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
+                foreach (var x in ot)
+                {
+                    var debit = x.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
+                    await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{x.ID}", x.ID, Math.Max(0, x.Total - x.Discount), x.TransDate, uid, $"OT cash memo #{x.ID}", debit, x.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null);
+                }
+                var reversedIds = await db.FinancialReversals.Where(x => x.EntityType == "IPD Money Receipt").Select(x => x.EntityID).ToListAsync();
+                var receipts = await db.IpdMoneyReceipts.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && !reversedIds.Contains(x.ID)).ToListAsync();
+                foreach (var x in receipts)
+                {
+                    var reference = $"IPD-RECEIPT:{x.ID}";
+                    if (!await db.AccountVouchers.AnyAsync(v => v.Reference == reference && v.Status != "Cancelled"))
+                    {
+                        var credit = x.Against == "Advance" ? AccountingPosting.PatientAdvance : AccountingPosting.PatientReceivable;
+                        AccountingPosting.AddPostedVoucher(db, "Receipt", x.TransDate, $"IPD {x.Against} receipt {x.RegNo}", reference, uid,
+                            (AccountingPosting.Cash, x.Amount, 0), (credit, 0, x.Amount));
+                    }
+                }
+                await db.SaveChangesAsync();
+                return true;
             });
             Success(I18n.IsBangla ? "অপারেশনাল জার্নাল ব্যাকফিল সম্পন্ন হয়েছে।" : "Operational journal backfill completed. Review the reconciliation variance."); await LoadAsync();
         }
@@ -523,11 +2275,13 @@
 
     private void SelectAccount(AccountHead x) => accountEditor = new() { ID = x.ID, Code = x.Code, Name = x.Name, AccountType = x.AccountType, ParentID = x.ParentID, IsActive = x.IsActive };
     private void ResetAccount() => accountEditor = new() { AccountType = "Asset", IsActive = true };
-    private void ResetVoucher() { voucherLines = []; voucherType = "Journal"; voucherDate = DateTime.Today; reference = ""; narration = ""; }
+    private void ResetVoucher() { voucherLines = []; voucherType = "Journal"; voucherDate = DateTime.Today; reference = ""; narration = ""; lineAccountId = 0; accountHeadSearchText = ""; lineDebit = 0; lineCredit = 0; }
     private decimal VoucherAmount(long id) => allLines.Where(x => x.VoucherID == id).Sum(x => x.Debit);
+    private decimal AccountPeriodDebit(int accountId) => LedgerRows.Where(x => x.AccountID == accountId).Sum(x => x.Debit);
+    private decimal AccountPeriodCredit(int accountId) => LedgerRows.Where(x => x.AccountID == accountId).Sum(x => x.Credit);
     private string AccountName(int id) => accounts.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string AccountCodeAndName(int id) { var a = accounts.FirstOrDefault(x => x.ID == id); return a != null ? $"{a.Code} · {a.Name}" : "—"; }
     private async Task<int> CurrentUserIdAsync() { var u = (await AuthStateProvider.GetAuthenticationStateAsync()).User; return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1; }
-    private async Task PrintLedgerAsync() => await JS.InvokeVoidAsync("hpm.printElement", "accounts-ledger-print", "General Ledger");
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
     private sealed record LedgerRow(DateTime Date, string VoucherNo, int AccountID, string? Narration, decimal Debit, decimal Credit);

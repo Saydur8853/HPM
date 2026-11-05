@@ -53,6 +53,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<PatientPayment> PatientPayments => Set<PatientPayment>();
     public DbSet<CentralCashCollection> CentralCashCollections => Set<CentralCashCollection>();
     public DbSet<IpdPatientServiceItem> IpdPatientServiceItems => Set<IpdPatientServiceItem>();
+    public DbSet<PatientOperation> PatientOperations => Set<PatientOperation>();
+    public DbSet<OperationNote> OperationNotes => Set<OperationNote>();
+    public DbSet<MedicalCertificate> MedicalCertificates => Set<MedicalCertificate>();
     public DbSet<GenericGroup> GenericGroups => Set<GenericGroup>();
     public DbSet<MedicineType> MedicineTypes => Set<MedicineType>();
     public DbSet<SupplierPharmacy> PharmacySuppliers => Set<SupplierPharmacy>();
@@ -581,6 +584,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         doctor.Property(x => x.Priority).HasColumnName("Priority");
         doctor.Property(x => x.ConsultationTime).HasColumnName("Consultation_Time").HasMaxLength(100);
         doctor.Property(x => x.OffDay).HasColumnName("Off_Day").HasMaxLength(100);
+        doctor.Property(x => x.ConsultationFee).HasColumnName("Consultation_Fee").HasColumnType("numeric(18,2)");
+        doctor.Property(x => x.OpdConsultationFee).HasColumnName("OPD_Consultation_Fee").HasColumnType("numeric(18,2)");
 
         var department = b.Entity<Department>();
         department.ToTable("Department");
@@ -1230,6 +1235,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         req.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
         req.HasOne<MedicineStore>().WithMany().HasForeignKey(x => x.StoreID).OnDelete(DeleteBehavior.Restrict);
         req.HasMany(x => x.Items).WithOne(x => x.Requisition).HasForeignKey(x => x.RequisitionID).OnDelete(DeleteBehavior.Cascade);
+        req.HasIndex(x => x.RequisitionNo).IsUnique();
         req.HasIndex(x => new { x.StoreID, x.TransDate });
 
         var item = b.Entity<PurchaseRequisitionItem>();

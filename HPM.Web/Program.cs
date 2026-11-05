@@ -55,7 +55,7 @@ var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")
     ?? throw new InvalidOperationException("Connection string 'HpmDatabase' was not found.");
 
 builder.Services.AddDbContextFactory<HpmDbContext>(options =>
-    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(180).EnableRetryOnFailure(5, TimeSpan.FromSeconds(5), null)));
+    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(30).EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
 
 builder.Services.AddIdentity<AppUser, IdentityRole<int>>(options =>
     {
@@ -153,6 +153,14 @@ await using (var scope = app.Services.CreateAsyncScope())
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'Off_Day')
             BEGIN
                 ALTER TABLE [Doctors_Profile] ADD [Off_Day] nvarchar(100) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'Consultation_Fee')
+            BEGIN
+                ALTER TABLE [Doctors_Profile] ADD [Consultation_Fee] numeric(18,2) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Doctors_Profile]') AND name = 'OPD_Consultation_Fee')
+            BEGIN
+                ALTER TABLE [Doctors_Profile] ADD [OPD_Consultation_Fee] numeric(18,2) NULL;
             END
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'Delivery_Hours')
             BEGIN

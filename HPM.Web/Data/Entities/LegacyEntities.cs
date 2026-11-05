@@ -158,6 +158,8 @@ public sealed class DoctorsProfile
     public int? Priority { get; set; }
     [StringLength(100)] public string? ConsultationTime { get; set; }
     [StringLength(100)] public string? OffDay { get; set; } = "Friday";
+    [Range(0, 1000000)] public decimal? ConsultationFee { get; set; }
+    [Range(0, 1000000)] public decimal? OpdConsultationFee { get; set; }
 }
 
 public sealed class Department
