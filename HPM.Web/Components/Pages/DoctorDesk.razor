@@ -1,0 +1,114 @@
+@page "/doctor"
+@page "/doctor/overview"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor + "," + RoleNames.Nurse)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Doctor Desk") | @Branding.HospitalName</PageTitle>
+
+<main class="doctor-desk" style="padding:0;background:transparent">
+    <DoctorWorkspaceHeader />
+
+    @if (loading)
+    {
+        <DoctorDeskSkeleton />
+    }
+    else
+    {
+        <section class="doctor-kpis">
+            <article><span class="blue">Q</span><div><small>TODAY'S VISITS</small><strong>@todayEncounters.Count</strong><em>@todayEncounters.Count(x => x.Status == EncounterStatuses.Waiting) waiting</em></div></article>
+            <article><span class="amber">▶</span><div><small>IN CONSULTATION</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.InConsultation)</strong><em>Active clinical sessions</em></div></article>
+            <article><span class="green">✓</span><div><small>COMPLETED</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.Completed)</strong><em>Visits closed today</em></div></article>
+            <article><span class="violet">F</span><div><small>FOLLOW-UP DUE</small><strong>@followUps.Count(x => x.FollowUpDate <= DateTime.Today)</strong><em>@followUps.Count upcoming in total</em></div></article>
+            <article><span class="red">L</span><div><small>OPEN LAB ORDERS</small><strong>@openLabOrders</strong><em>Pending or billed orders</em></div></article>
+        </section>
+
+        <section class="doctor-grid">
+            <article class="doctor-panel queue-panel">
+                <header><div><small>LIVE QUEUE</small><h2>Today's patient flow</h2></div><a href="/doctor/queue">View full queue →</a></header>
+                @foreach (var row in todayEncounters.OrderBy(x => x.Status == EncounterStatuses.InConsultation ? 0 : x.Status == EncounterStatuses.Waiting ? 1 : 2).ThenBy(x => x.QueueNo).Take(8))
+                {
+                    <a class="doctor-row" href="@($"/doctor/queue?encounterId={row.ID}")">
+                        <b>#@row.QueueNo</b><span><strong>@row.PatientName</strong><small>@(row.PatientID ?? "Walk-in") · @DoctorName(row.DoctorID)</small></span><i class="@StatusClass(row.Status)">@DisplayStatus(row.Status)</i>
+                    </a>
+                }
+                @if (todayEncounters.Count == 0) { <div class="doctor-empty">No checked-in patients today.</div> }
+            </article>
+
+            <article class="doctor-panel follow-panel">
+                <header><div><small>CONTINUITY OF CARE</small><h2>Follow-up schedule</h2></div><a href="/doctor/follow-ups">Manage →</a></header>
+                @foreach (var row in followUps.OrderBy(x => x.FollowUpDate).Take(7))
+                {
+                    <a class="doctor-row" href="@($"/doctor/patient-documents/{row.PatientID}")">
+                        <time class="@(row.FollowUpDate < DateTime.Today ? "overdue" : string.Empty)"><b>@row.FollowUpDate?.Day</b><small>@row.FollowUpDate?.ToString("MMM")</small></time>
+                        <span><strong>@row.PatientName</strong><small>@(row.FollowUpReason ?? "Clinical follow-up")</small></span>
+                    </a>
+                }
+                @if (followUps.Count == 0) { <div class="doctor-empty">No pending follow-ups.</div> }
+            </article>
+
+            <article class="doctor-panel recent-panel">
+                <header><div><small>RECENT ACTIVITY</small><h2>Recently completed visits</h2></div><a href="/doctor/patient-documents">Patient records →</a></header>
+                @foreach (var row in recentCompleted.Take(8))
+                {
+                    <div class="doctor-row"><span class="avatar">@Initials(row.PatientName)</span><span><strong>@row.PatientName</strong><small>@row.VisitDate.ToString("dd MMM") · @(row.Diagnosis ?? "Diagnosis not recorded")</small></span><i class="done">Completed</i></div>
+                }
+                @if (recentCompleted.Count == 0) { <div class="doctor-empty">No recent completed visits.</div> }
+            </article>
+
+            <article class="doctor-panel shortcuts-panel">
+                <header><div><small>QUICK ACCESS</small><h2>Clinical tools</h2></div></header>
+                <div class="doctor-shortcuts">
+                    <a href="/doctor/queue"><b>Q</b><span>My Queue<small>Consultation and vitals</small></span></a>
+                    <a href="/doctor/prescriptions"><b>Rx</b><span>Prescriptions<small>Medication orders</small></span></a>
+                    <a href="/doctor/patient-documents"><b>R</b><span>Patient Records<small>Reports and history</small></span></a>
+                    <a href="/doctor/follow-ups"><b>F</b><span>Follow-ups<small>Due and upcoming</small></span></a>
+                    <a href="/doctor/my-earnings"><b>৳</b><span>Diagnostic Earnings<small>Financial statement</small></span></a>
+                </div>
+            </article>
+        </section>
+    }
+</main>
+
+@code {
+    private bool loading = true;
+    private int? activeDoctorId;
+    private List<DoctorsProfile> doctors = [];
+    private List<PatientEncounter> todayEncounters = [];
+    private List<PatientEncounter> followUps = [];
+    private List<PatientEncounter> recentCompleted = [];
+    private int openLabOrders;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var doctorId)) activeDoctorId = doctorId;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        var todayQuery = db.PatientEncounters.AsNoTracking().Where(x => x.VisitDate == DateTime.Today);
+        var followQuery = db.PatientEncounters.AsNoTracking().Where(x => x.FollowUpRequired && x.FollowUpCompletedAt == null && x.FollowUpDate != null);
+        var recentQuery = db.PatientEncounters.AsNoTracking().Where(x => x.Status == EncounterStatuses.Completed);
+        var labQuery = db.DiagnosticOrders.AsNoTracking().Where(x => x.Status == "Pending" || x.Status == "Billed");
+        if (activeDoctorId.HasValue)
+        {
+            todayQuery = todayQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+            followQuery = followQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+            recentQuery = recentQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+            labQuery = labQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+        }
+        todayEncounters = await todayQuery.ToListAsync();
+        followUps = await followQuery.Where(x => x.FollowUpDate <= DateTime.Today.AddDays(30)).OrderBy(x => x.FollowUpDate).Take(100).ToListAsync();
+        recentCompleted = await recentQuery.OrderByDescending(x => x.CompletedAt).Take(20).ToListAsync();
+        var labOrders = await labQuery.Select(x => new { x.Status, x.BilledMemoID }).ToListAsync();
+        var memoIds = labOrders.Where(x => x.BilledMemoID.HasValue).Select(x => x.BilledMemoID!.Value).ToArray();
+        var sampleStates = memoIds.Length == 0 ? [] : await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).Select(x => new { x.MemoID, x.Status }).ToListAsync();
+        openLabOrders = labOrders.Count(x => x.Status == "Pending" || !x.BilledMemoID.HasValue || !sampleStates.Where(s => s.MemoID == x.BilledMemoID.Value).Any() || sampleStates.Where(s => s.MemoID == x.BilledMemoID.Value).Any(s => s.Status != "Completed"));
+        loading = false;
+    }
+
+    private string DoctorName(int id) { var d = doctors.FirstOrDefault(x => x.ID == id); return d is null ? "Doctor" : $"{d.Title} {d.Name}".Trim(); }
+    private static string Initials(string value) => string.Concat(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    private static string StatusClass(string value) => value switch { EncounterStatuses.Waiting => "waiting", EncounterStatuses.InConsultation => "active", _ => "done" };
+    private static string DisplayStatus(string value) => value == EncounterStatuses.InConsultation ? "In consultation" : value;
+}

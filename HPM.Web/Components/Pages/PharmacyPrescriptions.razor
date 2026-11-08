@@ -13,6 +13,10 @@
 
 <PageTitle>@I18n.T("Doctor Prescription & Medication Orders") | @Branding.HospitalName</PageTitle>
 
+<AuthorizeView Roles="Administrator,Doctor">
+    <DoctorWorkspaceHeader />
+</AuthorizeView>
+
 <!-- Modern Clinical Heading -->
 <div class="page-heading">
     <div>
@@ -46,6 +50,12 @@
     <div class="alert @messageClass" style="margin-bottom:12px; display:flex; align-items:center; justify-content:space-between;">
         <span>@message</span>
         <button type="button" class="btn-clear" style="border:none; background:transparent; cursor:pointer;" @onclick="() => message = string.Empty">✕</button>
+    </div>
+}
+@if (!string.IsNullOrWhiteSpace(encounterAllergies))
+{
+    <div class="alert danger" style="margin-bottom:12px;border:1px solid #fca5a5;background:#fff1f2;color:#9f1239;font-weight:750">
+        <span>⚠ Allergy / critical alert: @encounterAllergies</span>
     </div>
 }
 
@@ -636,6 +646,7 @@
             <!-- Save & Action Buttons Bar -->
             <div style="display:flex; align-items:center; justify-content:space-between; margin-top:14px; padding-top:12px; border-top:1px solid #f1f5f9;">
                 <div style="display:flex; align-items:center; gap:8px;">
+                    <button class="btn btn-secondary" style="height:38px;padding:0 14px;font-size:12px;font-weight:700" @onclick="SaveDraftAsync" disabled="@(isSaving || !canPrescribe)">Save draft</button>
                     <button class="btn btn-primary"
                             style="height:38px; padding:0 20px; font-size:13px; font-weight:700; background:#047857; border-color:#047857;"
                             @onclick="SaveAsync"
@@ -742,6 +753,10 @@
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:11.5px; color:#64748b;">
                             <span>🩺 @DoctorName(x.ReferredBy)</span>
                             <div style="display:flex; gap:4px;">
+                                @if (canPrescribe && !isIpd)
+                                {
+                                    <button type="button" class="btn btn-ghost" style="padding:2px 8px;font-size:11px" @onclick:stopPropagation="true" @onclick="() => UseAsTemplateAsync(x.ID)">Reuse</button>
+                                }
                                 <button type="button" class="btn btn-secondary" style="padding:2px 8px; font-size:11px;" @onclick:stopPropagation="true" @onclick="() => SelectAsync(x.ID)">
                                     @I18n.T("View")
                                 </button>
@@ -823,6 +838,7 @@
     private List<DoctorAppointment> walkInAppointments = [];
     private string? walkInContactNo;
     private int? linkedAppointmentId;
+    private string? encounterAllergies;
 
     // IPD Ward Indent State
     private bool isIpdMode;
@@ -1512,6 +1528,7 @@
             ? encounter.PatientID
             : (linkedAppt != null ? (!string.IsNullOrWhiteSpace(linkedAppt.PatientID) ? linkedAppt.PatientID : ClinicalEncounterWorkflow.FormatTempPatientId(linkedAppt.ID)) : null);
         editor.TicketID = encounter.TicketID;
+        encounterAllergies = encounter.Allergies;
         editor.Name = encounter.PatientName;
         editor.Age = encounter.Age ?? linkedAppt?.Age;
         editor.Sex = encounter.Sex ?? linkedAppt?.Sex ?? patient?.Sex;
@@ -1590,7 +1607,10 @@
     // =========================================================================
     // Save Prescription
     // =========================================================================
-    private async Task SaveAsync()
+    private Task SaveAsync() => SavePrescriptionAsync(true);
+    private Task SaveDraftAsync() => SavePrescriptionAsync(false);
+
+    private async Task SavePrescriptionAsync(bool signPrescription)
     {
         if (!canPrescribe) { Fail(I18n.T("Only authorized medical staff can sign prescriptions.")); return; }
         if (!isAdministrator && currentDoctorProfileId.HasValue && doctorId != currentDoctorProfileId.Value)
@@ -1769,9 +1789,9 @@
                     ? null
                     : editor.EncounterID;
                 target.TicketID = editor.TicketID;
-                target.Status = "Signed";
+                target.Status = signPrescription ? "Signed" : "Draft";
                 target.CreatedBy ??= currentUserId;
-                target.SignedAt = DateTime.Now;
+                target.SignedAt = signPrescription ? DateTime.Now : null;
                 target.Medicine = lines.Count > 0
                     ? string.Join("; ", lines.Select(x => $"{MedicineName(x.ServiceID)} ({x.DosagePattern ?? "1+0+1"}) x {x.Days}d = {x.Quantity}"))
                     : (!string.IsNullOrWhiteSpace(target.Investigation) ? $"Advised Investigations: {target.Investigation}" : "Clinical Consultation");
@@ -1825,7 +1845,11 @@
                 Instruction = x.Instruction
             }).ToList();
 
-            if (!string.IsNullOrWhiteSpace(autoRegisteredPermanentId))
+            if (!signPrescription)
+            {
+                Success($"Prescription #RX-{target.ID} saved as draft. Review and sign when ready.");
+            }
+            else if (!string.IsNullOrWhiteSpace(autoRegisteredPermanentId))
             {
                 var tempNote = !string.IsNullOrWhiteSpace(oldTemporaryId) ? $" ({oldTemporaryId})" : "";
                 Success(I18n.IsBangla
@@ -1846,6 +1870,21 @@
         {
             isSaving = false;
         }
+    }
+
+    private async Task UseAsTemplateAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var source = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).SingleAsync(x => x.ID == id);
+        lines = source.Medicines.OrderBy(x => x.SLNO).Select(x => new PrescriptionMedicine
+        {
+            ServiceID = x.ServiceID, Dose = x.Dose, Interval = x.Interval, Days = x.Days,
+            Quantity = x.Quantity, DosagePattern = x.DosagePattern, Instruction = x.Instruction
+        }).ToList();
+        if (string.IsNullOrWhiteSpace(editor.Diagnosis)) editor.Diagnosis = source.Diagnosis;
+        if (string.IsNullOrWhiteSpace(editor.Investigation)) editor.Investigation = source.Investigation;
+        if (string.IsNullOrWhiteSpace(editor.Remark)) editor.Remark = source.Remark;
+        Success($"Prescription #{id} loaded as a reusable medication template. Review doses before signing.");
     }
 
     private async Task SelectAsync(long id)
@@ -1972,6 +2011,7 @@
         selectedInpatient = null;
         walkInContactNo = null;
         linkedAppointmentId = null;
+        encounterAllergies = null;
         inpatientSearch = "";
         medicineId = 0;
         medicineSearchQuery = "";

@@ -9,6 +9,8 @@
 
 <PageTitle>@I18n.T("Doctor Queue") | @Branding.HospitalName</PageTitle>
 
+<DoctorWorkspaceHeader />
+
 <div class="doctor-queue-classic-fit">
     <!-- Topbar -->
     <div class="doctor-queue-classic-topbar">
@@ -51,6 +53,7 @@
         </div>
 
         <div class="diagnostic-topbar-actions">
+            <button class="btn btn-primary btn-sm" @onclick="SelectNextWaitingAsync" disabled="@(!queue.Any(x => x.Status == EncounterStatuses.Waiting))">Next waiting</button>
             <button class="btn btn-secondary btn-sm" @onclick="LoadAsync">↻ @I18n.T("Refresh")</button>
         </div>
     </div>
@@ -72,13 +75,16 @@
             </div>
 
             <!-- Queue Search -->
-            <div style="padding: 4px 8px; border-bottom: 1px solid #e2e8f0; background: #f8fafc;">
+            <div style="padding: 4px 8px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; display:grid; grid-template-columns:1fr 112px; gap:5px;">
                 <input type="text"
                        class="form-control form-control-sm"
                        placeholder="@I18n.T("Search patient, token, ID...")"
                        @bind="searchQuery"
                        @bind:event="oninput"
                        style="font-size: 11.5px; height: 26px;" />
+                <select class="form-select form-select-sm" style="font-size:11px;height:26px;padding:2px 5px" @bind="statusFilter">
+                    <option>Active</option><option>All</option><option value="Waiting">Waiting</option><option value="InConsultation">In consultation</option><option value="Completed">Completed</option><option value="NoShow">No show</option>
+                </select>
             </div>
 
             <!-- Scrollable Queue List -->
@@ -94,7 +100,7 @@
                     var isSelected = selected?.ID == item.ID;
                     var statusColor = item.Status == EncounterStatuses.InConsultation ? "#0284c7" : item.Status == EncounterStatuses.Waiting ? "#d97706" : "#15803d";
                     var statusBg = item.Status == EncounterStatuses.InConsultation ? "#e0f2fe" : item.Status == EncounterStatuses.Waiting ? "#fef3c7" : "#dcfce7";
-                    <div class="billing-queue-item @(isSelected ? "active" : "")" @onclick="() => Select(item)">
+                    <div class="billing-queue-item @(isSelected ? "active" : "")" @onclick="() => SelectAsync(item)">
                         <div class="billing-queue-serial" style="background: @statusBg; color: @statusColor;">
                             #@item.QueueNo
                         </div>
@@ -104,6 +110,7 @@
                             </div>
                             <div class="billing-queue-meta">
                                 @(item.PatientID ?? I18n.T("Walk-in")) · @item.CheckedInAt.ToString("hh:mm tt")
+                                @if (item.Priority != "Normal") { <span style="color:#b4233b;font-weight:800"> · @item.Priority</span> }
                             </div>
                         </div>
                         <div class="billing-queue-actions">
@@ -141,6 +148,13 @@
                 </div>
 
                 <div class="results-form-body" style="padding: 8px 12px; gap: 8px;">
+                    <div class="clinical-context-strip">
+                        <article><small>PREVIOUS VISITS</small><strong>@previousVisits.Count</strong><span>@(previousVisits.FirstOrDefault()?.Diagnosis ?? "No prior diagnosis")</span></article>
+                        <article><small>LAST PRESCRIPTION</small><strong>@(recentPrescriptions.FirstOrDefault()?.VisitDate?.ToString("dd MMM yyyy") ?? "None")</strong><span>@ShortText(recentPrescriptions.FirstOrDefault()?.Medicine, 55)</span></article>
+                        <article><small>LAB / IMAGING</small><strong>@(recentOrders.FirstOrDefault()?.Status ?? "No orders")</strong><span>@(recentOrders.FirstOrDefault()?.Description ?? "No recent investigation")</span></article>
+                        @if (!string.IsNullOrWhiteSpace(selected.PatientID)) { <a href="@($"/doctor/patient-documents/{selected.PatientID}")" target="_blank">Open full patient record →</a> }
+                    </div>
+
                     <!-- Triage & Vitals Strip -->
                     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px;">
                         <span style="font-size: 10.5px; font-weight: 800; text-transform: uppercase; color: #0284c7; letter-spacing: 0.5px; display: block; margin-bottom: 4px;">
@@ -149,31 +163,35 @@
                         <div class="row g-2">
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">BP</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="selected.BloodPressure" placeholder="120/80" style="font-size: 11.5px; height: 26px;" />
+                                <InputText class="form-control form-control-sm" @bind-Value="selected.BloodPressure" @bind-Value:after="MarkDirty" placeholder="120/80" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Pulse")</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="selected.Pulse" placeholder="72/min" style="font-size: 11.5px; height: 26px;" />
+                                <InputText class="form-control form-control-sm" @bind-Value="selected.Pulse" @bind-Value:after="MarkDirty" placeholder="72/min" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Temp")</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="selected.Temperature" placeholder="98.4 F" style="font-size: 11.5px; height: 26px;" />
+                                <InputText class="form-control form-control-sm" @bind-Value="selected.Temperature" @bind-Value:after="MarkDirty" placeholder="98.4 F" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">SpO₂</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="selected.OxygenSaturation" placeholder="98%" style="font-size: 11.5px; height: 26px;" />
+                                <InputText class="form-control form-control-sm" @bind-Value="selected.OxygenSaturation" @bind-Value:after="MarkDirty" placeholder="98%" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Height (cm)")</label>
-                                <InputNumber class="form-control form-control-sm" @bind-Value="selected.HeightCm" style="font-size: 11.5px; height: 26px;" />
+                                <InputNumber class="form-control form-control-sm" @bind-Value="selected.HeightCm" @bind-Value:after="MarkDirty" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-md-2 col-4">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Weight (kg)")</label>
-                                <InputNumber class="form-control form-control-sm" @bind-Value="selected.WeightKg" style="font-size: 11.5px; height: 26px;" />
+                                <InputNumber class="form-control form-control-sm" @bind-Value="selected.WeightKg" @bind-Value:after="MarkDirty" style="font-size: 11.5px; height: 26px;" />
                             </div>
                             <div class="col-12">
                                 <label class="form-label" style="font-size: 10.5px; font-weight: 600; margin-bottom: 1px; color: #dc2626;">@I18n.T("Allergy / Critical Alert")</label>
-                                <InputText class="form-control form-control-sm" @bind-Value="selected.Allergies" placeholder="Penicillin, Peanuts..." style="font-size: 11.5px; height: 26px; border-color: #fca5a5;" />
+                                <InputText class="form-control form-control-sm" @bind-Value="selected.Allergies" @bind-Value:after="MarkDirty" placeholder="Penicillin, Peanuts..." style="font-size: 11.5px; height: 26px; border-color: #fca5a5;" />
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <label class="form-label" style="font-size:10.5px;font-weight:600;margin-bottom:1px">Clinical priority</label>
+                                <select class="form-select form-select-sm" style="height:26px;font-size:11px;padding:2px 6px" @bind="selected.Priority" @bind:after="MarkDirty"><option>Normal</option><option>Urgent</option><option>Emergency</option></select>
                             </div>
                         </div>
                     </div>
@@ -186,21 +204,32 @@
                         <div class="row g-2">
                             <div class="col-md-6">
                                 <label class="form-label" style="font-size: 11px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Chief Complaint")</label>
-                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.ChiefComplaint" style="font-size: 11.5px;" />
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.ChiefComplaint" @bind-Value:after="MarkDirty" style="font-size: 11.5px;" />
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" style="font-size: 11px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Clinical Notes / Findings")</label>
-                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.ClinicalNotes" style="font-size: 11.5px;" />
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.ClinicalNotes" @bind-Value:after="MarkDirty" style="font-size: 11.5px;" />
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" style="font-size: 11px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Diagnosis *")</label>
-                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.Diagnosis" disabled="@(!canClinicalDecision)" style="font-size: 11.5px;" />
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.Diagnosis" @bind-Value:after="MarkDirty" disabled="@(!canClinicalDecision)" style="font-size: 11.5px;" />
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" style="font-size: 11px; font-weight: 600; margin-bottom: 1px;">@I18n.T("Advice / Follow-up")</label>
-                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.Advice" disabled="@(!canClinicalDecision)" style="font-size: 11.5px;" />
+                                <InputTextArea class="form-control form-control-sm" rows="2" @bind-Value="selected.Advice" @bind-Value:after="MarkDirty" disabled="@(!canClinicalDecision)" style="font-size: 11.5px;" />
                             </div>
                         </div>
+                        @if (canClinicalDecision)
+                        {
+                            <div class="followup-editor">
+                                <label class="check"><InputCheckbox @bind-Value="selected.FollowUpRequired" @bind-Value:after="MarkDirty" /><span>Follow-up required</span></label>
+                                @if (selected.FollowUpRequired)
+                                {
+                                    <label><span>Follow-up date</span><InputDate class="form-control form-control-sm" @bind-Value="selected.FollowUpDate" @bind-Value:after="MarkDirty" /></label>
+                                    <label class="reason"><span>Reason / instruction</span><InputText class="form-control form-control-sm" @bind-Value="selected.FollowUpReason" @bind-Value:after="MarkDirty" placeholder="Review response, repeat test, wound check…" /></label>
+                                }
+                            </div>
+                        }
                     </div>
                 </div>
 
@@ -212,6 +241,7 @@
                             <button class="btn btn-primary btn-sm" @onclick="StartAsync" disabled="@isSaving">
                                 ▶ @I18n.T("Start Consultation")
                             </button>
+                            <button class="btn btn-ghost btn-sm" @onclick="MarkNoShowAsync" disabled="@isSaving">Mark no-show</button>
                         }
                         @if (selected.Status is EncounterStatuses.Waiting or EncounterStatuses.InConsultation)
                         {
@@ -237,6 +267,7 @@
                     </div>
 
                     <div>
+                        <span class="autosave-state">@(hasUnsavedChanges ? "Unsaved changes" : lastSavedAt.HasValue ? $"Saved {lastSavedAt:hh:mm:ss tt}" : "")</span>
                         @if (canClinicalDecision && selected.Status == EncounterStatuses.InConsultation)
                         {
                             <button class="btn btn-success btn-sm" @onclick="CompleteAsync" disabled="@isSaving">
@@ -251,8 +282,12 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "encounterId")] public long? QueryEncounterId { get; set; }
     private List<DoctorsProfile> doctors = [];
     private List<PatientEncounter> queue = [];
+    private List<PatientEncounter> previousVisits = [];
+    private List<Prescription> recentPrescriptions = [];
+    private List<ClinicalOrderSummary> recentOrders = [];
     private PatientEncounter? selected;
     private DateTime queueDate = DateTime.Today;
     private int doctorId;
@@ -260,17 +295,19 @@
     private bool isDoctor;
     private bool canClinicalDecision;
     private bool isSaving;
+    private bool hasUnsavedChanges;
+    private DateTime? lastSavedAt;
+    private readonly CancellationTokenSource autoSaveCts = new();
     private string searchQuery = "";
+    private string statusFilter = "Active";
     private string message = "", messageClass = "success";
 
-    private List<PatientEncounter> FilteredQueue =>
-        string.IsNullOrWhiteSpace(searchQuery)
-            ? queue
-            : queue.Where(x =>
+    private List<PatientEncounter> FilteredQueue => queue.Where(x =>
+                (statusFilter == "All" || (statusFilter == "Active" && (x.Status is EncounterStatuses.Waiting or EncounterStatuses.InConsultation)) || x.Status == statusFilter) &&
+                (string.IsNullOrWhiteSpace(searchQuery) ||
                 (x.PatientName?.Contains(searchQuery, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (x.PatientID?.Contains(searchQuery, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                x.QueueNo.ToString().Contains(searchQuery.Trim())
-            ).ToList();
+                x.QueueNo.ToString().Contains(searchQuery.Trim()))).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -286,6 +323,12 @@
         doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
         if (currentDoctorProfileId.HasValue) doctorId = currentDoctorProfileId.Value;
         await LoadAsync();
+        if (QueryEncounterId is > 0)
+        {
+            var requested = queue.FirstOrDefault(x => x.ID == QueryEncounterId.Value);
+            if (requested is not null) await SelectAsync(requested);
+        }
+        _ = RunAutoSaveAsync(autoSaveCts.Token);
     }
 
     private async Task LoadAsync()
@@ -297,12 +340,55 @@
         else if (doctorId > 0) query = query.Where(x => x.DoctorID == doctorId);
         queue = await query.OrderBy(x => x.Status == EncounterStatuses.InConsultation ? 0 : x.Status == EncounterStatuses.Waiting ? 1 : 2)
             .ThenBy(x => x.QueueNo).ToListAsync();
-        if (selected is not null) selected = queue.FirstOrDefault(x => x.ID == selected.ID);
+        if (selected is not null)
+        {
+            var refreshed = queue.FirstOrDefault(x => x.ID == selected.ID);
+            selected = refreshed is null ? null : Clone(refreshed);
+        }
     }
 
-    private void Select(PatientEncounter item) => selected = Clone(item);
+    private async Task SelectAsync(PatientEncounter item)
+    {
+        selected = Clone(item);
+        hasUnsavedChanges = false;
+        lastSavedAt = item.DraftSavedAt;
+        await LoadPatientContextAsync(item);
+    }
+
+    private async Task SelectNextWaitingAsync()
+    {
+        var next = queue.Where(x => x.Status == EncounterStatuses.Waiting).OrderBy(x => x.Priority == "Emergency" ? 0 : x.Priority == "Urgent" ? 1 : 2).ThenBy(x => x.QueueNo).FirstOrDefault();
+        if (next is not null) await SelectAsync(next);
+    }
+
+    private async Task LoadPatientContextAsync(PatientEncounter encounter)
+    {
+        previousVisits = [];
+        recentPrescriptions = [];
+        recentOrders = [];
+        if (string.IsNullOrWhiteSpace(encounter.PatientID)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        previousVisits = await db.PatientEncounters.AsNoTracking()
+            .Where(x => x.PatientID == encounter.PatientID && x.ID != encounter.ID)
+            .OrderByDescending(x => x.VisitDate).Take(10).ToListAsync();
+        recentPrescriptions = await db.Prescriptions.AsNoTracking()
+            .Where(x => x.PatientID == encounter.PatientID)
+            .OrderByDescending(x => x.VisitDate).ThenByDescending(x => x.ID).Take(5).ToListAsync();
+        var orders = await db.DiagnosticOrders.AsNoTracking().Include(x => x.Items)
+            .Where(x => x.PatientID == encounter.PatientID && x.Status != "Cancelled")
+            .OrderByDescending(x => x.OrderedAt).Take(5).ToListAsync();
+        var memoIds = orders.Where(x => x.BilledMemoID.HasValue).Select(x => x.BilledMemoID!.Value).ToArray();
+        var samples = memoIds.Length == 0 ? [] : await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).ToListAsync();
+        recentOrders = orders.Select(x =>
+        {
+            var linkedSamples = x.BilledMemoID.HasValue ? samples.Where(s => s.MemoID == x.BilledMemoID.Value).ToList() : [];
+            var status = x.Status == "Pending" ? "Awaiting billing" : linkedSamples.Count == 0 ? "Billed" : linkedSamples.All(s => s.Status == "Completed") ? "Result ready" : linkedSamples.Any(s => s.Status == "InProcess") ? "Processing" : linkedSamples.Any(s => s.Status == "Collected") ? "Sample collected" : "Awaiting sample";
+            return new ClinicalOrderSummary(status, $"{x.Items.Count} investigation(s) · {x.OrderedAt:dd MMM}");
+        }).ToList();
+    }
 
     private async Task StartAsync() => await PersistAsync(EncounterStatuses.InConsultation);
+    private async Task MarkNoShowAsync() => await PersistAsync(EncounterStatuses.NoShow);
     private async Task CompleteAsync()
     {
         if (string.IsNullOrWhiteSpace(selected?.Diagnosis))
@@ -310,13 +396,18 @@
             Fail(I18n.IsBangla ? "ভিজিট সম্পন্ন করতে রোগ নির্ণয় লিখুন।" : "Diagnosis is required to complete the visit.");
             return;
         }
+        if (selected.FollowUpRequired && !selected.FollowUpDate.HasValue)
+        {
+            Fail("Select a follow-up date before completing the visit.");
+            return;
+        }
         await PersistAsync(EncounterStatuses.Completed);
     }
     private async Task SaveAsync() => await PersistAsync(null);
 
-    private async Task PersistAsync(string? nextStatus)
+    private async Task PersistAsync(string? nextStatus, bool autoSave = false)
     {
-        if (selected is null) return;
+        if (selected is null || isSaving) return;
         if (nextStatus is not null && !canClinicalDecision)
         {
             Fail(I18n.T("Only the assigned doctor can change consultation status."));
@@ -348,6 +439,8 @@
                 CopyClinical(curSelected, entity);
                 if (nextStatus == EncounterStatuses.InConsultation) { entity.Status = nextStatus; entity.StartedAt = DateTime.Now; entity.StartedBy = userId; }
                 if (nextStatus == EncounterStatuses.Completed) { entity.Status = nextStatus; entity.CompletedAt = DateTime.Now; entity.CompletedBy = userId; }
+                if (nextStatus == EncounterStatuses.NoShow) entity.Status = nextStatus;
+                entity.DraftSavedAt = DateTime.Now;
                 entity.UpdatedAt = DateTime.Now;
 
                 if (entity.AppointmentID.HasValue)
@@ -362,7 +455,9 @@
                 updatedEntity = entity;
             });
 
-            Success(nextStatus is null ? I18n.T("Clinical notes saved.") : $"Visit status changed to {nextStatus}.");
+            hasUnsavedChanges = false;
+            lastSavedAt = DateTime.Now;
+            if (!autoSave) Success(nextStatus is null ? I18n.T("Clinical notes saved.") : $"Visit status changed to {nextStatus}.");
             await LoadAsync();
             var refreshed = queue.FirstOrDefault(x => x.ID == selectedId);
             selected = refreshed is null ? null : Clone(refreshed);
@@ -375,6 +470,28 @@
         {
             isSaving = false;
         }
+    }
+
+    private void MarkDirty()
+    {
+        if (selected is null) return;
+        if (selected.FollowUpRequired && !selected.FollowUpDate.HasValue) selected.FollowUpDate = DateTime.Today.AddDays(7);
+        if (!selected.FollowUpRequired) { selected.FollowUpDate = null; selected.FollowUpReason = null; }
+        hasUnsavedChanges = true;
+    }
+
+    private async Task RunAutoSaveAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+                if (hasUnsavedChanges && !isSaving && selected?.Status is EncounterStatuses.Waiting or EncounterStatuses.InConsultation)
+                    await InvokeAsync(() => PersistAsync(null, true));
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task<int> CurrentUserIdAsync()
@@ -396,6 +513,11 @@
         to.ClinicalNotes = from.ClinicalNotes?.Trim();
         to.Diagnosis = from.Diagnosis?.Trim();
         to.Advice = from.Advice?.Trim();
+        to.Priority = from.Priority;
+        to.FollowUpRequired = from.FollowUpRequired;
+        to.FollowUpDate = from.FollowUpRequired ? from.FollowUpDate?.Date : null;
+        to.FollowUpReason = from.FollowUpRequired ? from.FollowUpReason?.Trim() : null;
+        if (!from.FollowUpRequired) to.FollowUpCompletedAt = null;
     }
 
     private static PatientEncounter Clone(PatientEncounter x) => new()
@@ -427,6 +549,12 @@
         ClinicalNotes = x.ClinicalNotes,
         Diagnosis = x.Diagnosis,
         Advice = x.Advice,
+        Priority = x.Priority,
+        FollowUpRequired = x.FollowUpRequired,
+        FollowUpDate = x.FollowUpDate,
+        FollowUpReason = x.FollowUpReason,
+        FollowUpCompletedAt = x.FollowUpCompletedAt,
+        DraftSavedAt = x.DraftSavedAt,
         CreatedBy = x.CreatedBy,
         StartedBy = x.StartedBy,
         CompletedBy = x.CompletedBy,
@@ -443,5 +571,7 @@
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+    private static string ShortText(string? value, int length) => string.IsNullOrWhiteSpace(value) ? "No record" : value.Length <= length ? value : value[..length] + "…";
+    public void Dispose() { autoSaveCts.Cancel(); autoSaveCts.Dispose(); I18n.OnLanguageChanged -= HandleLanguageChanged; }
+    private sealed record ClinicalOrderSummary(string Status, string Description);
 }

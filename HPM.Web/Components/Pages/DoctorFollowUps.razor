@@ -1,0 +1,103 @@
+@page "/doctor/follow-ups"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor + "," + RoleNames.Nurse)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>@I18n.T("Follow-up Patients") | @Branding.HospitalName</PageTitle>
+
+<DoctorWorkspaceHeader />
+
+<div class="page-heading">
+    <div><span class="eyebrow">CONTINUITY OF CARE</span><h1>@I18n.T("Follow-up Patients")</h1><p>@I18n.T("Track overdue, due-today and upcoming reviews recorded during consultation.")</p></div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert success">@message</div> }
+
+<div class="panel">
+    <div class="panel-heading follow-toolbar">
+        <div class="follow-tabs">
+            @foreach (var item in new[] { "Pending", "Overdue", "Today", "Upcoming", "Completed" })
+            {
+                <button class="@(filter == item ? "active" : string.Empty)" @onclick="() => filter = item">@item <b>@CountFor(item)</b></button>
+            }
+        </div>
+        <input class="form-control" placeholder="Search patient, ID or reason…" @bind="search" @bind:event="oninput" />
+    </div>
+    <div class="data-table-wrap">
+        <table class="data-table">
+            <thead><tr><th>Due date</th><th>Patient</th><th>Clinical reason</th><th>Previous diagnosis</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var row in FilteredRows)
+                {
+                    var dueStatus = DueStatus(row);
+                    <tr>
+                        <td><strong>@row.FollowUpDate?.ToString("dd MMM yyyy")</strong><small class="cell-note">@row.FollowUpDate?.ToString("dddd")</small></td>
+                        <td><strong>@row.PatientName</strong><small class="cell-note">@(row.PatientID ?? "Walk-in") · Queue #@row.QueueNo</small></td>
+                        <td>@(row.FollowUpReason ?? "Clinical review")</td>
+                        <td>@(row.Diagnosis ?? "—")</td>
+                        <td><span class="follow-status @dueStatus.ToLowerInvariant()">@dueStatus</span></td>
+                        <td class="follow-actions">
+                            @if (!string.IsNullOrWhiteSpace(row.PatientID)) { <a class="btn btn-ghost btn-sm" href="@($"/doctor/patient-documents/{row.PatientID}")">Records</a> }
+                            @if (row.FollowUpCompletedAt is null) { <button class="btn btn-primary btn-sm" @onclick="() => CompleteAsync(row.ID)">Mark reviewed</button> }
+                        </td>
+                    </tr>
+                }
+                @if (!FilteredRows.Any()) { <tr><td colspan="6"><div class="empty-state">No follow-up patients match this view.</div></td></tr> }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<PatientEncounter> rows = [];
+    private int? currentDoctorId;
+    private string filter = "Pending", search = "", message = "";
+    private IEnumerable<PatientEncounter> FilteredRows => rows.Where(x => MatchesFilter(x) &&
+        (string.IsNullOrWhiteSpace(search) || x.PatientName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+         (x.PatientID?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+         (x.FollowUpReason?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false))).OrderBy(x => x.FollowUpCompletedAt.HasValue).ThenBy(x => x.FollowUpDate);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var id)) currentDoctorId = id;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = db.PatientEncounters.AsNoTracking().Where(x => x.FollowUpRequired && x.FollowUpDate != null);
+        if (currentDoctorId.HasValue) query = query.Where(x => x.DoctorID == currentDoctorId.Value);
+        rows = await query.OrderByDescending(x => x.VisitDate).Take(1000).ToListAsync();
+    }
+
+    private bool MatchesFilter(PatientEncounter x) => MatchesFilter(x, filter);
+    private static bool MatchesFilter(PatientEncounter x, string targetFilter) => targetFilter switch
+    {
+        "Overdue" => x.FollowUpCompletedAt == null && x.FollowUpDate < DateTime.Today,
+        "Today" => x.FollowUpCompletedAt == null && x.FollowUpDate == DateTime.Today,
+        "Upcoming" => x.FollowUpCompletedAt == null && x.FollowUpDate > DateTime.Today,
+        "Completed" => x.FollowUpCompletedAt != null,
+        _ => x.FollowUpCompletedAt == null
+    };
+    private int CountFor(string value) => rows.Count(x => MatchesFilter(x, value));
+    private static string DueStatus(PatientEncounter x) => x.FollowUpCompletedAt.HasValue ? "Completed" : x.FollowUpDate < DateTime.Today ? "Overdue" : x.FollowUpDate == DateTime.Today ? "Today" : "Upcoming";
+
+    private async Task CompleteAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.PatientEncounters.SingleAsync(x => x.ID == id);
+        if (currentDoctorId.HasValue && row.DoctorID != currentDoctorId.Value) return;
+        row.FollowUpCompletedAt = DateTime.Now;
+        row.UpdatedAt = DateTime.Now;
+        await db.SaveChangesAsync();
+        message = $"Follow-up for {row.PatientName} marked as reviewed.";
+        await LoadAsync();
+    }
+}
+
+<style>
+    .follow-toolbar{gap:14px;flex-wrap:wrap}.follow-tabs{display:flex;gap:4px;flex-wrap:wrap}.follow-tabs button{border:1px solid #dce5ed;background:#f8fafc;color:#536174;border-radius:7px;padding:6px 9px;font-size:10px;font-weight:750}.follow-tabs button.active{background:#087abb;color:white;border-color:#087abb}.follow-tabs b{margin-left:4px;padding:1px 5px;border-radius:8px;background:#e7edf2;color:#536174;font-size:8px}.follow-tabs button.active b{background:#ffffff33;color:white}.follow-toolbar input{width:min(260px,100%);margin-left:auto}.follow-status{display:inline-flex;padding:3px 7px;border-radius:9px;font-size:8px;font-weight:850}.follow-status.overdue{background:#ffe8eb;color:#b6374a}.follow-status.today{background:#fff0d7;color:#9b610b}.follow-status.upcoming{background:#e7f3fb;color:#0872ab}.follow-status.completed{background:#e4f7ef;color:#117658}.follow-actions{white-space:nowrap;text-align:right}.cell-note{display:block;color:#7b8898;font-size:9px;margin-top:2px}
+</style>

@@ -4381,6 +4381,27 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("int")
                         .HasColumnName("Doctor_ID");
 
+                    b.Property<DateTime?>("DraftSavedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Draft_Saved_At");
+
+                    b.Property<DateTime?>("FollowUpCompletedAt")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Follow_Up_Completed_At");
+
+                    b.Property<DateTime?>("FollowUpDate")
+                        .HasColumnType("date")
+                        .HasColumnName("Follow_Up_Date");
+
+                    b.Property<string>("FollowUpReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)")
+                        .HasColumnName("Follow_Up_Reason");
+
+                    b.Property<bool>("FollowUpRequired")
+                        .HasColumnType("bit")
+                        .HasColumnName("Follow_Up_Required");
+
                     b.Property<decimal?>("HeightCm")
                         .HasColumnType("decimal(6,2)")
                         .HasColumnName("Height_Cm");
@@ -4400,6 +4421,13 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
                         .HasColumnName("Patient_Name");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Normal");
 
                     b.Property<string>("Pulse")
                         .HasMaxLength(20)
@@ -4463,6 +4491,8 @@ namespace HPM.Web.Data.Migrations
                         .HasFilter("[Ticket_ID] IS NOT NULL");
 
                     b.HasIndex("PatientID", "VisitDate");
+
+                    b.HasIndex("DoctorID", "FollowUpRequired", "FollowUpDate");
 
                     b.HasIndex("DoctorID", "VisitDate", "Status");
 

@@ -42,6 +42,12 @@ public sealed class PatientEncounter
     [StringLength(2000)] public string? ClinicalNotes { get; set; }
     [StringLength(1000)] public string? Diagnosis { get; set; }
     [StringLength(1000)] public string? Advice { get; set; }
+    [Required, StringLength(20)] public string Priority { get; set; } = "Normal";
+    public bool FollowUpRequired { get; set; }
+    public DateTime? FollowUpDate { get; set; }
+    [StringLength(500)] public string? FollowUpReason { get; set; }
+    public DateTime? FollowUpCompletedAt { get; set; }
+    public DateTime? DraftSavedAt { get; set; }
     public int CreatedBy { get; set; }
     public int? StartedBy { get; set; }
     public int? CompletedBy { get; set; }

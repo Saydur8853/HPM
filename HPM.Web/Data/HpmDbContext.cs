@@ -543,6 +543,12 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.WeightKg).HasColumnName("Weight_Kg").HasColumnType("decimal(6,2)");
         e.Property(x => x.ChiefComplaint).HasColumnName("Chief_Complaint").HasMaxLength(1000);
         e.Property(x => x.ClinicalNotes).HasColumnName("Clinical_Notes").HasMaxLength(2000);
+        e.Property(x => x.Priority).HasMaxLength(20).HasDefaultValue("Normal");
+        e.Property(x => x.FollowUpDate).HasColumnName("Follow_Up_Date").HasColumnType("date");
+        e.Property(x => x.FollowUpReason).HasColumnName("Follow_Up_Reason").HasMaxLength(500);
+        e.Property(x => x.FollowUpRequired).HasColumnName("Follow_Up_Required");
+        e.Property(x => x.FollowUpCompletedAt).HasColumnName("Follow_Up_Completed_At").HasColumnType("datetime2");
+        e.Property(x => x.DraftSavedAt).HasColumnName("Draft_Saved_At").HasColumnType("datetime2");
         e.Property(x => x.CreatedBy).HasColumnName("Created_By");
         e.Property(x => x.StartedBy).HasColumnName("Started_By");
         e.Property(x => x.CompletedBy).HasColumnName("Completed_By");
@@ -552,6 +558,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.HasIndex(x => x.TicketID).IsUnique().HasFilter("[Ticket_ID] IS NOT NULL");
         e.HasIndex(x => new { x.DoctorID, x.VisitDate, x.Status });
         e.HasIndex(x => new { x.PatientID, x.VisitDate });
+        e.HasIndex(x => new { x.DoctorID, x.FollowUpRequired, x.FollowUpDate });
         e.HasOne<DoctorAppointment>().WithOne().HasForeignKey<PatientEncounter>(x => x.AppointmentID).OnDelete(DeleteBehavior.Restrict);
         e.HasOne<OPDTicket>().WithOne().HasForeignKey<PatientEncounter>(x => x.TicketID).OnDelete(DeleteBehavior.Restrict);
         e.HasOne<DoctorsProfile>().WithMany().HasForeignKey(x => x.DoctorID).OnDelete(DeleteBehavior.Restrict);
