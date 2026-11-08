@@ -2291,23 +2291,15 @@
 
         {
 
-            await using var db = await DbFactory.CreateDbContextAsync();
-
-            doctors = await db.Doctors.AsNoTracking()
-
-                .Where(x => x.IsActive)
-
+            doctors = (await MasterCache.GetActiveDoctorsAsync())
                 .OrderBy(x => x.Priority.HasValue && x.Priority.Value > 0 ? 0 : 1)
-
                 .ThenBy(x => x.Priority)
-
                 .ThenBy(x => x.Name)
+                .ToList();
 
-                .ToListAsync();
+            departments = await MasterCache.GetDepartmentNamesMapAsync();
 
-            departments = await db.Departments.AsNoTracking().ToDictionaryAsync(d => d.ID, d => d.Name);
-
-            ticketTypes = await db.TicketTypes.AsNoTracking().OrderBy(x => x.ID).ToListAsync();
+            ticketTypes = (await MasterCache.GetActiveTicketTypesAsync()).OrderBy(x => x.ID).ToList();
 
             BuildDoctorCache();
 
@@ -3002,7 +2994,8 @@
 
                      || (x.Name != null && x.Name.Contains(term)))
 
-            .OrderByDescending(x => x.ID);
+            .OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto();
 
     }
 
@@ -3152,13 +3145,17 @@
 
         await using var db = await DbFactory.CreateDbContextAsync();
 
-        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup);
+        var patient = await db.Registrations.AsNoTracking()
+            .Where(x => x.PatientID == lookup)
+            .SelectWithoutPhoto()
+            .FirstOrDefaultAsync();
 
         patient ??= await db.Registrations.AsNoTracking()
 
             .Where(x => x.Contact == lookup)
 
             .OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto()
 
             .FirstOrDefaultAsync();
 
@@ -3173,6 +3170,7 @@
                 .Where(x => x.Contact != null && x.Contact.EndsWith(withoutLeadingZero))
 
                 .OrderByDescending(x => x.ID)
+                .SelectWithoutPhoto()
 
                 .FirstOrDefaultAsync();
 
@@ -3187,6 +3185,7 @@
                 .Where(x => x.Name != null && x.Name.Contains(lookup))
 
                 .OrderByDescending(x => x.ID)
+                .SelectWithoutPhoto()
 
                 .FirstOrDefaultAsync();
 

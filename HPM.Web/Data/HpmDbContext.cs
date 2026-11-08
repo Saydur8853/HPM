@@ -1,5 +1,6 @@
 using HPM.Web.Data.Entities;
 using HPM.Web.Security;
+using HPM.Web.Services;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
@@ -135,6 +136,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureHospitalProfile(modelBuilder);
         ConfigureCanteen(modelBuilder);
         ConfigurePurchaseRequisition(modelBuilder);
+        ConfigureMedicalServices(modelBuilder);
     }
 
     private static void ConfigureAppUser(ModelBuilder b)
@@ -215,8 +217,15 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     {
         var result = await base.SaveChangesAsync(cancellationToken);
         var (userId, userName) = await CurrentUserAsync();
+        var shouldInvalidateMasterCache = false;
         foreach (var item in pending)
         {
+            if (item.Entry.Entity is DoctorsProfile or Department or IpdDepartment or BedCategory
+                or TicketType or ServiceCategory or Service or GenericGroup or MedicineType)
+            {
+                shouldInvalidateMasterCache = true;
+            }
+
             AuditLogs.Add(new AuditLog
             {
                 UserID = userId,
@@ -229,6 +238,10 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
             });
         }
         await base.SaveChangesAsync(cancellationToken);
+        if (shouldInvalidateMasterCache)
+        {
+            HospitalMasterCacheService.InvalidateGlobalCache();
+        }
         return result;
     }
 
@@ -367,6 +380,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.Occupation).HasMaxLength(50);
         e.Property(x => x.EnteredBy).HasColumnName("Entered_By");
         e.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        e.HasIndex(x => x.Contact);
+        e.HasIndex(x => x.Name);
+        e.HasIndex(x => x.TransDate);
     }
 
     private static void ConfigureClinicalEncounters(ModelBuilder b)
@@ -428,6 +444,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.EnteredBy).HasColumnName("Entered_By");
         e.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
         e.HasIndex(x => new { x.DoctorID, x.ApptDate, x.ApptSLNO }).IsUnique();
+        e.HasIndex(x => new { x.ApptDate, x.Status });
+        e.HasIndex(x => x.PatientID);
+        e.HasIndex(x => x.ContactNo);
     }
 
     private static void ConfigureTicket(ModelBuilder b)
@@ -448,6 +467,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.Comments).HasMaxLength(200);
         e.Property(x => x.Total).HasColumnType("numeric(18,0)");
         e.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        e.HasIndex(x => x.TransDate);
+        e.HasIndex(x => x.RegNo);
+        e.HasIndex(x => new { x.RegNo, x.DoctorID, x.TransDate });
     }
 
     private static void ConfigureEmergencyMemo(ModelBuilder b)
@@ -476,6 +498,10 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.EncounterID).HasColumnName("Encounter_ID");
         e.Property(x => x.Remarks).HasMaxLength(200);
         e.HasIndex(x => x.EncounterID);
+        e.HasIndex(x => new { x.ModuleID, x.PatientType, x.ID });
+        e.HasIndex(x => new { x.ModuleID, x.TransDate });
+        e.HasIndex(x => x.PatientID);
+        e.HasIndex(x => x.RegNo);
         e.HasOne<PatientEncounter>().WithMany().HasForeignKey(x => x.EncounterID).OnDelete(DeleteBehavior.Restrict);
         e.HasMany(x => x.Items).WithOne(x => x.Memo).HasForeignKey(x => x.MemoID).OnDelete(DeleteBehavior.Cascade);
 
@@ -547,6 +573,9 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.DiscountBy).HasColumnName("Discount_By").HasMaxLength(50);
         e.Property(x => x.EnteredBy).HasColumnName("Entered_By");
         e.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+        e.HasIndex(x => x.TransDate);
+        e.HasIndex(x => x.PatientID);
+        e.HasIndex(x => x.RegNo);
         e.HasMany(x => x.Items).WithOne(x => x.Memo).HasForeignKey(x => x.MemoID).OnDelete(DeleteBehavior.Cascade);
 
         var item = b.Entity<CashMemoSubOT>();
@@ -630,6 +659,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.InvestigationModuleID).HasColumnName("Investigation_Module_ID");
         service.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(20);
         service.Property(x => x.DeliveryHours).HasColumnName("Delivery_Hours");
+        service.HasIndex(x => new { x.CategoryID, x.Name });
 
         department.HasData(
             new Department { ID = 1, Name = "Emergency" },
@@ -1522,5 +1552,23 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         debtorLedger.Property(x => x.Balance).HasColumnType("decimal(18,2)");
         debtorLedger.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
         debtorLedger.HasOne(x => x.Debtor).WithMany().HasForeignKey(x => x.DebtorID).OnDelete(DeleteBehavior.Restrict);
+    }
+
+    private static void ConfigureMedicalServices(ModelBuilder b)
+    {
+        var op = b.Entity<PatientOperation>();
+        op.HasIndex(x => x.OperationDate);
+        op.HasIndex(x => x.PatientID);
+        op.HasIndex(x => x.RegNo);
+
+        var note = b.Entity<OperationNote>();
+        note.HasIndex(x => x.OperationDate);
+        note.HasIndex(x => x.PatientID);
+        note.HasIndex(x => x.RegNo);
+
+        var cert = b.Entity<MedicalCertificate>();
+        cert.HasIndex(x => new { x.CertificateType, x.IssueDate });
+        cert.HasIndex(x => x.PatientID);
+        cert.HasIndex(x => x.RegNo);
     }
 }

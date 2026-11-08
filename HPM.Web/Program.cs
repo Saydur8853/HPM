@@ -45,6 +45,8 @@ builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions
 });
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<HospitalMasterCacheService>();
 builder.Services.AddSingleton<UserAdministrationService>();
 builder.Services.AddSingleton<HospitalSetupService>();
 builder.Services.AddScoped<I18nService>();
@@ -165,6 +167,76 @@ await using (var scope = app.Services.CreateAsyncScope())
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'Delivery_Hours')
             BEGIN
                 ALTER TABLE [Service] ADD [Delivery_Hours] int NULL;
+            END
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Registration_Contact' AND object_id = OBJECT_ID(N'[Registration]'))
+                CREATE INDEX [IX_Registration_Contact] ON [Registration] ([Contact]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Registration_Name' AND object_id = OBJECT_ID(N'[Registration]'))
+                CREATE INDEX [IX_Registration_Name] ON [Registration] ([Name]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Registration_Trans_Date' AND object_id = OBJECT_ID(N'[Registration]'))
+                CREATE INDEX [IX_Registration_Trans_Date] ON [Registration] ([Trans_Date]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Doctor_Appointment_Appt_Date_Status' AND object_id = OBJECT_ID(N'[Doctor_Appointment]'))
+                CREATE INDEX [IX_Doctor_Appointment_Appt_Date_Status] ON [Doctor_Appointment] ([Appt_Date], [Status]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Doctor_Appointment_Patient_ID' AND object_id = OBJECT_ID(N'[Doctor_Appointment]'))
+                CREATE INDEX [IX_Doctor_Appointment_Patient_ID] ON [Doctor_Appointment] ([Patient_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Doctor_Appointment_Contact_No' AND object_id = OBJECT_ID(N'[Doctor_Appointment]'))
+                CREATE INDEX [IX_Doctor_Appointment_Contact_No] ON [Doctor_Appointment] ([Contact_No]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_OPD_Ticket_Trans_Date' AND object_id = OBJECT_ID(N'[OPD_Ticket]'))
+                CREATE INDEX [IX_OPD_Ticket_Trans_Date] ON [OPD_Ticket] ([Trans_Date]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_OPD_Ticket_Reg_No' AND object_id = OBJECT_ID(N'[OPD_Ticket]'))
+                CREATE INDEX [IX_OPD_Ticket_Reg_No] ON [OPD_Ticket] ([Reg_No]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_OPD_Ticket_Reg_No_Doctor_ID_Trans_Date' AND object_id = OBJECT_ID(N'[OPD_Ticket]'))
+                CREATE INDEX [IX_OPD_Ticket_Reg_No_Doctor_ID_Trans_Date] ON [OPD_Ticket] ([Reg_No], [Doctor_ID], [Trans_Date]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_DInvestigation_Module_ID_Patient_Type_ID' AND object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]'))
+                CREATE INDEX [IX_Cash_Memo_DInvestigation_Module_ID_Patient_Type_ID] ON [Cash_Memo_DInvestigation] ([Module_ID], [Patient_Type], [ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_DInvestigation_Module_ID_Trans_Date' AND object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]'))
+                CREATE INDEX [IX_Cash_Memo_DInvestigation_Module_ID_Trans_Date] ON [Cash_Memo_DInvestigation] ([Module_ID], [Trans_Date]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_DInvestigation_Patient_ID' AND object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]'))
+                CREATE INDEX [IX_Cash_Memo_DInvestigation_Patient_ID] ON [Cash_Memo_DInvestigation] ([Patient_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_DInvestigation_Reg_No' AND object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]'))
+                CREATE INDEX [IX_Cash_Memo_DInvestigation_Reg_No] ON [Cash_Memo_DInvestigation] ([Reg_No]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_OT_Trans_Date' AND object_id = OBJECT_ID(N'[Cash_Memo_OT]'))
+                CREATE INDEX [IX_Cash_Memo_OT_Trans_Date] ON [Cash_Memo_OT] ([Trans_Date]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_OT_Patient_ID' AND object_id = OBJECT_ID(N'[Cash_Memo_OT]'))
+                CREATE INDEX [IX_Cash_Memo_OT_Patient_ID] ON [Cash_Memo_OT] ([Patient_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Cash_Memo_OT_Reg_No' AND object_id = OBJECT_ID(N'[Cash_Memo_OT]'))
+                CREATE INDEX [IX_Cash_Memo_OT_Reg_No] ON [Cash_Memo_OT] ([Reg_No]);
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Service_Category_ID_Name' AND object_id = OBJECT_ID(N'[Service]'))
+                CREATE INDEX [IX_Service_Category_ID_Name] ON [Service] ([Category_ID], [Name]);
+
+            IF OBJECT_ID(N'[Patient_Operation]', N'U') IS NOT NULL
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Patient_Operation_Operation_Date' AND object_id = OBJECT_ID(N'[Patient_Operation]'))
+                    CREATE INDEX [IX_Patient_Operation_Operation_Date] ON [Patient_Operation] ([Operation_Date]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Patient_Operation_Patient_ID' AND object_id = OBJECT_ID(N'[Patient_Operation]'))
+                    CREATE INDEX [IX_Patient_Operation_Patient_ID] ON [Patient_Operation] ([Patient_ID]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Patient_Operation_Reg_No' AND object_id = OBJECT_ID(N'[Patient_Operation]'))
+                    CREATE INDEX [IX_Patient_Operation_Reg_No] ON [Patient_Operation] ([Reg_No]);
+            END
+
+            IF OBJECT_ID(N'[Operation_Note]', N'U') IS NOT NULL
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Operation_Note_Operation_Date' AND object_id = OBJECT_ID(N'[Operation_Note]'))
+                    CREATE INDEX [IX_Operation_Note_Operation_Date] ON [Operation_Note] ([Operation_Date]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Operation_Note_Patient_ID' AND object_id = OBJECT_ID(N'[Operation_Note]'))
+                    CREATE INDEX [IX_Operation_Note_Patient_ID] ON [Operation_Note] ([Patient_ID]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Operation_Note_Reg_No' AND object_id = OBJECT_ID(N'[Operation_Note]'))
+                    CREATE INDEX [IX_Operation_Note_Reg_No] ON [Operation_Note] ([Reg_No]);
+            END
+
+            IF OBJECT_ID(N'[Medical_Certificate]', N'U') IS NOT NULL
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Medical_Certificate_Certificate_Type_Issue_Date' AND object_id = OBJECT_ID(N'[Medical_Certificate]'))
+                    CREATE INDEX [IX_Medical_Certificate_Certificate_Type_Issue_Date] ON [Medical_Certificate] ([Certificate_Type], [Issue_Date]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Medical_Certificate_Patient_ID' AND object_id = OBJECT_ID(N'[Medical_Certificate]'))
+                    CREATE INDEX [IX_Medical_Certificate_Patient_ID] ON [Medical_Certificate] ([Patient_ID]);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Medical_Certificate_Reg_No' AND object_id = OBJECT_ID(N'[Medical_Certificate]'))
+                    CREATE INDEX [IX_Medical_Certificate_Reg_No] ON [Medical_Certificate] ([Reg_No]);
             END
         """;
         await db.Database.ExecuteSqlRawAsync(patientColSql);

@@ -1059,11 +1059,15 @@
     {
         try
         {
+            doctors = (await MasterCache.GetActiveDoctorsAsync()).OrderBy(x => x.Name).ToList();
+
             await using var db = await DbFactory.CreateDbContextAsync();
-            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
             totalPatientsCount = await db.Registrations.AsNoTracking().CountAsync();
 
-            allCertificates = await db.MedicalCertificates.AsNoTracking().OrderByDescending(x => x.IssueDate).ToListAsync();
+            allCertificates = await db.MedicalCertificates.AsNoTracking()
+                .OrderByDescending(x => x.IssueDate)
+                .Take(200)
+                .ToListAsync();
 
             var pIds = allCertificates.Select(x => x.PatientID).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
             if (pIds.Count > 0)
@@ -1093,7 +1097,7 @@
                 || r.Name.Contains(term)
                 || (r.Contact != null && r.Contact.Contains(term)));
         }
-        return query.OrderByDescending(x => x.TransDate).ThenByDescending(x => x.PatientID);
+        return query.OrderByDescending(x => x.TransDate).ThenByDescending(x => x.PatientID).SelectWithoutPhoto();
     }
 
     private async Task LoadPatientSuggestionsAsync(bool reset)
@@ -1217,7 +1221,10 @@
         currentType = cert.CertificateType;
 
         await using var db = await DbFactory.CreateDbContextAsync();
-        selectedPatient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == cert.PatientID);
+        selectedPatient = await db.Registrations.AsNoTracking()
+            .Where(x => x.PatientID == cert.PatientID)
+            .SelectWithoutPhoto()
+            .FirstOrDefaultAsync();
         if (selectedPatient != null) patientNames[selectedPatient.PatientID] = selectedPatient.Name;
 
         try

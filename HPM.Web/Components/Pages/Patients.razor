@@ -1560,12 +1560,13 @@
         IQueryable<Registration> q = db.Registrations.AsNoTracking();
         if (string.IsNullOrWhiteSpace(term) || term.Equals("AUTO", StringComparison.OrdinalIgnoreCase))
         {
-            return q.OrderByDescending(x => x.ID);
+            return q.OrderByDescending(x => x.ID).SelectWithoutPhoto();
         }
         return q.Where(x => x.PatientID.StartsWith(term)
                          || (x.Contact != null && x.Contact.StartsWith(term))
                          || (x.Name != null && x.Name.Contains(term)))
-                .OrderByDescending(x => x.ID);
+                .OrderByDescending(x => x.ID)
+                .SelectWithoutPhoto();
     }
 
     private async Task FilterIdSuggestionsAsync()
@@ -1638,10 +1639,11 @@
         IQueryable<Registration> q = db.Registrations.AsNoTracking().Where(x => x.Contact != null && x.Contact != "");
         if (string.IsNullOrWhiteSpace(term))
         {
-            return q.OrderByDescending(x => x.ID);
+            return q.OrderByDescending(x => x.ID).SelectWithoutPhoto();
         }
         return q.Where(x => x.Contact!.StartsWith(term) || x.Contact!.Contains(term))
-                .OrderByDescending(x => x.ID);
+                .OrderByDescending(x => x.ID)
+                .SelectWithoutPhoto();
     }
 
     private async Task FilterPhoneSuggestionsAsync()
@@ -1703,10 +1705,22 @@
         }
     }
 
-    private void SelectSuggestion(Registration p)
+    private async Task SelectSuggestion(Registration p)
     {
         showIdSuggestions = false;
         showPhoneSuggestions = false;
+        if (p.PhotoData is null && p.ID > 0)
+        {
+            try
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                p.PhotoData = await db.Registrations.AsNoTracking()
+                    .Where(x => x.ID == p.ID)
+                    .Select(x => x.PhotoData)
+                    .FirstOrDefaultAsync();
+            }
+            catch { }
+        }
         Select(p);
         messageClass = "success";
         message = $"Loaded patient {p.PatientID} - {p.Name}";

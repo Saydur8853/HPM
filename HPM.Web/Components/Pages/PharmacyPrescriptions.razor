@@ -1318,12 +1318,8 @@
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         
-        // 1. Load Generic Names & Medicine Types dictionaries
-        genericNames = await db.GenericGroups.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name ?? "");
-        typeNames = await db.MedicineTypes.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Type ?? "");
-
-        // 2. Load Services where CategoryID = 3 (Medicines)
-        rawMedicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+        // 1 & 2. Load Generic Names, Medicine Types, and Medicines from MasterCache
+        (genericNames, typeNames, rawMedicines) = await MasterCache.GetPharmacyMedicineCatalogAsync();
         medItems = rawMedicines.Select(m => new MedicineSearchItem
         {
             ID = m.ID,
@@ -1333,11 +1329,15 @@
             SaleRate = m.SaleRate ?? 0
         }).ToList();
 
-        // 3. Load active doctors
-        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive == true).OrderBy(x => x.Name).ToListAsync();
+        // 3. Load active doctors from MasterCache
+        doctors = (await MasterCache.GetActiveDoctorsAsync()).OrderBy(x => x.Name).ToList();
 
-        // 4. Load recent patients for search dropdown
-        registeredPatients = await db.Registrations.AsNoTracking().OrderByDescending(x => x.ID).Take(150).ToListAsync();
+        // 4. Load recent patients for search dropdown (excluding heavy PhotoData)
+        registeredPatients = await db.Registrations.AsNoTracking()
+            .OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto()
+            .Take(60)
+            .ToListAsync();
 
         // 4b. Load recent walk-in appointments (with Temporary Patient IDs or unregistered)
         var recentAppts = await db.DoctorAppointments.AsNoTracking()
@@ -1357,8 +1357,8 @@
         var pids = admissions.Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToList();
 
         var bedMap = await db.BedCabins.AsNoTracking().Where(x => bedIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.Name);
-        var deptMap = await db.IpdDepartments.AsNoTracking().Where(x => deptIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.Name);
-        var patMap = await db.Registrations.AsNoTracking().Where(x => pids.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x);
+        var deptMap = (await MasterCache.GetIpdDepartmentsAsync()).Where(x => deptIds.Contains(x.ID)).ToDictionary(x => x.ID, x => x.Name);
+        var patMap = await db.Registrations.AsNoTracking().Where(x => pids.Contains(x.PatientID)).SelectWithoutPhoto().ToDictionaryAsync(x => x.PatientID, x => x);
 
         admittedPatients = admissions.Select(a =>
         {
@@ -1382,7 +1382,7 @@
         }).ToList();
 
         // 6. Load recent prescriptions
-        recent = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).OrderByDescending(x => x.ID).Take(150).ToListAsync();
+        recent = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).OrderByDescending(x => x.ID).Take(60).ToListAsync();
     }
 
     private async Task DetectAssignedDoctorAsync(string? pid)
@@ -1449,7 +1449,10 @@
         if (string.IsNullOrWhiteSpace(editor.PatientID)) return;
         await using var db = await DbFactory.CreateDbContextAsync();
         var pid = editor.PatientID.Trim();
-        var p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == pid);
+        var p = await db.Registrations.AsNoTracking()
+            .Where(x => x.PatientID == pid)
+            .SelectWithoutPhoto()
+            .FirstOrDefaultAsync();
         if (p != null)
         {
             SelectPatient(p);
@@ -1492,7 +1495,12 @@
         if (encounter is null) { Fail(I18n.T("Clinical encounter was not found.")); return; }
         if (!isAdministrator && (!currentDoctorProfileId.HasValue || encounter.DoctorID != currentDoctorProfileId.Value)) { Fail(I18n.T("You can prescribe only for your own patient queue.")); return; }
         if (encounter.Status == EncounterStatuses.Completed) { Fail(I18n.T("This visit is already completed.")); return; }
-        var patient = string.IsNullOrWhiteSpace(encounter.PatientID) ? null : await db.Registrations.AsNoTracking().SingleOrDefaultAsync(x => x.PatientID == encounter.PatientID);
+        var patient = string.IsNullOrWhiteSpace(encounter.PatientID)
+            ? null
+            : await db.Registrations.AsNoTracking()
+                .Where(x => x.PatientID == encounter.PatientID)
+                .SelectWithoutPhoto()
+                .SingleOrDefaultAsync();
         var linkedAppt = encounter.AppointmentID.HasValue
             ? await db.DoctorAppointments.AsNoTracking().SingleOrDefaultAsync(x => x.ID == encounter.AppointmentID.Value)
             : null;
@@ -1796,7 +1804,7 @@
                 }
 
                 return target;
-            }, System.Data.IsolationLevel.Serializable);
+            }, System.Data.IsolationLevel.ReadCommitted);
 
             editor = target;
             if (newlyCreatedReg is not null)

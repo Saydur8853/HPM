@@ -1535,7 +1535,7 @@
             .OrderBy(x => x.DisplayName)
             .ToList();
         await using var db = await DbFactory.CreateDbContextAsync();
-        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        doctors = await MasterCache.GetAllDoctorsAsync();
         foreach (var d in doctors)
         {
             d.Name = DoctorNameFormatter.Sanitize(d.Name);
@@ -1543,9 +1543,9 @@
         }
         doctors = doctors.OrderBy(x => x.Name).ToList();
 
-        var categoryIds = await db.ServiceCategories.AsNoTracking().Where(x => x.ID == 1 || x.SubID == 1).Select(x => x.ID).ToListAsync();
-        categories = await db.ServiceCategories.AsNoTracking().Where(x => categoryIds.Contains(x.ID)).OrderBy(x => x.Name).ToListAsync();
-        services = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && categoryIds.Contains(x.CategoryID.Value)).OrderBy(x => x.Name).ToListAsync();
+        (categories, services) = await MasterCache.GetOtCatalogAsync();
+
+
         SelectFirstService();
         await LoadMemosAsync();
     }
@@ -1822,7 +1822,7 @@
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync();
-            var q = BuildPatientQuery(db, term);
+            var q = BuildPatientQuery(db, term).SelectWithoutPhoto();
             patientIdSuggestions = await q.Take(PatientBatchSize).ToListAsync();
             hasMorePatientSuggestions = patientIdSuggestions.Count >= PatientBatchSize;
             showPatientIdSuggestions = patientIdSuggestions.Count > 0;
@@ -1851,7 +1851,7 @@
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync();
-            var q = BuildPatientQuery(db, term);
+            var q = BuildPatientQuery(db, term).SelectWithoutPhoto();
             var nextBatch = await q.Skip(patientIdSuggestions.Count).Take(PatientBatchSize).ToListAsync();
             if (nextBatch.Count > 0)
             {
@@ -1909,19 +1909,19 @@
         var lookup = (string.IsNullOrWhiteSpace(patientSearchQuery) ? editor.PatientID : patientSearchQuery)?.Trim();
         if (string.IsNullOrWhiteSpace(lookup)) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup || x.Contact == lookup);
+        var patient = await db.Registrations.AsNoTracking().Where(x => x.PatientID == lookup || x.Contact == lookup).SelectWithoutPhoto().FirstOrDefaultAsync();
         if (patient is null && lookup.StartsWith("0") && lookup.Length >= 10)
         {
             var withoutLeadingZero = lookup[1..];
             patient = await db.Registrations.AsNoTracking()
-                .Where(x => x.Contact != null && x.Contact.EndsWith(withoutLeadingZero))
+                .Where(x => x.Contact != null && x.Contact.EndsWith(withoutLeadingZero)).SelectWithoutPhoto()
                 .OrderByDescending(x => x.ID)
                 .FirstOrDefaultAsync();
         }
         if (patient is null)
         {
             patient = await db.Registrations.AsNoTracking()
-                .Where(x => x.Name != null && x.Name.Contains(lookup))
+                .Where(x => x.Name != null && x.Name.Contains(lookup)).SelectWithoutPhoto()
                 .OrderByDescending(x => x.ID)
                 .FirstOrDefaultAsync();
         }

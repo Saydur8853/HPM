@@ -992,26 +992,28 @@
     {
         try
         {
+            doctors = (await MasterCache.GetActiveDoctorsAsync()).OrderBy(x => x.Name).ToList();
+            departmentNames = await MasterCache.GetDepartmentNamesMapAsync();
+
             await using var db = await DbFactory.CreateDbContextAsync();
-            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
             totalActiveInpatients = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.IsAdmitted == true);
 
-            var beds = await db.BedCabins.AsNoTracking().ToListAsync();
-            bedNames = beds.ToDictionary(x => x.ID, x => x.Name);
+            bedNames = await db.BedCabins.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
 
-            var depts = await db.Departments.AsNoTracking().ToListAsync();
-            departmentNames = depts.ToDictionary(x => x.ID, x => x.Name);
-
-            allOperations = await db.PatientOperations.AsNoTracking().OrderByDescending(x => x.OperationDate).ToListAsync();
+            allOperations = await db.PatientOperations.AsNoTracking()
+                .OrderByDescending(x => x.OperationDate)
+                .Take(200)
+                .ToListAsync();
 
             var pIds = allOperations.Select(x => x.PatientID).Where(x => !string.IsNullOrEmpty(x)).Distinct().ToList();
             if (pIds.Count > 0)
             {
-                var regs = await db.Registrations.AsNoTracking().Where(x => pIds.Contains(x.PatientID)).ToListAsync();
+                var regs = await db.Registrations.AsNoTracking()
+                    .Where(x => pIds.Contains(x.PatientID))
+                    .Select(x => new { x.PatientID, x.Name })
+                    .ToListAsync();
                 foreach (var r in regs) patientNames[r.PatientID] = r.Name;
             }
-
-
         }
         catch (Exception ex)
         {

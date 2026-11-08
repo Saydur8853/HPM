@@ -1365,41 +1365,20 @@
         }
         catch { }
 
-        doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
+        doctors = await MasterCache.GetDoctorsWithNameAsync();
         var roleAuthorizers = await UserManager.GetUsersInRoleAsync(RoleNames.Authorizer);
         authorizers = roleAuthorizers
             .Where(x => x.IsActive && !string.IsNullOrWhiteSpace(x.DisplayName))
             .OrderBy(x => x.DisplayName)
             .ToList();
-        var allCats = await db.ServiceCategories.AsNoTracking().ToListAsync();
-        serviceCategoryNames = allCats.ToDictionary(c => c.ID, c => c.Name);
-        var diagCategoryIds = allCats
-            .Where(c => c.SubID == 8 
-                     || c.ID == 66 
-                     || c.ID == 91 
-                     || (!string.IsNullOrEmpty(c.Name) && (c.Name.Contains("Investigation") || c.Name.Contains("Pathology"))))
-            .Select(c => c.ID)
-            .ToHashSet();
-
-        availableServices = await db.Services.AsNoTracking()
-            .Where(s => s.CategoryID != null 
-                     && diagCategoryIds.Contains(s.CategoryID.Value)
-                     && s.CategoryID != 3 
-                     && s.CategoryID != 48 
-                     && s.CategoryID != 71 
-                     && s.CategoryID != 7
-                     && (s.GenericID == null || s.GenericID == 0)
-                     && (s.TypeID == null || s.TypeID == 0)
-                     && (s.SupplierID == null || s.SupplierID == 0))
-            .OrderBy(x => x.Name)
-            .ToListAsync();
+        (serviceCategoryNames, availableServices) = await MasterCache.GetDiagnosticCatalogAsync();
 
         recentMemos = await db.EmergencyMemos.AsNoTracking()
             .Where(x => x.ModuleID == 2 && x.PatientType == currentPatientType)
             .OrderByDescending(x => x.ID)
             .Take(30)
             .ToListAsync();
-        totalModalMemosCount = await db.EmergencyMemos.AsNoTracking().CountAsync(x => x.ModuleID == 2);
+        totalModalMemosCount = recentMemos.Count;
         pendingOrders = isIpdMode
             ? []
             : await db.DiagnosticOrders.AsNoTracking().Include(x => x.Items)
@@ -1635,7 +1614,12 @@
         var order = await db.DiagnosticOrders.AsNoTracking().Include(x => x.Items).SingleOrDefaultAsync(x => x.ID == orderId);
         if (order is null || order.Status != "Pending") { Fail(I18n.T("Pending diagnostic order was not found.")); return; }
         var encounter = await db.PatientEncounters.AsNoTracking().SingleAsync(x => x.ID == order.EncounterID);
-        var patient = string.IsNullOrWhiteSpace(order.PatientID) ? null : await db.Registrations.AsNoTracking().SingleOrDefaultAsync(x => x.PatientID == order.PatientID);
+        var patient = string.IsNullOrWhiteSpace(order.PatientID)
+            ? null
+            : await db.Registrations.AsNoTracking()
+                .Where(x => x.PatientID == order.PatientID)
+                .SelectWithoutPhoto()
+                .SingleOrDefaultAsync();
         editor = NewMemo();
         discountPercent = 0;
         fixedDiscountAmount = 0;
@@ -1710,7 +1694,7 @@
                           || (x.Contact != null && x.Contact.Contains(term))
                           || (x.Name != null && x.Name.Contains(term)));
         }
-        patientIdSuggestions = await q.OrderByDescending(x => x.ID).Take(PatientBatchSize).ToListAsync();
+        patientIdSuggestions = await q.OrderByDescending(x => x.ID).SelectWithoutPhoto().Take(PatientBatchSize).ToListAsync();
 
         if (!string.IsNullOrEmpty(term))
         {
@@ -1725,6 +1709,7 @@
                 var pids = admissions.Where(a => !string.IsNullOrWhiteSpace(a.PatientID)).Select(a => a.PatientID!).ToHashSet();
                 var regs = await db.Registrations.AsNoTracking()
                     .Where(x => x.PatientID != null && pids.Contains(x.PatientID))
+                    .SelectWithoutPhoto()
                     .ToListAsync();
 
                 foreach (var adm in admissions)
@@ -1762,6 +1747,7 @@
                           || (x.Name != null && x.Name.Contains(term)));
         }
         List<Registration> more = await q.OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto()
             .Skip(patientIdSuggestions.Count)
             .Take(PatientBatchSize)
             .ToListAsync();
@@ -1799,7 +1785,7 @@
         {
             q = q.Where(x => x.Contact != null && x.Contact.Contains(term));
         }
-        contactSuggestions = await q.OrderByDescending(x => x.ID).Take(PatientBatchSize).ToListAsync();
+        contactSuggestions = await q.OrderByDescending(x => x.ID).SelectWithoutPhoto().Take(PatientBatchSize).ToListAsync();
         hasMoreContactSuggestions = contactSuggestions.Count >= PatientBatchSize;
         showContactSuggestions = contactSuggestions.Count > 0;
     }
@@ -1816,6 +1802,7 @@
             q = q.Where(x => x.Contact != null && x.Contact.Contains(term));
         }
         List<Registration> more = await q.OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto()
             .Skip(contactSuggestions.Count)
             .Take(PatientBatchSize)
             .ToListAsync();
@@ -1992,16 +1979,25 @@
         {
             if (!string.IsNullOrWhiteSpace(activeAdmission.PatientID))
             {
-                p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == activeAdmission.PatientID);
+                p = await db.Registrations.AsNoTracking()
+                    .Where(x => x.PatientID == activeAdmission.PatientID)
+                    .SelectWithoutPhoto()
+                    .FirstOrDefaultAsync();
             }
         }
         else
         {
             // Search Registration by PatientID first (direct seek), then by Contact
-            p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == lookup);
+            p = await db.Registrations.AsNoTracking()
+                .Where(x => x.PatientID == lookup)
+                .SelectWithoutPhoto()
+                .FirstOrDefaultAsync();
             if (p == null)
             {
-                p = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.Contact == lookup);
+                p = await db.Registrations.AsNoTracking()
+                    .Where(x => x.Contact == lookup)
+                    .SelectWithoutPhoto()
+                    .FirstOrDefaultAsync();
             }
 
             if (p is null && lookup.StartsWith("0") && lookup.Length >= 10)
@@ -2010,6 +2006,7 @@
                 p = await db.Registrations.AsNoTracking()
                     .Where(x => x.Contact != null && x.Contact.EndsWith(withoutZero))
                     .OrderByDescending(x => x.ID)
+                    .SelectWithoutPhoto()
                     .FirstOrDefaultAsync();
             }
 

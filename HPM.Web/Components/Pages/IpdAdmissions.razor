@@ -1877,16 +1877,17 @@
 
     private async Task LoadAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        departments = await db.IpdDepartments.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
-        doctorDepartments = await db.Departments.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
-        var rawDoctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null && x.IsActive).ToListAsync();
+        departments = await MasterCache.GetIpdDepartmentsAsync();
+        doctorDepartments = await MasterCache.GetDepartmentNamesMapAsync();
+        var rawDoctors = await MasterCache.GetDoctorsWithNameAsync(activeOnly: true);
         doctors = rawDoctors
             .OrderByDescending(x => (x.Priority ?? 0) > 0)
             .ThenBy(x => x.Priority ?? int.MaxValue)
             .ThenBy(x => CleanDoctorName(x), StringComparer.OrdinalIgnoreCase)
             .ToList();
-        categories = await db.BedCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        categories = await MasterCache.GetBedCategoriesAsync();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
         beds = await db.BedCabins.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
 
         totalAdmissionCount = await db.PatientAdmissions.AsNoTracking().CountAsync();
@@ -2023,7 +2024,10 @@
         }
 
         await using var db = await DbFactory.CreateDbContextAsync();
-        var patient = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == editor.PatientID.Trim());
+        var patient = await db.Registrations.AsNoTracking()
+            .Where(x => x.PatientID == editor.PatientID.Trim())
+            .SelectWithoutPhoto()
+            .FirstOrDefaultAsync();
         if (patient is null)
         {
             patientName = "";
@@ -2092,7 +2096,8 @@
                      || x.PatientID.StartsWith(term)
                      || (x.Contact != null && x.Contact.StartsWith(term))
                      || (x.Name != null && x.Name.Contains(term)))
-            .OrderByDescending(x => x.ID);
+            .OrderByDescending(x => x.ID)
+            .SelectWithoutPhoto();
     }
 
     private async Task HandlePatientSearchInputAsync(ChangeEventArgs e)

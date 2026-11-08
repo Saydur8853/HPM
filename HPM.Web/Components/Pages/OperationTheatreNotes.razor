@@ -1031,7 +1031,7 @@
             var op = await db.PatientOperations.FindAsync(opId.Value);
             if (op != null)
             {
-                ApplyScheduledOperation(op, db);
+                await ApplyScheduledOperationAsync(op, db);
             }
         }
         else if (!string.IsNullOrWhiteSpace(regNo))
@@ -1062,17 +1062,18 @@
     {
         try
         {
+            doctors = (await MasterCache.GetActiveDoctorsAsync()).OrderBy(x => x.Name).ToList();
+            departmentNames = await MasterCache.GetDepartmentNamesMapAsync();
+
             await using var db = await DbFactory.CreateDbContextAsync();
-            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
             totalActiveInpatients = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.IsAdmitted == true);
 
-            var beds = await db.BedCabins.AsNoTracking().ToListAsync();
-            bedNames = beds.ToDictionary(x => x.ID, x => x.Name);
+            bedNames = await db.BedCabins.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
 
-            var depts = await db.Departments.AsNoTracking().ToListAsync();
-            departmentNames = depts.ToDictionary(x => x.ID, x => x.Name);
-
-            otNotes = await db.OperationNotes.AsNoTracking().OrderByDescending(x => x.OperationDate).ToListAsync();
+            otNotes = await db.OperationNotes.AsNoTracking()
+                .OrderByDescending(x => x.OperationDate)
+                .Take(150)
+                .ToListAsync();
 
             // Load recent scheduled operations for quick auto-fill handoff
             activeScheduledOperations = await db.PatientOperations.AsNoTracking()
@@ -1105,24 +1106,20 @@
         }
     }
 
-    private void OnScheduledOpSelected(ChangeEventArgs e)
+    private async Task OnScheduledOpSelected(ChangeEventArgs e)
     {
         if (long.TryParse(e.Value?.ToString(), out var opIdVal) && opIdVal > 0)
         {
             var op = activeScheduledOperations.FirstOrDefault(x => x.ID == opIdVal);
             if (op != null)
             {
-                _ = Task.Run(async () =>
-                {
-                    await using var db = await DbFactory.CreateDbContextAsync();
-                    ApplyScheduledOperation(op, db);
-                    await InvokeAsync(StateHasChanged);
-                });
+                await using var db = await DbFactory.CreateDbContextAsync();
+                await ApplyScheduledOperationAsync(op, db);
             }
         }
     }
 
-    private void ApplyScheduledOperation(PatientOperation op, HpmDbContext db)
+    private async Task ApplyScheduledOperationAsync(PatientOperation op, HpmDbContext db)
     {
         editor.OperationID = op.ID;
         editor.RegNo = op.RegNo;
@@ -1149,10 +1146,13 @@
             if (asstIds.Count > 2) editor.Assistant3ID = asstIds[2];
         }
 
-        selectedAdmission = db.PatientAdmissions.AsNoTracking().FirstOrDefault(x => x.RegNo == op.RegNo);
+        selectedAdmission = await db.PatientAdmissions.AsNoTracking().FirstOrDefaultAsync(x => x.RegNo == op.RegNo);
         if (selectedAdmission != null && !string.IsNullOrWhiteSpace(op.PatientID))
         {
-            var p = db.Registrations.AsNoTracking().FirstOrDefault(x => x.PatientID == op.PatientID);
+            var p = await db.Registrations.AsNoTracking()
+                .Where(x => x.PatientID == op.PatientID)
+                .Select(x => new { x.PatientID, x.Name, x.Sex })
+                .FirstOrDefaultAsync();
             if (p != null)
             {
                 selectedPatientName = p.Name;
@@ -1266,8 +1266,11 @@
         if (!string.IsNullOrWhiteSpace(adm.PatientID))
         {
             await using var db = await DbFactory.CreateDbContextAsync();
-            var reg = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == adm.PatientID);
-            selectedPatientSex = reg?.Sex ?? "—";
+            var sex = await db.Registrations.AsNoTracking()
+                .Where(x => x.PatientID == adm.PatientID)
+                .Select(x => x.Sex)
+                .FirstOrDefaultAsync();
+            selectedPatientSex = sex ?? "—";
         }
         else
         {
