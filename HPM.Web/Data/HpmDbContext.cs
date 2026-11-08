@@ -114,6 +114,18 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<StoreIssueSub> StoreIssueItems => Set<StoreIssueSub>();
     public DbSet<PurchaseRequisition> PurchaseRequisitions => Set<PurchaseRequisition>();
     public DbSet<PurchaseRequisitionItem> PurchaseRequisitionItems => Set<PurchaseRequisitionItem>();
+    public DbSet<HrmDepartment> HrmDepartments => Set<HrmDepartment>();
+    public DbSet<HrmDesignation> HrmDesignations => Set<HrmDesignation>();
+    public DbSet<HrmShift> HrmShifts => Set<HrmShift>();
+    public DbSet<HrmEmployee> HrmEmployees => Set<HrmEmployee>();
+    public DbSet<HrmHoliday> HrmHolidays => Set<HrmHoliday>();
+    public DbSet<HrmLeaveType> HrmLeaveTypes => Set<HrmLeaveType>();
+    public DbSet<HrmLeaveRequest> HrmLeaveRequests => Set<HrmLeaveRequest>();
+    public DbSet<HrmLeaveBalance> HrmLeaveBalances => Set<HrmLeaveBalance>();
+    public DbSet<HrmRosterAssignment> HrmRosterAssignments => Set<HrmRosterAssignment>();
+    public DbSet<HrmAttendanceRecord> HrmAttendanceRecords => Set<HrmAttendanceRecord>();
+    public DbSet<HrmPayrollPeriod> HrmPayrollPeriods => Set<HrmPayrollPeriod>();
+    public DbSet<HrmPayrollEntry> HrmPayrollEntries => Set<HrmPayrollEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -137,6 +149,125 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureCanteen(modelBuilder);
         ConfigurePurchaseRequisition(modelBuilder);
         ConfigureMedicalServices(modelBuilder);
+        ConfigureHrm(modelBuilder);
+    }
+
+    private static void ConfigureHrm(ModelBuilder b)
+    {
+        var department = b.Entity<HrmDepartment>();
+        department.ToTable("HRM_Department");
+        department.HasIndex(x => x.Code).IsUnique();
+        department.HasIndex(x => x.Name).IsUnique();
+        department.HasData(
+            new HrmDepartment { ID = 1, Code = "ADMIN", Name = "Administration", IsActive = true },
+            new HrmDepartment { ID = 2, Code = "MED", Name = "Medical Services", IsClinical = true, IsActive = true },
+            new HrmDepartment { ID = 3, Code = "NURS", Name = "Nursing", IsClinical = true, IsActive = true },
+            new HrmDepartment { ID = 4, Code = "DIAG", Name = "Diagnostics & Laboratory", IsClinical = true, IsActive = true },
+            new HrmDepartment { ID = 5, Code = "PHARM", Name = "Pharmacy", IsClinical = true, IsActive = true },
+            new HrmDepartment { ID = 6, Code = "ACCT", Name = "Accounts & Finance", IsActive = true },
+            new HrmDepartment { ID = 7, Code = "SUPPORT", Name = "Support Services", IsActive = true });
+
+        var designation = b.Entity<HrmDesignation>();
+        designation.ToTable("HRM_Designation");
+        designation.HasIndex(x => x.Code).IsUnique();
+        designation.HasIndex(x => x.Name).IsUnique();
+        designation.HasData(
+            new HrmDesignation { ID = 1, Code = "MO", Name = "Medical Officer", IsActive = true },
+            new HrmDesignation { ID = 2, Code = "NURSE", Name = "Staff Nurse", IsActive = true },
+            new HrmDesignation { ID = 3, Code = "TECH", Name = "Technician", IsActive = true },
+            new HrmDesignation { ID = 4, Code = "OFFICER", Name = "Officer", IsActive = true },
+            new HrmDesignation { ID = 5, Code = "ASSIST", Name = "Assistant", IsActive = true },
+            new HrmDesignation { ID = 6, Code = "WORKER", Name = "Support Worker", IsActive = true });
+
+        var shift = b.Entity<HrmShift>();
+        shift.ToTable("HRM_Shift");
+        shift.HasIndex(x => x.Code).IsUnique();
+        shift.HasData(
+            new HrmShift { ID = 1, Code = "GENERAL", Name = "General Duty", StartTime = new TimeSpan(9, 0, 0), EndTime = new TimeSpan(17, 0, 0), GraceMinutes = 15, BreakMinutes = 60, IsActive = true },
+            new HrmShift { ID = 2, Code = "MORNING", Name = "Morning Shift", StartTime = new TimeSpan(7, 0, 0), EndTime = new TimeSpan(15, 0, 0), GraceMinutes = 10, BreakMinutes = 30, IsActive = true },
+            new HrmShift { ID = 3, Code = "EVENING", Name = "Evening Shift", StartTime = new TimeSpan(15, 0, 0), EndTime = new TimeSpan(23, 0, 0), GraceMinutes = 10, BreakMinutes = 30, IsActive = true },
+            new HrmShift { ID = 4, Code = "NIGHT", Name = "Night Shift", StartTime = new TimeSpan(23, 0, 0), EndTime = new TimeSpan(7, 0, 0), GraceMinutes = 10, BreakMinutes = 30, IsNightShift = true, IsActive = true });
+
+        var employee = b.Entity<HrmEmployee>();
+        employee.ToTable("HRM_Employee");
+        employee.Property(x => x.BasicSalary).HasColumnType("decimal(18,2)");
+        employee.Property(x => x.HouseRentAllowance).HasColumnType("decimal(18,2)");
+        employee.Property(x => x.MedicalAllowance).HasColumnType("decimal(18,2)");
+        employee.Property(x => x.TransportAllowance).HasColumnType("decimal(18,2)");
+        employee.Property(x => x.OtherAllowance).HasColumnType("decimal(18,2)");
+        employee.Property(x => x.OvertimeHourlyRate).HasColumnType("decimal(18,2)");
+        employee.HasIndex(x => x.EmployeeNo).IsUnique();
+        employee.HasIndex(x => x.AttendanceNo).IsUnique().HasFilter("[AttendanceNo] IS NOT NULL");
+        employee.HasIndex(x => new { x.DepartmentID, x.Status });
+        employee.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentID).OnDelete(DeleteBehavior.Restrict);
+        employee.HasOne(x => x.Designation).WithMany().HasForeignKey(x => x.DesignationID).OnDelete(DeleteBehavior.Restrict);
+
+        var holiday = b.Entity<HrmHoliday>();
+        holiday.ToTable("HRM_Holiday");
+        holiday.HasIndex(x => new { x.HolidayDate, x.DepartmentID });
+        holiday.HasOne(x => x.Department).WithMany().HasForeignKey(x => x.DepartmentID).OnDelete(DeleteBehavior.Restrict);
+
+        var leaveType = b.Entity<HrmLeaveType>();
+        leaveType.ToTable("HRM_Leave_Type");
+        leaveType.Property(x => x.AnnualAllowance).HasColumnType("decimal(8,2)");
+        leaveType.HasIndex(x => x.Code).IsUnique();
+        leaveType.HasData(
+            new HrmLeaveType { ID = 1, Code = "CL", Name = "Casual Leave", AnnualAllowance = 10, IsPaid = true, IsActive = true },
+            new HrmLeaveType { ID = 2, Code = "SL", Name = "Sick Leave", AnnualAllowance = 14, IsPaid = true, RequiresAttachment = true, IsActive = true },
+            new HrmLeaveType { ID = 3, Code = "EL", Name = "Earned Leave", AnnualAllowance = 15, IsPaid = true, IsActive = true },
+            new HrmLeaveType { ID = 4, Code = "MAT", Name = "Maternity Leave", AnnualAllowance = 0, IsPaid = true, RequiresAttachment = true, IsActive = true },
+            new HrmLeaveType { ID = 5, Code = "LWP", Name = "Leave Without Pay", AnnualAllowance = 0, IsPaid = false, IsActive = true });
+
+        var leaveRequest = b.Entity<HrmLeaveRequest>();
+        leaveRequest.ToTable("HRM_Leave_Request");
+        leaveRequest.Property(x => x.TotalDays).HasColumnType("decimal(8,2)");
+        leaveRequest.HasIndex(x => new { x.EmployeeID, x.FromDate, x.ToDate });
+        leaveRequest.HasIndex(x => new { x.Status, x.AppliedAt });
+        leaveRequest.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeID).OnDelete(DeleteBehavior.Restrict);
+        leaveRequest.HasOne(x => x.LeaveType).WithMany().HasForeignKey(x => x.LeaveTypeID).OnDelete(DeleteBehavior.Restrict);
+
+        var leaveBalance = b.Entity<HrmLeaveBalance>();
+        leaveBalance.ToTable("HRM_Leave_Balance");
+        leaveBalance.Property(x => x.OpeningBalance).HasColumnType("decimal(8,2)");
+        leaveBalance.Property(x => x.AllocatedDays).HasColumnType("decimal(8,2)");
+        leaveBalance.Property(x => x.UsedDays).HasColumnType("decimal(8,2)");
+        leaveBalance.Property(x => x.AdjustedDays).HasColumnType("decimal(8,2)");
+        leaveBalance.HasIndex(x => new { x.EmployeeID, x.LeaveTypeID, x.Year }).IsUnique();
+        leaveBalance.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeID).OnDelete(DeleteBehavior.Cascade);
+        leaveBalance.HasOne(x => x.LeaveType).WithMany().HasForeignKey(x => x.LeaveTypeID).OnDelete(DeleteBehavior.Restrict);
+
+        var roster = b.Entity<HrmRosterAssignment>();
+        roster.ToTable("HRM_Roster_Assignment");
+        roster.HasIndex(x => new { x.EmployeeID, x.DutyDate }).IsUnique();
+        roster.HasIndex(x => new { x.DutyDate, x.ShiftID });
+        roster.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeID).OnDelete(DeleteBehavior.Cascade);
+        roster.HasOne(x => x.Shift).WithMany().HasForeignKey(x => x.ShiftID).OnDelete(DeleteBehavior.Restrict);
+
+        var attendance = b.Entity<HrmAttendanceRecord>();
+        attendance.ToTable("HRM_Attendance");
+        attendance.HasIndex(x => new { x.EmployeeID, x.AttendanceDate }).IsUnique();
+        attendance.HasIndex(x => new { x.AttendanceDate, x.Status });
+        attendance.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeID).OnDelete(DeleteBehavior.Cascade);
+        attendance.HasOne(x => x.Shift).WithMany().HasForeignKey(x => x.ShiftID).OnDelete(DeleteBehavior.Restrict);
+
+        var payrollPeriod = b.Entity<HrmPayrollPeriod>();
+        payrollPeriod.ToTable("HRM_Payroll_Period");
+        payrollPeriod.HasIndex(x => new { x.Year, x.Month }).IsUnique();
+
+        var payrollEntry = b.Entity<HrmPayrollEntry>();
+        payrollEntry.ToTable("HRM_Payroll_Entry");
+        payrollEntry.Property(x => x.BasicSalary).HasColumnType("decimal(18,2)");
+        payrollEntry.Property(x => x.Allowances).HasColumnType("decimal(18,2)");
+        payrollEntry.Property(x => x.OvertimeHours).HasColumnType("decimal(10,2)");
+        payrollEntry.Property(x => x.OvertimeAmount).HasColumnType("decimal(18,2)");
+        payrollEntry.Property(x => x.GrossPay).HasColumnType("decimal(18,2)");
+        payrollEntry.Property(x => x.AbsentDays).HasColumnType("decimal(8,2)");
+        payrollEntry.Property(x => x.UnpaidLeaveDays).HasColumnType("decimal(8,2)");
+        payrollEntry.Property(x => x.DeductionAmount).HasColumnType("decimal(18,2)");
+        payrollEntry.Property(x => x.NetPay).HasColumnType("decimal(18,2)");
+        payrollEntry.HasIndex(x => new { x.PayrollPeriodID, x.EmployeeID }).IsUnique();
+        payrollEntry.HasOne(x => x.PayrollPeriod).WithMany().HasForeignKey(x => x.PayrollPeriodID).OnDelete(DeleteBehavior.Cascade);
+        payrollEntry.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeID).OnDelete(DeleteBehavior.Restrict);
     }
 
     private static void ConfigureAppUser(ModelBuilder b)

@@ -1,0 +1,178 @@
+@page "/hrm"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+
+<PageTitle>HRM & Payroll | @Branding.HospitalName</PageTitle>
+
+<div class="hrm-shell">
+    <header class="hrm-hero">
+        <div>
+            <span class="hrm-eyebrow">WORKFORCE OPERATIONS</span>
+            <h1>Human Resources & Payroll</h1>
+            <p>Hospital staff records, duty rosters, attendance, leave and payroll in one operational workspace.</p>
+        </div>
+        <div class="hrm-hero-meta">
+            <span class="hrm-live-dot"></span>
+            <div><strong>@DateTime.Today.ToString("dddd")</strong><small>@DateTime.Today.ToString("dd MMMM yyyy")</small></div>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="hrm-alert @messageClass"><span>@(messageClass == "success" ? "✓" : "!")</span>@message</div>
+    }
+
+    <nav class="hrm-tabs" aria-label="HRM sections">
+        @foreach (var item in NavigationItems)
+        {
+            <a href="@($"/hrm?view={item.Key}")" class="@(ActiveView == item.Key ? "active" : "")">
+                <span>@item.Icon</span>@item.Label
+                @if (item.Key == "leave" && PendingLeaveCount > 0) { <b>@PendingLeaveCount</b> }
+            </a>
+        }
+    </nav>
+
+    @if (loading)
+    {
+        <div class="hrm-loading"><span></span><p>Loading workforce data…</p></div>
+    }
+    else if (ActiveView == "overview")
+    {
+        <section class="hrm-kpis">
+            <article><div class="kpi-icon blue">👥</div><div><small>ACTIVE STAFF</small><strong>@ActiveEmployeeCount</strong><span>@departments.Count(x => x.IsActive) departments</span></div></article>
+            <article><div class="kpi-icon green">✓</div><div><small>PRESENT TODAY</small><strong>@TodayPresentCount</strong><span>@TodayAttendanceRate.ToString("0.#")% recorded attendance</span></div></article>
+            <article><div class="kpi-icon amber">↗</div><div><small>ON LEAVE TODAY</small><strong>@TodayLeaveCount</strong><span>@PendingLeaveCount requests awaiting review</span></div></article>
+            <article><div class="kpi-icon violet">৳</div><div><small>LATEST NET PAYROLL</small><strong>@FormatCompactMoney(LatestPayrollTotal)</strong><span>@LatestPayrollLabel</span></div></article>
+        </section>
+
+        <section class="hrm-overview-grid">
+            <article class="hrm-card span-2">
+                <div class="hrm-card-head"><div><small>TODAY</small><h2>Workforce status</h2></div><a href="/hrm?view=attendance">Manage attendance →</a></div>
+                <div class="status-bars">
+                    @foreach (var status in TodayStatusSummary)
+                    {
+                        <div><span><b>@status.Label</b><em>@status.Count</em></span><i><u style="width:@status.Percent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></u></i></div>
+                    }
+                </div>
+                @if (todayAttendance.Count == 0)
+                {
+                    <div class="hrm-empty compact"><strong>No attendance posted today</strong><span>Use manual entry or import device data to start the day.</span></div>
+                }
+            </article>
+            <article class="hrm-card">
+                <div class="hrm-card-head"><div><small>APPROVAL QUEUE</small><h2>Pending leave</h2></div><a href="/hrm?view=leave">Review all →</a></div>
+                <div class="mini-list">
+                    @foreach (var leave in leaveRequests.Where(x => x.Status == "Pending").Take(5))
+                    {
+                        <div><span class="avatar">@Initials(leave.Employee?.Name)</span><span><b>@leave.Employee?.Name</b><small>@leave.LeaveType?.Code · @leave.TotalDays.ToString("0.#") day(s)</small></span><time>@leave.FromDate.ToString("dd MMM")</time></div>
+                    }
+                    @if (PendingLeaveCount == 0) { <div class="hrm-empty compact"><strong>Queue is clear</strong><span>No leave request needs attention.</span></div> }
+                </div>
+            </article>
+            <article class="hrm-card span-3">
+                <div class="hrm-card-head"><div><small>UPCOMING</small><h2>Duty roster · next 7 days</h2></div><a href="/hrm?view=roster">Open roster →</a></div>
+                <div class="roster-strip">
+                    @foreach (var day in NextSevenDays)
+                    {
+                        var dayRows = rosterAssignments.Where(x => x.DutyDate.Date == day.Date).ToList();
+                        <div class="roster-day @(day.Date == DateTime.Today ? "today" : "")"><header><b>@day.ToString("ddd")</b><span>@day.Day</span></header><strong>@dayRows.Count</strong><small>assigned</small><div>@string.Join(" · ", dayRows.GroupBy(x => x.Shift?.Code ?? "-").Select(x => $"{x.Key} {x.Count()}"))</div></div>
+                    }
+                </div>
+            </article>
+        </section>
+    }
+    else if (ActiveView == "employees")
+    {
+        <section class="hrm-page-head"><div><span>STAFF DIRECTORY</span><h2>Employees & workforce records</h2><p>Personal, official and compensation information for hospital staff, workers and officers.</p></div><button class="hrm-primary" @onclick="ResetEmployee">+ New employee</button></section>
+        <div class="hrm-split employee-split">
+            <article class="hrm-card form-card">
+                <div class="hrm-card-head"><div><small>@(employeeEditor.ID == 0 ? "NEW RECORD" : $"EDITING {employeeEditor.EmployeeNo}")</small><h2>@(employeeEditor.ID == 0 ? "Add employee" : employeeEditor.Name)</h2></div></div>
+                <EditForm Model="employeeEditor" OnValidSubmit="SaveEmployeeAsync">
+                    <DataAnnotationsValidator />
+                    <div class="hrm-form-grid two">
+                        <label><span>Employee no. *</span><InputText @bind-Value="employeeEditor.EmployeeNo" /></label>
+                        <label><span>Attendance/device ID</span><InputText @bind-Value="employeeEditor.AttendanceNo" /></label>
+                        <label class="wide"><span>Full name *</span><InputText @bind-Value="employeeEditor.Name" /></label>
+                        <label><span>Department *</span><InputSelect @bind-Value="employeeEditor.DepartmentID"><option value="0">Select</option>@foreach(var x in departments.Where(x => x.IsActive)){<option value="@x.ID">@x.Name</option>}</InputSelect></label>
+                        <label><span>Designation *</span><InputSelect @bind-Value="employeeEditor.DesignationID"><option value="0">Select</option>@foreach(var x in designations.Where(x => x.IsActive)){<option value="@x.ID">@x.Name</option>}</InputSelect></label>
+                        <label><span>Joining date</span><InputDate @bind-Value="employeeEditor.JoiningDate" /></label>
+                        <label><span>Employment type</span><InputSelect @bind-Value="employeeEditor.EmploymentType">@foreach(var x in EmploymentTypes){<option>@x</option>}</InputSelect></label>
+                        <label><span>Phone</span><InputText @bind-Value="employeeEditor.Phone" /></label>
+                        <label><span>Email</span><InputText @bind-Value="employeeEditor.Email" /></label>
+                        <label><span>Gender</span><InputSelect @bind-Value="employeeEditor.Gender"><option value="">Not specified</option><option>Male</option><option>Female</option><option>Other</option></InputSelect></label>
+                        <label><span>Status</span><InputSelect @bind-Value="employeeEditor.Status"><option>Active</option><option>Inactive</option><option>On Hold</option><option>Separated</option></InputSelect></label>
+                        <label class="wide"><span>Address</span><InputTextArea @bind-Value="employeeEditor.Address" /></label>
+                    </div>
+                    <div class="form-section-title"><span>Compensation</span><small>Used by monthly payroll</small></div>
+                    <div class="hrm-form-grid three money-grid">
+                        <label><span>Basic salary</span><InputNumber @bind-Value="employeeEditor.BasicSalary" /></label>
+                        <label><span>House rent</span><InputNumber @bind-Value="employeeEditor.HouseRentAllowance" /></label>
+                        <label><span>Medical</span><InputNumber @bind-Value="employeeEditor.MedicalAllowance" /></label>
+                        <label><span>Transport</span><InputNumber @bind-Value="employeeEditor.TransportAllowance" /></label>
+                        <label><span>Other allowance</span><InputNumber @bind-Value="employeeEditor.OtherAllowance" /></label>
+                        <label><span>OT rate / hour</span><InputNumber @bind-Value="employeeEditor.OvertimeHourlyRate" /></label>
+                    </div>
+                    <div class="form-actions"><button class="hrm-primary" type="submit" disabled="@saving">@(saving ? "Saving…" : employeeEditor.ID == 0 ? "Save employee" : "Update employee")</button><button type="button" class="hrm-secondary" @onclick="ResetEmployee">Clear</button></div>
+                </EditForm>
+            </article>
+            <article class="hrm-card list-card">
+                <div class="hrm-card-head"><div><small>@FilteredEmployees.Count() RECORDS</small><h2>Staff directory</h2></div></div>
+                <div class="hrm-filters"><input placeholder="Search name, employee no. or phone" @bind="employeeSearch" @bind:event="oninput" /><select @bind="employeeDepartmentFilter"><option value="0">All departments</option>@foreach(var x in departments){<option value="@x.ID">@x.Name</option>}</select></div>
+                <div class="hrm-table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Employment</th><th class="right">Gross setup</th><th></th></tr></thead><tbody>
+                    @foreach(var row in FilteredEmployees){<tr class="clickable" @onclick="() => EditEmployee(row)"><td><div class="person-cell"><span class="avatar">@Initials(row.Name)</span><span><b>@row.Name</b><small>@row.EmployeeNo · @row.Designation?.Name</small></span></div></td><td>@row.Department?.Name</td><td><span class="status @row.Status.ToLowerInvariant().Replace(" ", "-")">@row.Status</span><small class="cell-note">@row.EmploymentType</small></td><td class="right money">@Money(EmployeeGross(row))</td><td>›</td></tr>}
+                    @if(!FilteredEmployees.Any()){<tr><td colspan="5"><div class="hrm-empty"><strong>No employee found</strong><span>Add the first workforce record or change the filters.</span></div></td></tr>}
+                </tbody></table></div>
+            </article>
+        </div>
+    }
+    else if (ActiveView == "holidays")
+    {
+        <section class="hrm-page-head"><div><span>HOLIDAY CALENDAR</span><h2>Hospital holidays</h2><p>Manage organization-wide and department-specific paid or unpaid holidays.</p></div></section>
+        <div class="hrm-split narrow-form">
+            <article class="hrm-card form-card"><div class="hrm-card-head"><div><small>CALENDAR ENTRY</small><h2>@(holidayEditor.ID == 0 ? "Add holiday" : "Edit holiday")</h2></div></div><EditForm Model="holidayEditor" OnValidSubmit="SaveHolidayAsync"><DataAnnotationsValidator/><div class="hrm-form-grid"><label><span>Holiday name *</span><InputText @bind-Value="holidayEditor.Name" /></label><label><span>Date</span><InputDate @bind-Value="holidayEditor.HolidayDate" /></label><label><span>Applies to</span><InputSelect @bind-Value="holidayEditor.Scope"><option>Hospital</option><option>Department</option></InputSelect></label>@if(holidayEditor.Scope == "Department"){<label><span>Department</span><InputSelect @bind-Value="holidayEditor.DepartmentID"><option value="">Select</option>@foreach(var x in departments){<option value="@x.ID">@x.Name</option>}</InputSelect></label>}<label class="check"><InputCheckbox @bind-Value="holidayEditor.IsPaid"/><span>Paid holiday</span></label><label><span>Notes</span><InputTextArea @bind-Value="holidayEditor.Notes" /></label></div><div class="form-actions"><button class="hrm-primary">Save holiday</button><button type="button" class="hrm-secondary" @onclick="ResetHoliday">Clear</button></div></EditForm></article>
+            <article class="hrm-card list-card"><div class="hrm-card-head"><div><small>@DateTime.Today.Year CALENDAR</small><h2>Upcoming & recent holidays</h2></div></div><div class="holiday-list">@foreach(var row in holidays.OrderBy(x => x.HolidayDate)){<button @onclick="() => EditHoliday(row)"><time><b>@row.HolidayDate.Day</b><span>@row.HolidayDate.ToString("MMM")</span></time><span><strong>@row.Name</strong><small>@(row.Scope == "Department" ? row.Department?.Name : "All hospital staff") · @(row.IsPaid ? "Paid" : "Unpaid")</small></span><em>@row.HolidayDate.ToString("dddd")</em></button>}@if(holidays.Count == 0){<div class="hrm-empty"><strong>No holidays configured</strong><span>Add the hospital holiday calendar.</span></div>}</div></article>
+        </div>
+    }
+    else if (ActiveView == "leave")
+    {
+        <section class="hrm-page-head"><div><span>LEAVE MANAGEMENT</span><h2>Requests, approvals & balances</h2><p>Track paid and unpaid leave with overlap checks and an auditable review decision.</p></div></section>
+        <section class="leave-summary">@foreach(var type in leaveTypes.Where(x => x.IsActive)){<article><span>@type.Code</span><div><b>@type.Name</b><small>@(type.AnnualAllowance > 0 ? $"{type.AnnualAllowance:0.#} days standard allocation" : "Policy-based") · @(type.IsPaid ? "Paid" : "Unpaid")</small></div></article>}</section>
+        <div class="hrm-split narrow-form">
+            <article class="hrm-card form-card"><div class="hrm-card-head"><div><small>NEW APPLICATION</small><h2>Record leave request</h2></div></div><EditForm Model="leaveEditor" OnValidSubmit="SaveLeaveAsync"><DataAnnotationsValidator/><div class="hrm-form-grid"><label><span>Employee</span><InputSelect @bind-Value="leaveEditor.EmployeeID"><option value="0">Select staff</option>@foreach(var x in ActiveEmployees){<option value="@x.ID">@x.EmployeeNo · @x.Name</option>}</InputSelect></label><label><span>Leave type</span><InputSelect @bind-Value="leaveEditor.LeaveTypeID"><option value="0">Select type</option>@foreach(var x in leaveTypes.Where(x=>x.IsActive)){<option value="@x.ID">@x.Code · @x.Name</option>}</InputSelect></label><div class="field-pair"><label><span>From</span><InputDate @bind-Value="leaveEditor.FromDate" /></label><label><span>To</span><InputDate @bind-Value="leaveEditor.ToDate" /></label></div><label class="check"><InputCheckbox @bind-Value="leaveEditor.IsHalfDay"/><span>Half-day leave</span></label><label><span>Reason *</span><InputTextArea @bind-Value="leaveEditor.Reason" /></label></div><div class="leave-preview"><span>Calculated working leave</span><strong>@CalculateLeaveDays(leaveEditor.FromDate, leaveEditor.ToDate, leaveEditor.IsHalfDay).ToString("0.#") day(s)</strong></div><div class="form-actions"><button class="hrm-primary">Submit request</button><button type="button" class="hrm-secondary" @onclick="ResetLeave">Clear</button></div></EditForm></article>
+            <article class="hrm-card list-card"><div class="hrm-card-head"><div><small>@PendingLeaveCount PENDING</small><h2>Leave review queue</h2></div><select @bind="leaveStatusFilter"><option>All</option><option>Pending</option><option>Approved</option><option>Rejected</option></select></div><div class="request-list">@foreach(var row in FilteredLeaveRequests){<div class="request-row"><span class="avatar">@Initials(row.Employee?.Name)</span><div class="request-main"><span><strong>@row.Employee?.Name</strong><i class="status @row.Status.ToLowerInvariant()">@row.Status</i></span><b>@row.LeaveType?.Name · @row.TotalDays.ToString("0.#") day(s)</b><small>@row.FromDate.ToString("dd MMM") – @row.ToDate.ToString("dd MMM yyyy") · @row.Reason</small></div>@if(row.Status == "Pending"){<div class="row-actions"><button class="approve" @onclick="() => ReviewLeaveAsync(row.ID, true)">Approve</button><button class="reject" @onclick="() => ReviewLeaveAsync(row.ID, false)">Reject</button></div>}</div>}@if(!FilteredLeaveRequests.Any()){<div class="hrm-empty"><strong>No leave requests</strong><span>Nothing matches this status.</span></div>}</div></article>
+        </div>
+    }
+    else if (ActiveView == "shifts")
+    {
+        <section class="hrm-page-head"><div><span>SHIFT LIBRARY</span><h2>Duty shift templates</h2><p>Define hospital duty windows, grace time and overnight shifts used by roster and attendance.</p></div><button class="hrm-primary" @onclick="ResetShift">+ New shift</button></section>
+        <div class="shift-grid">@foreach(var row in shifts){<article class="hrm-card shift-card"><header><span>@row.Code</span><i class="status @(row.IsActive ? "active" : "inactive")">@(row.IsActive ? "Active" : "Inactive")</i></header><h3>@row.Name</h3><div><strong>@FormatTime(row.StartTime)</strong><span>→</span><strong>@FormatTime(row.EndTime)</strong></div><p>@(row.IsNightShift ? "Overnight duty" : "Same-day duty") · @row.GraceMinutes min grace · @row.BreakMinutes min break</p><button @onclick="() => EditShift(row)">Edit template</button></article>}</div>
+        <article class="hrm-card inline-editor"><div><small>SHIFT TEMPLATE</small><h2>@(shiftEditor.ID == 0 ? "Create a new shift" : $"Edit {shiftEditor.Name}")</h2></div><div class="hrm-form-grid shift-fields"><label><span>Code</span><input @bind="shiftEditor.Code" /></label><label><span>Name</span><input @bind="shiftEditor.Name" /></label><label><span>Starts</span><input type="time" value="@FormatTimeInput(shiftEditor.StartTime)" @onchange="SetShiftStart" /></label><label><span>Ends</span><input type="time" value="@FormatTimeInput(shiftEditor.EndTime)" @onchange="SetShiftEnd" /></label><label><span>Grace minutes</span><input type="number" min="0" @bind="shiftEditor.GraceMinutes" /></label><label><span>Break minutes</span><input type="number" min="0" @bind="shiftEditor.BreakMinutes" /></label><label class="check"><input type="checkbox" @bind="shiftEditor.IsNightShift"/><span>Overnight shift</span></label><label class="check"><input type="checkbox" @bind="shiftEditor.IsActive"/><span>Active</span></label></div><div class="form-actions"><button class="hrm-primary" @onclick="SaveShiftAsync">Save template</button><button class="hrm-secondary" @onclick="ResetShift">Clear</button></div></article>
+    }
+    else if (ActiveView == "roster")
+    {
+        <section class="hrm-page-head"><div><span>DUTY ROSTER</span><h2>Monthly staff scheduling</h2><p>Assign one shift across a date range. Existing assignments are updated safely without duplicates.</p></div><label class="month-filter"><span>Roster month</span><input type="month" value="@rosterMonth.ToString("yyyy-MM")" @onchange="ChangeRosterMonthAsync" /></label></section>
+        <article class="hrm-card roster-toolbar"><label><span>Employee</span><select @bind="rosterEditor.EmployeeID"><option value="0">Select staff</option>@foreach(var x in ActiveEmployees){<option value="@x.ID">@x.EmployeeNo · @x.Name</option>}</select></label><label><span>Shift</span><select @bind="rosterEditor.ShiftID"><option value="0">Select shift</option>@foreach(var x in shifts.Where(x=>x.IsActive)){<option value="@x.ID">@x.Code · @x.Name</option>}</select></label><label><span>From</span><input type="date" @bind="rosterEditor.FromDate" @bind:format="yyyy-MM-dd" /></label><label><span>To</span><input type="date" @bind="rosterEditor.ToDate" @bind:format="yyyy-MM-dd" /></label><label class="check"><input type="checkbox" @bind="rosterEditor.SkipFridays"/><span>Skip Fridays</span></label><button class="hrm-primary" @onclick="AssignRosterAsync">Assign / update</button></article>
+        <article class="hrm-card roster-table-card"><div class="hrm-card-head"><div><small>@rosterMonth.ToString("MMMM yyyy").ToUpperInvariant()</small><h2>Roster assignments</h2></div><span>@MonthRoster.Count assignments</span></div><div class="hrm-table-wrap"><table><thead><tr><th>Date</th><th>Employee</th><th>Department</th><th>Shift</th><th>Duty time</th><th></th></tr></thead><tbody>@foreach(var row in MonthRoster){<tr><td><b>@row.DutyDate.ToString("dd MMM")</b><small class="cell-note">@row.DutyDate.ToString("dddd")</small></td><td><div class="person-cell"><span class="avatar small">@Initials(row.Employee?.Name)</span><span><b>@row.Employee?.Name</b><small>@row.Employee?.EmployeeNo</small></span></div></td><td>@row.Employee?.Department?.Name</td><td><span class="shift-pill">@row.Shift?.Code</span> @row.Shift?.Name</td><td>@FormatTime(row.Shift?.StartTime) – @FormatTime(row.Shift?.EndTime)</td><td><button class="icon-danger" @onclick="() => DeleteRosterAsync(row.ID)">×</button></td></tr>}@if(MonthRoster.Count==0){<tr><td colspan="6"><div class="hrm-empty"><strong>No roster prepared</strong><span>Use the assignment bar to schedule staff for this month.</span></div></td></tr>}</tbody></table></div></article>
+    }
+    else if (ActiveView == "attendance")
+    {
+        <section class="hrm-page-head"><div><span>TIME & ATTENDANCE</span><h2>Attendance operations</h2><p>Post manual attendance or validate CSV device data before committing it.</p></div><label class="month-filter"><span>Attendance month</span><input type="month" value="@attendanceMonth.ToString("yyyy-MM")" @onchange="ChangeAttendanceMonthAsync" /></label></section>
+        <div class="attendance-actions">
+            <article class="hrm-card"><div class="hrm-card-head"><div><small>MANUAL ENTRY</small><h2>Record attendance</h2></div></div><div class="hrm-form-grid two"><label class="wide"><span>Employee</span><select @bind="attendanceEditor.EmployeeID"><option value="0">Select staff</option>@foreach(var x in ActiveEmployees){<option value="@x.ID">@x.EmployeeNo · @x.Name</option>}</select></label><label><span>Date</span><input type="date" @bind="attendanceEditor.Date" @bind:format="yyyy-MM-dd" /></label><label><span>Status</span><select @bind="attendanceEditor.Status">@foreach(var x in AttendanceStatuses){<option>@x</option>}</select></label><label><span>Check in</span><input type="time" @bind="attendanceEditor.CheckIn" /></label><label><span>Check out</span><input type="time" @bind="attendanceEditor.CheckOut" /></label><label class="wide"><span>Remarks</span><input @bind="attendanceEditor.Remarks" /></label></div><div class="form-actions"><button class="hrm-primary" @onclick="SaveAttendanceAsync">Save attendance</button><button class="hrm-secondary" @onclick="ResetAttendance">Clear</button></div></article>
+            <article class="hrm-card import-card"><div class="hrm-card-head"><div><small>DEVICE / CSV IMPORT</small><h2>Validate before import</h2></div></div><div class="drop-zone"><span>⇧</span><strong>Select attendance CSV</strong><small>EmployeeNo, Date, CheckIn, CheckOut, Status</small><InputFile OnChange="PrepareAttendanceImportAsync" accept=".csv,text/csv" /></div>@if(importRows.Count>0){<div class="import-summary"><span><b>@importRows.Count(x=>x.IsValid)</b> valid</span><span class="bad"><b>@importRows.Count(x=>!x.IsValid)</b> need attention</span></div><button class="hrm-primary full" disabled="@(importRows.All(x=>!x.IsValid))" @onclick="CommitAttendanceImportAsync">Import valid rows</button>}</article>
+        </div>
+        @if(importRows.Count>0){<article class="hrm-card import-preview"><div class="hrm-card-head"><div><small>STAGING PREVIEW</small><h2>Import validation</h2></div><button class="hrm-secondary" @onclick="() => importRows.Clear()">Discard</button></div><div class="hrm-table-wrap"><table><thead><tr><th>Row</th><th>Employee</th><th>Date</th><th>In / Out</th><th>Status</th><th>Validation</th></tr></thead><tbody>@foreach(var row in importRows.Take(100)){<tr><td>@row.RowNo</td><td>@row.EmployeeNo <small class="cell-note">@row.EmployeeName</small></td><td>@row.Date?.ToString("dd MMM yyyy")</td><td>@row.CheckIn – @row.CheckOut</td><td>@row.Status</td><td><span class="status @(row.IsValid ? "approved" : "rejected")">@(row.IsValid ? "Ready" : row.Error)</span></td></tr>}</tbody></table></div></article>}
+        <article class="hrm-card attendance-table"><div class="hrm-card-head"><div><small>@attendanceMonth.ToString("MMMM yyyy").ToUpperInvariant()</small><h2>Attendance register</h2></div><span>@MonthAttendance.Count entries</span></div><div class="hrm-table-wrap"><table><thead><tr><th>Date</th><th>Employee</th><th>Status</th><th>Check in</th><th>Check out</th><th>Work</th><th>Late</th><th>OT</th><th>Source</th></tr></thead><tbody>@foreach(var row in MonthAttendance){<tr><td>@row.AttendanceDate.ToString("dd MMM")</td><td><b>@row.Employee?.Name</b><small class="cell-note">@row.Employee?.EmployeeNo · @row.Employee?.Department?.Name</small></td><td><span class="status @row.Status.ToLowerInvariant()">@row.Status</span></td><td>@row.CheckIn?.ToString("hh:mm tt")</td><td>@row.CheckOut?.ToString("hh:mm tt")</td><td>@Minutes(row.WorkMinutes)</td><td>@Minutes(row.LateMinutes)</td><td>@Minutes(row.OvertimeMinutes)</td><td>@row.Source</td></tr>}@if(MonthAttendance.Count==0){<tr><td colspan="9"><div class="hrm-empty"><strong>No attendance records</strong><span>Post manual entries or import a device file.</span></div></td></tr>}</tbody></table></div></article>
+    }
+    else if (ActiveView == "payroll")
+    {
+        <section class="hrm-page-head"><div><span>PAYROLL PROCESSING</span><h2>Monthly salary preparation</h2><p>Generate payroll from staff compensation, explicit absences, unpaid leave and approved overtime.</p></div></section>
+        <article class="hrm-card payroll-toolbar"><label><span>Month</span><select @bind="payrollMonth" @bind:after="ChangePayrollPeriodAsync">@for(var m=1;m<=12;m++){<option value="@m">@(new DateTime(2000,m,1).ToString("MMMM"))</option>}</select></label><label><span>Year</span><input type="number" min="2020" max="2100" @bind="payrollYear" @bind:after="ChangePayrollPeriodAsync" /></label><button class="hrm-primary" @onclick="GeneratePayrollAsync">Generate / refresh payroll</button>@if(selectedPayrollPeriod is not null && selectedPayrollPeriod.Status == "Draft"){<button class="hrm-secondary" @onclick="FinalizePayrollAsync">Finalize period</button>}<span class="period-state @(selectedPayrollPeriod?.Status.ToLowerInvariant())">@(selectedPayrollPeriod?.Status ?? "Not generated")</span></article>
+        <section class="payroll-kpis"><article><small>EMPLOYEES</small><strong>@payrollEntries.Count</strong></article><article><small>GROSS PAY</small><strong>@Money(payrollEntries.Sum(x=>x.GrossPay))</strong></article><article><small>DEDUCTIONS</small><strong>@Money(payrollEntries.Sum(x=>x.DeductionAmount))</strong></article><article class="net"><small>NET PAYROLL</small><strong>@Money(payrollEntries.Sum(x=>x.NetPay))</strong></article></section>
+        <article class="hrm-card"><div class="hrm-card-head"><div><small>@(selectedPayrollPeriod?.Name?.ToUpperInvariant() ?? "PAYROLL SHEET")</small><h2>Salary statement</h2></div><span>OT and absence calculated from attendance</span></div><div class="hrm-table-wrap"><table><thead><tr><th>Employee</th><th class="right">Basic</th><th class="right">Allowances</th><th class="right">OT</th><th class="right">Gross</th><th class="right">Absent/LWP</th><th class="right">Deduction</th><th class="right">Net pay</th><th>Status</th></tr></thead><tbody>@foreach(var row in payrollEntries){<tr><td><b>@row.Employee?.Name</b><small class="cell-note">@row.Employee?.EmployeeNo · @row.Employee?.Department?.Name</small></td><td class="right">@Money(row.BasicSalary)</td><td class="right">@Money(row.Allowances)</td><td class="right">@Money(row.OvertimeAmount)<small class="cell-note">@row.OvertimeHours.ToString("0.##") hrs</small></td><td class="right">@Money(row.GrossPay)</td><td class="right">@((row.AbsentDays+row.UnpaidLeaveDays).ToString("0.#")) days</td><td class="right deduction">@Money(row.DeductionAmount)</td><td class="right money"><b>@Money(row.NetPay)</b></td><td><span class="status @(selectedPayrollPeriod?.Status == "Finalized" ? "approved" : "pending")">@row.PaymentStatus</span></td></tr>}@if(payrollEntries.Count==0){<tr><td colspan="9"><div class="hrm-empty"><strong>Payroll has not been generated</strong><span>Select the month and generate a salary sheet.</span></div></td></tr>}</tbody></table></div></article>
+    }
+    else if (ActiveView == "reports")
+    {
+        <section class="hrm-page-head"><div><span>WORKFORCE INSIGHTS</span><h2>HRM reports & analytics</h2><p>Live operational summaries for staffing, attendance, leave and payroll.</p></div><button class="hrm-secondary" @onclick="PrintAsync">Print report</button></section>
+        <section class="report-grid"><article class="hrm-card span-2"><div class="hrm-card-head"><div><small>HEADCOUNT</small><h2>Department distribution</h2></div><strong>@ActiveEmployeeCount staff</strong></div><div class="department-bars">@foreach(var row in DepartmentSummary){<div><span><b>@row.Name</b><em>@row.Count</em></span><i><u style="width:@row.Percent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%"></u></i></div>}</div></article><article class="hrm-card"><div class="hrm-card-head"><div><small>LEAVE</small><h2>Request status</h2></div></div><div class="donut-wrap"><div class="donut" style="--approved:@LeaveApprovedPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)%;"><strong>@leaveRequests.Count</strong><span>requests</span></div><ul><li><i class="green"></i>Approved <b>@leaveRequests.Count(x=>x.Status=="Approved")</b></li><li><i class="amber"></i>Pending <b>@PendingLeaveCount</b></li><li><i class="red"></i>Rejected <b>@leaveRequests.Count(x=>x.Status=="Rejected")</b></li></ul></div></article><article class="hrm-card span-3"><div class="hrm-card-head"><div><small>PAYROLL HISTORY</small><h2>Recent payroll periods</h2></div></div><div class="hrm-table-wrap"><table><thead><tr><th>Period</th><th>Status</th><th>Employees</th><th class="right">Gross</th><th class="right">Deductions</th><th class="right">Net payroll</th></tr></thead><tbody>@foreach(var row in payrollHistory){<tr><td><b>@row.Period.Name</b></td><td><span class="status @row.Period.Status.ToLowerInvariant()">@row.Period.Status</span></td><td>@row.EmployeeCount</td><td class="right">@Money(row.Gross)</td><td class="right">@Money(row.Deductions)</td><td class="right money"><b>@Money(row.Net)</b></td></tr>}@if(payrollHistory.Count==0){<tr><td colspan="6"><div class="hrm-empty compact"><strong>No payroll history</strong><span>Generated periods will appear here.</span></div></td></tr>}</tbody></table></div></article></section>
+    }
+</div>

@@ -965,6 +965,14 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasIndex("EncounterID");
 
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("RegNo");
+
+                    b.HasIndex("ModuleID", "TransDate");
+
+                    b.HasIndex("ModuleID", "PatientType", "ID");
+
                     b.ToTable("Cash_Memo_DInvestigation", null, t =>
                         {
                             t.HasCheckConstraint("CK_Cash_Memo_DInvestigation_Amounts", "[Total] >= 0 AND [Discount] >= 0 AND [Discount] <= [Total] AND [Paid] >= 0 AND [Paid] <= [Total] - [Discount]");
@@ -1044,6 +1052,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnName("Trans_Date");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("RegNo");
+
+                    b.HasIndex("TransDate");
 
                     b.ToTable("Cash_Memo_OT", null, t =>
                         {
@@ -1558,6 +1572,12 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("ContactNo");
+
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("ApptDate", "Status");
+
                     b.HasIndex("DoctorID", "ApptDate", "ApptSLNO")
                         .IsUnique();
 
@@ -1918,6 +1938,815 @@ namespace HPM.Web.Data.Migrations
                     b.HasKey("ID");
 
                     b.ToTable("Hospital_Profile", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmAttendanceRecord", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<DateTime>("AttendanceDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("CheckIn")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("CheckOut")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EmployeeID")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LateMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("OvertimeMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Remarks")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<int?>("ShiftID")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("WorkMinutes")
+                        .HasColumnType("int");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ShiftID");
+
+                    b.HasIndex("AttendanceDate", "Status");
+
+                    b.HasIndex("EmployeeID", "AttendanceDate")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Attendance", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmDepartment", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsClinical")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Department", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            ID = 1,
+                            Code = "ADMIN",
+                            IsActive = true,
+                            IsClinical = false,
+                            Name = "Administration"
+                        },
+                        new
+                        {
+                            ID = 2,
+                            Code = "MED",
+                            IsActive = true,
+                            IsClinical = true,
+                            Name = "Medical Services"
+                        },
+                        new
+                        {
+                            ID = 3,
+                            Code = "NURS",
+                            IsActive = true,
+                            IsClinical = true,
+                            Name = "Nursing"
+                        },
+                        new
+                        {
+                            ID = 4,
+                            Code = "DIAG",
+                            IsActive = true,
+                            IsClinical = true,
+                            Name = "Diagnostics & Laboratory"
+                        },
+                        new
+                        {
+                            ID = 5,
+                            Code = "PHARM",
+                            IsActive = true,
+                            IsClinical = true,
+                            Name = "Pharmacy"
+                        },
+                        new
+                        {
+                            ID = 6,
+                            Code = "ACCT",
+                            IsActive = true,
+                            IsClinical = false,
+                            Name = "Accounts & Finance"
+                        },
+                        new
+                        {
+                            ID = 7,
+                            Code = "SUPPORT",
+                            IsActive = true,
+                            IsClinical = false,
+                            Name = "Support Services"
+                        });
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmDesignation", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Designation", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            ID = 1,
+                            Code = "MO",
+                            IsActive = true,
+                            Name = "Medical Officer"
+                        },
+                        new
+                        {
+                            ID = 2,
+                            Code = "NURSE",
+                            IsActive = true,
+                            Name = "Staff Nurse"
+                        },
+                        new
+                        {
+                            ID = 3,
+                            Code = "TECH",
+                            IsActive = true,
+                            Name = "Technician"
+                        },
+                        new
+                        {
+                            ID = 4,
+                            Code = "OFFICER",
+                            IsActive = true,
+                            Name = "Officer"
+                        },
+                        new
+                        {
+                            ID = 5,
+                            Code = "ASSIST",
+                            IsActive = true,
+                            Name = "Assistant"
+                        },
+                        new
+                        {
+                            ID = 6,
+                            Code = "WORKER",
+                            IsActive = true,
+                            Name = "Support Worker"
+                        });
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmEmployee", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("AttendanceNo")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("BankAccount")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<decimal>("BasicSalary")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DateOfBirth")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DepartmentID")
+                        .HasColumnType("int");
+
+                    b.Property<int>("DesignationID")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("EmergencyContact")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("EmployeeNo")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("EmploymentType")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Gender")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("HouseRentAllowance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("JoiningDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("MedicalAllowance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<decimal>("OtherAllowance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OvertimeHourlyRate")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("TaxIdentifier")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<decimal>("TransportAllowance")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("AttendanceNo")
+                        .IsUnique()
+                        .HasFilter("[AttendanceNo] IS NOT NULL");
+
+                    b.HasIndex("DesignationID");
+
+                    b.HasIndex("EmployeeNo")
+                        .IsUnique();
+
+                    b.HasIndex("DepartmentID", "Status");
+
+                    b.ToTable("HRM_Employee", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmHoliday", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<int?>("DepartmentID")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("HolidayDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("DepartmentID");
+
+                    b.HasIndex("HolidayDate", "DepartmentID");
+
+                    b.ToTable("HRM_Holiday", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmLeaveBalance", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("AdjustedDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<decimal>("AllocatedDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<int>("EmployeeID")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LeaveTypeID")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("OpeningBalance")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<decimal>("UsedDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("LeaveTypeID");
+
+                    b.HasIndex("EmployeeID", "LeaveTypeID", "Year")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Leave_Balance", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmLeaveRequest", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<DateTime>("AppliedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EmployeeID")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("FromDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsHalfDay")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("LeaveTypeID")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ReviewNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("ToDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("TotalDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("LeaveTypeID");
+
+                    b.HasIndex("Status", "AppliedAt");
+
+                    b.HasIndex("EmployeeID", "FromDate", "ToDate");
+
+                    b.ToTable("HRM_Leave_Request", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmLeaveType", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<decimal>("AnnualAllowance")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("RequiresAttachment")
+                        .HasColumnType("bit");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Leave_Type", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            ID = 1,
+                            AnnualAllowance = 10m,
+                            Code = "CL",
+                            IsActive = true,
+                            IsPaid = true,
+                            Name = "Casual Leave",
+                            RequiresAttachment = false
+                        },
+                        new
+                        {
+                            ID = 2,
+                            AnnualAllowance = 14m,
+                            Code = "SL",
+                            IsActive = true,
+                            IsPaid = true,
+                            Name = "Sick Leave",
+                            RequiresAttachment = true
+                        },
+                        new
+                        {
+                            ID = 3,
+                            AnnualAllowance = 15m,
+                            Code = "EL",
+                            IsActive = true,
+                            IsPaid = true,
+                            Name = "Earned Leave",
+                            RequiresAttachment = false
+                        },
+                        new
+                        {
+                            ID = 4,
+                            AnnualAllowance = 0m,
+                            Code = "MAT",
+                            IsActive = true,
+                            IsPaid = true,
+                            Name = "Maternity Leave",
+                            RequiresAttachment = true
+                        },
+                        new
+                        {
+                            ID = 5,
+                            AnnualAllowance = 0m,
+                            Code = "LWP",
+                            IsActive = true,
+                            IsPaid = false,
+                            Name = "Leave Without Pay",
+                            RequiresAttachment = false
+                        });
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmPayrollEntry", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<decimal>("AbsentDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.Property<decimal>("Allowances")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("BasicSalary")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("DeductionAmount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("EmployeeID")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("GrossPay")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("NetPay")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OvertimeAmount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OvertimeHours")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<string>("PaymentStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<long>("PayrollPeriodID")
+                        .HasColumnType("bigint");
+
+                    b.Property<decimal>("UnpaidLeaveDays")
+                        .HasColumnType("decimal(8,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("EmployeeID");
+
+                    b.HasIndex("PayrollPeriodID", "EmployeeID")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Payroll_Entry", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmPayrollPeriod", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("FinalizedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FinalizedBy")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateTime>("FromDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("ToDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Year", "Month")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Payroll_Period", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmRosterAssignment", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("DutyDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EmployeeID")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<int>("ShiftID")
+                        .HasColumnType("int");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ShiftID");
+
+                    b.HasIndex("DutyDate", "ShiftID");
+
+                    b.HasIndex("EmployeeID", "DutyDate")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Roster_Assignment", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmShift", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<int>("BreakMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<TimeSpan>("EndTime")
+                        .HasColumnType("time");
+
+                    b.Property<int>("GraceMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsNightShift")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<TimeSpan>("StartTime")
+                        .HasColumnType("time");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("HRM_Shift", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            ID = 1,
+                            BreakMinutes = 60,
+                            Code = "GENERAL",
+                            EndTime = new TimeSpan(0, 17, 0, 0, 0),
+                            GraceMinutes = 15,
+                            IsActive = true,
+                            IsNightShift = false,
+                            Name = "General Duty",
+                            StartTime = new TimeSpan(0, 9, 0, 0, 0)
+                        },
+                        new
+                        {
+                            ID = 2,
+                            BreakMinutes = 30,
+                            Code = "MORNING",
+                            EndTime = new TimeSpan(0, 15, 0, 0, 0),
+                            GraceMinutes = 10,
+                            IsActive = true,
+                            IsNightShift = false,
+                            Name = "Morning Shift",
+                            StartTime = new TimeSpan(0, 7, 0, 0, 0)
+                        },
+                        new
+                        {
+                            ID = 3,
+                            BreakMinutes = 30,
+                            Code = "EVENING",
+                            EndTime = new TimeSpan(0, 23, 0, 0, 0),
+                            GraceMinutes = 10,
+                            IsActive = true,
+                            IsNightShift = false,
+                            Name = "Evening Shift",
+                            StartTime = new TimeSpan(0, 15, 0, 0, 0)
+                        },
+                        new
+                        {
+                            ID = 4,
+                            BreakMinutes = 30,
+                            Code = "NIGHT",
+                            EndTime = new TimeSpan(0, 7, 0, 0, 0),
+                            GraceMinutes = 10,
+                            IsActive = true,
+                            IsNightShift = true,
+                            Name = "Night Shift",
+                            StartTime = new TimeSpan(0, 23, 0, 0, 0)
+                        });
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.IpdDepartment", b =>
@@ -2701,6 +3530,12 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("RegNo");
+
+                    b.HasIndex("CertificateType", "IssueDate");
+
                     b.ToTable("Medical_Certificate");
                 });
 
@@ -3198,6 +4033,12 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("RegNo");
+
+                    b.HasIndex("TransDate");
+
+                    b.HasIndex("RegNo", "DoctorID", "TransDate");
+
                     b.ToTable("OPD_Ticket", (string)null);
                 });
 
@@ -3311,6 +4152,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnName("Trans_Date");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("OperationDate");
+
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("RegNo");
 
                     b.ToTable("Operation_Note");
                 });
@@ -3700,6 +4547,12 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnName("Trans_Date");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("OperationDate");
+
+                    b.HasIndex("PatientID");
+
+                    b.HasIndex("RegNo");
 
                     b.ToTable("Patient_Operation");
                 });
@@ -4562,8 +5415,14 @@ namespace HPM.Web.Data.Migrations
 
                     b.HasKey("ID");
 
+                    b.HasIndex("Contact");
+
+                    b.HasIndex("Name");
+
                     b.HasIndex("PatientID")
                         .IsUnique();
+
+                    b.HasIndex("TransDate");
 
                     b.ToTable("Registration", (string)null);
                 });
@@ -4626,6 +5485,8 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnName("Type_ID");
 
                     b.HasKey("ID");
+
+                    b.HasIndex("CategoryID", "Name");
 
                     b.ToTable("Service", (string)null);
 
@@ -5567,6 +6428,129 @@ namespace HPM.Web.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmAttendanceRecord", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmShift", "Shift")
+                        .WithMany()
+                        .HasForeignKey("ShiftID")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Shift");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmEmployee", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmDepartment", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmDesignation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("DesignationID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Department");
+
+                    b.Navigation("Designation");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmHoliday", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmDepartment", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentID")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Department");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmLeaveBalance", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmLeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LeaveType");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmLeaveRequest", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmLeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("LeaveTypeID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LeaveType");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmPayrollEntry", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmPayrollPeriod", "PayrollPeriod")
+                        .WithMany()
+                        .HasForeignKey("PayrollPeriodID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("PayrollPeriod");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HrmRosterAssignment", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HPM.Web.Data.Entities.HrmShift", "Shift")
+                        .WithMany()
+                        .HasForeignKey("ShiftID")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Shift");
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.IpdFinalBill", b =>

@@ -122,6 +122,8 @@ await using (var scope = app.Services.CreateAsyncScope())
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<HpmDbContext>>();
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Database.MigrateAsync();
+        if (app.Environment.IsDevelopment())
+            await HrmDemoDataSeeder.SeedAsync(db);
 
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
         if (!await roleManager.RoleExistsAsync(RoleNames.Authorizer))

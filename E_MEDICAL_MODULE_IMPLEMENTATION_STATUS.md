@@ -1,6 +1,6 @@
 # E-Medical Module Implementation Status — PrimeHPM Web
 
-**Audit date:** 19 October 2026  
+**Audit date:** 8 November 2026
 **Compared with:** `e-medical-software-module-list.md`  
 **Audit basis:** Current Blazor pages, navigation/routes, EF entities/migrations, security rules, README and user manual in this repository.
 
@@ -16,9 +16,9 @@
 
 | Category | Count | Modules |
 |---|---:|---|
-| 🟢 Core implemented | 12 | Information Desk, Appointment, Prescription, Pharmacy, Diagnostic, LIS, Hospital, Emergency, EMR, Cafeteria, Integrated Accounts, Security & Administration |
-| 🟡 Limited/partial | 9 | Health Card, MWL, Nursing, OT, Supply Chain, Schedule & Rostering, Management Dashboard, MIS, Patient Portal |
-| 🔴 Not implemented | 12 | Re-Agent, PACS, Transfusion Medicine, Diet & Nutrition, Laundry & Linen, HRM, Payroll, Provident Fund, Notification, Marketing, Mobile Apps, Teleradiology |
+| 🟢 Core implemented | 15 | Information Desk, Appointment, Prescription, Pharmacy, Diagnostic, LIS, Hospital, Emergency, EMR, Cafeteria, Integrated Accounts, HRM, Schedule & Rostering, Payroll, Security & Administration |
+| 🟡 Limited/partial | 8 | Health Card, MWL, Nursing, OT, Supply Chain, Management Dashboard, MIS, Patient Portal |
+| 🔴 Not implemented | 10 | Re-Agent, PACS, Transfusion Medicine, Diet & Nutrition, Laundry & Linen, Provident Fund, Notification, Marketing, Mobile Apps, Teleradiology |
 | **Total** | **33** | |
 
 ## Module-by-module result
@@ -45,10 +45,10 @@
 | 18 | Diet and Nutrition | 🔴 Not implemented | No diet module workflow found | Dashboard, diet indent review/serve/cancel and discharged-patient diet tracking |
 | 19 | Laundry & Linen | 🔴 Not implemented | No laundry/linen workflow found | Issue/collection, damage/missing, packing, delivery/receive, status and payment |
 | 20 | Supply Chain Management | 🟡 Limited/partial | Pharmacy/canteen receiving, stock, supplier ledger, reorder level and stock control exist | General SCM, CS/PR/PO approval, GRN, interdepartment indent, reagent/film, assets and complete accounts-integrated MIS |
-| 21 | Integrated Accounts | 🟢 Core implemented | Chart of accounts, receipt/payment/expense/journal vouchers, approval/reversal, general ledger, operational auto-posting, day close, period lock and cash-vs-GL reconciliation | Payroll/tax, explicit AP/AR suite, bank reconciliation, trial balance, balance sheet, fixed-asset register and full P&L statement |
-| 22 | Human Resource Management (HRM) | 🔴 Not implemented | Navigation contains only legacy placeholder links | Recruitment, employee records, biometric/manual attendance, leave, training, KPI and attendance integration |
-| 23 | Schedule & Rostering | 🟡 Limited/partial | Doctor appointment schedule and daily queue exist | Employee/shift roster, duty location assignment and weekly/monthly/yearly roster reports |
-| 24 | Payroll Management | 🔴 Not implemented | Navigation contains only a legacy placeholder group | Salary policies, overtime, deductions, tax, salary sheet, increments, arrears and bonus disbursement |
+| 21 | Integrated Accounts | 🟢 Core implemented | Chart of accounts, receipt/payment/expense/journal vouchers, approval/reversal, general ledger, operational auto-posting, day close, period lock and cash-vs-GL reconciliation | Payroll-to-ledger posting, tax, explicit AP/AR suite, bank reconciliation, trial balance, balance sheet, fixed-asset register and full P&L statement |
+| 22 | Human Resource Management (HRM) | 🟢 Core implemented | Modern workforce overview, employee records and compensation setup, hospital/department holidays, leave requests/approval/balance, manual and validated CSV attendance, live operational reports | Recruitment, training, performance/KPI, document attachments, employee self-service and direct biometric-device connector |
+| 23 | Schedule & Rostering | 🟢 Core implemented | Shift templates, overnight duty support, grace/break rules, duplicate-safe date-range roster assignment and monthly roster register | Duty-location/ward assignment, rotation templates, swap approval and yearly roster analytics |
+| 24 | Payroll Management | 🟢 Core implemented | Monthly salary sheet from employee compensation, attendance overtime, explicit absence and unpaid leave deductions; draft regeneration and finalization lock | Tax slabs, loans/advances, increments, arrears, bonuses, bank disbursement and accounts-ledger posting |
 | 25 | Provident Fund Management | 🔴 Not implemented | No provident-fund workflow found | All PF ledger, contribution, loan, investment, policy, return and interest features |
 | 26 | Message Alert / Notification System | 🔴 Not implemented | No SMS/email/push notification service or alert workflow found | Critical patient/lab/management/OT/doctor alerts |
 | 27 | Marketing Management | 🔴 Not implemented | Doctor master exists, but no marketing workflow | Commission agents, sharing ratio, targets, sales statements and business-development MIS |
@@ -70,6 +70,7 @@
 | Pharmacy | `PharmacyPrescriptions.razor`, `PharmacyPurchases.razor`, `PharmacyPos.razor`, `PharmacySalesReturns.razor`, `PharmacyReturnsPayments.razor`, `PharmacyStockControl.razor` |
 | Accounts/report/dashboard | `Accounts.razor`, `Reports.razor`, `Home.razor` |
 | Canteen | `Components/Pages/Canteen/CanteenProducts.razor`, `CanteenChallanPage.razor`, `CanteenSales.razor` |
+| HRM, roster and payroll | `Components/Pages/Hrm.razor`, `Hrm.razor.cs`, `Data/Entities/HrmEntities.cs` |
 | Security | `Security/RoleNames.cs`, `Security/ModuleAccess.cs`, `Security/UserAdministrationService.cs`, `AuditLogs.razor` |
 | Data model | `HPM.Web/Data/HpmDbContext.cs` and `HPM.Web/Data/Entities/*.cs` |
 
@@ -77,7 +78,7 @@
 
 1. Finish the already strong modules first: Appointment reminders/portal, Pharmacy PR/PO approval, Diagnostic integrations, EMR missing clinical documents, Accounts financial statements, and granular security.
 2. Turn limited modules into complete workflows: Nursing, OT, Supply Chain, MIS, Patient Portal and MWL.
-3. Then add the absent hospital-critical modules: Notification, Blood/Transfusion, Diet, HRM/Payroll and PACS/Teleradiology.
+3. Then add the absent hospital-critical modules: Notification, Blood/Transfusion, Diet and PACS/Teleradiology; extend HRM/payroll with employee self-service and accounting integration.
 
 ## Audit limitation
 
