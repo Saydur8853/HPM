@@ -49,6 +49,7 @@ public sealed class WorkflowAndModelTests
     public void Operational_roles_are_unique_and_include_lab_technician()
     {
         Assert.Contains(RoleNames.LabTechnician, RoleNames.All);
+        Assert.Contains(RoleNames.BloodBankOperator, RoleNames.All);
         Assert.Equal(RoleNames.All.Length, RoleNames.All.Distinct(StringComparer.Ordinal).Count());
     }
 
@@ -71,7 +72,12 @@ public sealed class WorkflowAndModelTests
         var lab = Principal(RoleNames.LabTechnician);
         Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticWorklist));
         Assert.True(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticResults));
+        Assert.True(ModuleAccess.CanView(lab, ModuleAccess.BloodBank));
         Assert.False(ModuleAccess.CanView(lab, ModuleAccess.DiagnosticBilling));
+
+        var bloodBank = Principal(RoleNames.BloodBankOperator);
+        Assert.True(ModuleAccess.CanView(bloodBank, ModuleAccess.BloodBank));
+        Assert.False(ModuleAccess.CanView(bloodBank, ModuleAccess.PharmacyStock));
 
         var pharmacy = Principal(RoleNames.PharmacyOperator);
         Assert.True(ModuleAccess.CanView(pharmacy, ModuleAccess.PharmacyPos));
@@ -184,6 +190,33 @@ public sealed class WorkflowAndModelTests
         Assert.NotNull(ticketType.FindProperty(nameof(TicketType.IsActive)));
         Assert.Contains(ticketType.GetIndexes(), index => index.IsUnique
             && index.Properties.Select(x => x.Name).SequenceEqual([nameof(TicketType.Name)]));
+    }
+
+    [Fact]
+    public void Blood_bank_model_enforces_traceability_and_single_component_reservation()
+    {
+        var options = new DbContextOptionsBuilder<HpmDbContext>()
+            .UseSqlServer("Server=(localdb)\\mssqllocaldb;Database=PrimeHpmBloodBankModelOnly;Trusted_Connection=True")
+            .Options;
+        using var db = new HpmDbContext(options);
+
+        var donor = db.Model.FindEntityType(typeof(BloodDonor))!;
+        Assert.Equal("Blood_Donor", donor.GetTableName());
+        Assert.Contains(donor.GetIndexes(), x => x.IsUnique && x.Properties.Select(p => p.Name).SequenceEqual([nameof(BloodDonor.DonorNo)]));
+
+        var screening = db.Model.FindEntityType(typeof(BloodScreening))!;
+        Assert.Contains(screening.GetIndexes(), x => x.IsUnique && x.Properties.Select(p => p.Name).SequenceEqual([nameof(BloodScreening.DonationID)]));
+
+        var component = db.Model.FindEntityType(typeof(BloodComponent))!;
+        Assert.Contains(component.GetIndexes(), x => x.IsUnique && x.Properties.Select(p => p.Name).SequenceEqual([nameof(BloodComponent.ComponentNo)]));
+
+        var crossMatch = db.Model.FindEntityType(typeof(BloodCrossMatch))!;
+        Assert.Contains(crossMatch.GetIndexes(), x => x.IsUnique
+            && x.Properties.Select(p => p.Name).SequenceEqual([nameof(BloodCrossMatch.ComponentID)])
+            && x.GetFilter() == "[Result] = N'Compatible'");
+
+        var issue = db.Model.FindEntityType(typeof(BloodIssue))!;
+        Assert.Contains(issue.GetIndexes(), x => x.IsUnique && x.Properties.Select(p => p.Name).SequenceEqual([nameof(BloodIssue.CrossMatchID)]));
     }
 
     [Fact]

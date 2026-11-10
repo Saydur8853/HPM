@@ -25,6 +25,7 @@ public static class ModuleAccess
     public static readonly string[] PharmacyReturns = [RoleNames.Administrator, RoleNames.PharmacyOperator, RoleNames.Cashier];
     public static readonly string[] PharmacyPrescriptions = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.PharmacyOperator];
     public static readonly string[] PharmacyStock = [RoleNames.Administrator, RoleNames.PharmacyOperator];
+    public static readonly string[] BloodBank = [RoleNames.Administrator, RoleNames.BloodBankOperator, RoleNames.LabTechnician, RoleNames.Doctor, RoleNames.Nurse, RoleNames.IPDOperator];
     public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.Cashier];
     public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
     public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Cashier];

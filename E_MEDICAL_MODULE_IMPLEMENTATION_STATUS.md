@@ -16,9 +16,9 @@
 
 | Category | Count | Modules |
 |---|---:|---|
-| 🟢 Core implemented | 15 | Information Desk, Appointment, Prescription, Pharmacy, Diagnostic, LIS, Hospital, Emergency, EMR, Cafeteria, Integrated Accounts, HRM, Schedule & Rostering, Payroll, Security & Administration |
+| 🟢 Core implemented | 16 | Information Desk, Appointment, Prescription, Pharmacy, Diagnostic, LIS, Hospital, Emergency, EMR, Transfusion Medicine, Cafeteria, Integrated Accounts, HRM, Schedule & Rostering, Payroll, Security & Administration |
 | 🟡 Limited/partial | 8 | Health Card, MWL, Nursing, OT, Supply Chain, Management Dashboard, MIS, Patient Portal |
-| 🔴 Not implemented | 10 | Re-Agent, PACS, Transfusion Medicine, Diet & Nutrition, Laundry & Linen, Provident Fund, Notification, Marketing, Mobile Apps, Teleradiology |
+| 🔴 Not implemented | 9 | Re-Agent, PACS, Diet & Nutrition, Laundry & Linen, Provident Fund, Notification, Marketing, Mobile Apps, Teleradiology |
 | **Total** | **33** | |
 
 ## Module-by-module result
@@ -35,12 +35,12 @@
 | 8 | Laboratory Information System (LIS) | 🟢 Core implemented | Sample barcode, specimen/department routing, collection/receive/process states, parameter result entry, verification/publication and report viewing | Machine-analyzer communication and complete dispatch/delivery acknowledgement tracking |
 | 9 | Modality Work List (MWL) | 🟡 Limited/partial | Internal imaging worklist, patient/study/service information, status and radiology result entry | DICOM modality worklist, modality/RIS/PACS integration and modality-side updates |
 | 10 | PACS | 🔴 Not implemented | No PACS/DICOM storage, viewer or integration found | All brochure PACS features, including AI comparison |
-| 11 | Hospital Management | 🟢 Core implemented | OPD/emergency, admission/IPD, beds/cabins and transfer, services, discharge/final bill, EMR, diagnostics, pharmacy, canteen, central accounts and reports | Full nurse station, dedicated OT clinical notes, ICU/CCU/HDU specialty workflow, diet, transfusion and SMS automation |
+| 11 | Hospital Management | 🟢 Core implemented | OPD/emergency, admission/IPD, beds/cabins and transfer, services, discharge/final bill, EMR, diagnostics, pharmacy, blood bank/transfusion, canteen, central accounts and reports | Full nurse station, ICU/CCU/HDU specialty workflow, diet and SMS automation |
 | 12 | Emergency Management | 🟢 Core implemented | Emergency service entry/billing, doctor link, patient/encounter flow, clinical vitals/notes, diagnostic and medicine-related workflows | A dedicated emergency medicine-indent flow and fully joined emergency-to-IPD conversion workflow |
 | 13 | Nursing Management | 🟡 Limited/partial | Nurse role, vitals/clinical handoff, links to IPD medicine prescription/indent, investigation and patient services | Dedicated nurse station, medication return/alert, diet indent/monitoring and visit-plan workflow |
 | 14 | OT Management | 🟡 Limited/partial | OT service cash memo, billing, print and accounting posting | OT schedule/SMS, pre/post-op note, OT note, baby note, transfer/confinement notes and complete OT report |
-| 15 | Electronic Medical Record (EMR) | 🟢 Core implemented | Patient 360° document hub, encounter/vitals, complaints, findings, diagnosis, advice/follow-up, prescriptions, diagnostic orders/results and treatment history | PACS/RIS/mobile integration, blood requisition, formal procedure/referral note, comparative profile, medical-board report and discharge certificate |
-| 16 | Transfusion Medicine | 🔴 Not implemented | Blood-group fields exist only as patient data; no transfusion workflow | Donor, screening, cross-match, component extraction, issue/return and expiry tracking |
+| 15 | Electronic Medical Record (EMR) | 🟢 Core implemented | Patient 360° document hub, encounter/vitals, complaints, findings, diagnosis, advice/follow-up, prescriptions, diagnostic orders/results, blood requisition and treatment history | PACS/RIS/mobile integration, formal procedure/referral note, comparative profile, medical-board report and discharge certificate |
+| 16 | Transfusion Medicine | 🟢 Core implemented | Donor registration and eligibility guard, donation/quarantine, TTI screening, component stock/expiry, patient requisition, exact-group cross-match, reservation, issue and return/discard traceability | Full donor questionnaire, multi-component separation per bag, bedside transfusion observation/reaction management, antibody screening and label printing |
 | 17 | Cafeteria Management | 🟢 Core implemented | Category/item setup, receiving challan, stock, low-stock alert, POS sale, credit debtor selection and debtor ledger posting | Dedicated member maintenance, due collection screen/statements, full date-wise stock/supply-ledger report pack |
 | 18 | Diet and Nutrition | 🔴 Not implemented | No diet module workflow found | Dashboard, diet indent review/serve/cancel and discharged-patient diet tracking |
 | 19 | Laundry & Linen | 🔴 Not implemented | No laundry/linen workflow found | Issue/collection, damage/missing, packing, delivery/receive, status and payment |
@@ -78,7 +78,7 @@
 
 1. Finish the already strong modules first: Appointment reminders/portal, Pharmacy PR/PO approval, Diagnostic integrations, EMR missing clinical documents, Accounts financial statements, and granular security.
 2. Turn limited modules into complete workflows: Nursing, OT, Supply Chain, MIS, Patient Portal and MWL.
-3. Then add the absent hospital-critical modules: Notification, Blood/Transfusion, Diet and PACS/Teleradiology; extend HRM/payroll with employee self-service and accounting integration.
+3. Then add the remaining hospital-critical modules: Notification, Diet and PACS/Teleradiology; extend Blood Bank with bedside hemovigilance and HRM/payroll with employee self-service and accounting integration.
 
 ## Audit limitation
 

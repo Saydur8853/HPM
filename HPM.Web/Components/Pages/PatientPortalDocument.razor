@@ -1,0 +1,91 @@
+@page "/patient/document/{Kind}/{Id:long}"
+@attribute [Authorize(Roles = RoleNames.Patient)]
+@layout Layout.LoginLayout
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserManager<AppUser> Users
+@inject IJSRuntime JS
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Patient Document | @Branding.HospitalName</PageTitle>
+
+<div class="patient-document">
+    <div class="patient-document-actions"><a href="/patient">Back to portal</a>@if (ready) { <button @onclick="PrintAsync">Print / save as PDF</button> }</div>
+    @if (loading) { <p>Loading document...</p> }
+    else if (!ready) { <p>This document is not available in your account.</p> }
+    else
+    {
+        <article class="patient-document-sheet">
+            <header><h1>@Branding.HospitalName</h1><p>Official patient document</p></header>
+            <h2>@(prescription is not null ? "Signed Prescription" : "Discharge Summary")</h2>
+            <div class="patient-document-meta"><span><b>Patient:</b> @patient?.Name</span><span><b>Patient ID:</b> @patient?.PatientID</span><span><b>Date:</b> @documentDate.ToString("dd MMM yyyy")</span><span><b>Document #:</b> @Id</span></div>
+            @if (prescription is not null)
+            {
+                <section><h3>Clinical information</h3><p><b>Complaint:</b> @prescription.Complain</p><p><b>Diagnosis:</b> @prescription.Diagnosis</p><p><b>Findings:</b> @prescription.Findings</p><p><b>Investigations:</b> @prescription.Investigation</p><p><b>Advice:</b> @prescription.Remark</p></section>
+                <section><h3>Medicines</h3>@if (prescription.Medicines.Count > 0) { <table><thead><tr><th>Medicine</th><th>Dose</th><th>Schedule</th><th>Days</th><th>Instruction</th></tr></thead><tbody>@foreach (var item in prescription.Medicines.OrderBy(x => x.SLNO)) { <tr><td>@MedicineName(item.ServiceID)</td><td>@item.Dose</td><td>@item.DosagePattern</td><td>@item.Days</td><td>@item.Instruction</td></tr> }</tbody></table> } else { <p>@prescription.Medicine</p> }</section>
+            }
+            else if (discharge is not null && dischargeOrder is not null)
+            {
+                <section><h3>Discharge information</h3><p><b>Outcome:</b> @discharge.Outcome</p><p><b>Final diagnosis:</b> @dischargeOrder.FinalDiagnosis</p><p><b>Condition at discharge:</b> @dischargeOrder.ConditionAtDischarge</p><p><b>Hospital notes:</b> @discharge.DischargeNotes</p><p><b>Advice:</b> @dischargeOrder.Advice</p><p><b>Follow-up:</b> @dischargeOrder.FollowUp</p></section>
+            }
+            <footer>Generated from the hospital record. Contact the hospital if any detail needs clarification.</footer>
+        </article>
+    }
+</div>
+
+@code {
+    [Parameter] public string Kind { get; set; } = "";
+    [Parameter] public long Id { get; set; }
+    private Registration? patient;
+    private Prescription? prescription;
+    private IpdFinalBill? discharge;
+    private IpdMedicalDischargeOrder? dischargeOrder;
+    private Dictionary<int, string> medicineNames = [];
+    private bool loading = true, ready;
+    private DateTime documentDate;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true; ready = false; prescription = null; discharge = null; dischargeOrder = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        var patientId = await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db);
+        if (patientId is null || !await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patientId && x.Version == "2026-11")) { loading = false; return; }
+        patient = await db.Registrations.AsNoTracking().Where(x => x.PatientID == patientId).SelectWithoutPhoto().SingleOrDefaultAsync();
+        if (patient is null) { loading = false; return; }
+        if (Kind.Equals("prescription", StringComparison.OrdinalIgnoreCase))
+        {
+            prescription = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines)
+                .SingleOrDefaultAsync(x => x.ID == Id && x.PatientID == patientId && x.Status == "Signed");
+            if (prescription is not null)
+            {
+                documentDate = prescription.SignedAt ?? prescription.VisitDate ?? DateTime.Today;
+                var ids = prescription.Medicines.Select(x => x.ServiceID).ToList();
+                medicineNames = await db.Services.AsNoTracking().Where(x => ids.Contains(x.ID))
+                    .Select(x => new { x.ID, Name = x.Name ?? string.Empty }).ToDictionaryAsync(x => x.ID, x => x.Name);
+                ready = true;
+            }
+        }
+        else if (Kind.Equals("discharge", StringComparison.OrdinalIgnoreCase))
+        {
+            var admissionIds = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patientId).Select(x => x.ID).ToListAsync();
+            discharge = await db.IpdFinalBills.AsNoTracking().SingleOrDefaultAsync(x => x.BillNo == Id && admissionIds.Contains(x.AdmissionID) && x.MedicalDischargeOrderID != null);
+            if (discharge?.MedicalDischargeOrderID is long orderId)
+                dischargeOrder = await db.IpdMedicalDischargeOrders.AsNoTracking().SingleOrDefaultAsync(x => x.ID == orderId && x.AdmissionID == discharge.AdmissionID && x.Status == "Completed");
+            if (dischargeOrder is not null) { documentDate = discharge!.DischargeDate; ready = true; }
+        }
+        if (ready)
+        {
+            var user = await Users.GetUserAsync(principal);
+            db.AuditLogs.Add(new AuditLog { UserID = user?.Id, UserName = patientId, Action = "View", EntityName = prescription is not null ? "PatientPortalPrescription" : "PatientPortalDischarge", EntityID = Id.ToString(), EventTime = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+        loading = false;
+    }
+
+    private string MedicineName(int id) => medicineNames.TryGetValue(id, out var name) ? name : $"Medicine #{id}";
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("window.print");
+}

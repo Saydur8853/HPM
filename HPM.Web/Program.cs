@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -52,6 +54,13 @@ builder.Services.AddSingleton<HospitalSetupService>();
 builder.Services.AddScoped<I18nService>();
 builder.Services.AddScoped<PatientSelectionState>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("patient-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 
 var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")
     ?? throw new InvalidOperationException("Connection string 'HpmDatabase' was not found.");
@@ -90,11 +99,12 @@ builder.Services.ConfigureApplicationCookie(options =>
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("PasswordChangeAllowed", policy => policy.RequireAuthenticatedUser());
+    options.AddPolicy("PortalReportAccess", policy => policy.RequireAuthenticatedUser());
     options.DefaultPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .RequireAssertion(context => !context.User.HasClaim(
             AppUserClaimsPrincipalFactory.MustChangePasswordClaim,
-            bool.TrueString))
+            bool.TrueString) && !context.User.IsInRole(RoleNames.Patient))
         .Build();
 });
 
@@ -112,6 +122,7 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseSerilogRequestLogging();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.UseAntiforgery();
 
@@ -305,6 +316,63 @@ app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery,
 
     return Results.LocalRedirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
 }).AllowAnonymous();
+
+app.MapPost("/patient/login-submit", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory) =>
+{
+    await antiforgery.ValidateRequestAsync(http);
+    var form = await http.Request.ReadFormAsync();
+    var patientId = form["PatientID"].ToString().Trim();
+    var phone = form["Phone"].ToString().Trim();
+    var returnUrl = SafeReturnUrl(form["ReturnUrl"].ToString());
+    if (!returnUrl.StartsWith("/patient", StringComparison.OrdinalIgnoreCase) && !returnUrl.StartsWith("/portal/report", StringComparison.OrdinalIgnoreCase))
+        returnUrl = "/patient";
+
+    if (patientId.Length is < 2 or > 11 || phone.Length is < 6 or > 50)
+        return Results.LocalRedirect("/patient/login?error=1");
+
+    await using var db = await dbFactory.CreateDbContextAsync();
+    var registration = await db.Registrations.AsNoTracking()
+        .Where(x => x.PatientID == patientId)
+        .Select(x => new { x.PatientID, x.Contact })
+        .SingleOrDefaultAsync();
+    var user = await userManager.FindByNameAsync(patientId);
+    if (user is not null && (await userManager.IsLockedOutAsync(user) || !await userManager.IsInRoleAsync(user, RoleNames.Patient)))
+        return Results.LocalRedirect("/patient/login?error=1");
+
+    if (registration is null || string.IsNullOrWhiteSpace(registration.Contact) ||
+        !string.Equals(registration.Contact.Trim(), phone, StringComparison.Ordinal))
+    {
+        if (user is not null) await userManager.AccessFailedAsync(user);
+        return Results.LocalRedirect("/patient/login?error=1");
+    }
+
+    if (user is null)
+    {
+        user = new AppUser { UserName = registration.PatientID, DisplayName = registration.PatientID, PhoneNumber = registration.Contact.Trim(), IsActive = true, EmailConfirmed = true };
+        var created = await userManager.CreateAsync(user);
+        if (!created.Succeeded) return Results.LocalRedirect("/patient/login?error=1");
+        var roleResult = await userManager.AddToRoleAsync(user, RoleNames.Patient);
+        if (!roleResult.Succeeded) return Results.LocalRedirect("/patient/login?error=1");
+    }
+    if (!user.IsActive) return Results.LocalRedirect("/patient/login?error=1");
+    if (user.PhoneNumber != registration.Contact.Trim())
+    {
+        user.PhoneNumber = registration.Contact.Trim();
+        await userManager.UpdateAsync(user);
+    }
+    await userManager.ResetAccessFailedCountAsync(user);
+    await signInManager.SignInAsync(user, isPersistent: false);
+    db.AuditLogs.Add(new HPM.Web.Data.Entities.AuditLog { UserID = user.Id, UserName = patientId, Action = "Login", EntityName = "PatientPortal", EntityID = patientId, EventTime = DateTime.UtcNow });
+    await db.SaveChangesAsync();
+    return Results.LocalRedirect(returnUrl);
+}).AllowAnonymous().RequireRateLimiting("patient-login");
+
+app.MapPost("/patient/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager) =>
+{
+    await antiforgery.ValidateRequestAsync(http);
+    await signInManager.SignOutAsync();
+    return Results.LocalRedirect("/patient/login");
+}).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = RoleNames.Patient });
 
 app.MapPost("/account/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager) =>
 {

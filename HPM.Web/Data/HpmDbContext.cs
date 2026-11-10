@@ -126,6 +126,15 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<HrmAttendanceRecord> HrmAttendanceRecords => Set<HrmAttendanceRecord>();
     public DbSet<HrmPayrollPeriod> HrmPayrollPeriods => Set<HrmPayrollPeriod>();
     public DbSet<HrmPayrollEntry> HrmPayrollEntries => Set<HrmPayrollEntry>();
+    public DbSet<BloodDonor> BloodDonors => Set<BloodDonor>();
+    public DbSet<BloodDonation> BloodDonations => Set<BloodDonation>();
+    public DbSet<BloodScreening> BloodScreenings => Set<BloodScreening>();
+    public DbSet<BloodComponent> BloodComponents => Set<BloodComponent>();
+    public DbSet<BloodRequisition> BloodRequisitions => Set<BloodRequisition>();
+    public DbSet<BloodCrossMatch> BloodCrossMatches => Set<BloodCrossMatch>();
+    public DbSet<BloodIssue> BloodIssues => Set<BloodIssue>();
+    public DbSet<PatientPortalConsent> PatientPortalConsents => Set<PatientPortalConsent>();
+    public DbSet<PatientPortalQuery> PatientPortalQueries => Set<PatientPortalQuery>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -150,6 +159,19 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigurePurchaseRequisition(modelBuilder);
         ConfigureMedicalServices(modelBuilder);
         ConfigureHrm(modelBuilder);
+        ConfigureBloodBank(modelBuilder);
+        ConfigurePatientPortal(modelBuilder);
+    }
+
+    private static void ConfigurePatientPortal(ModelBuilder b)
+    {
+        var consent = b.Entity<PatientPortalConsent>();
+        consent.ToTable("Patient_Portal_Consent");
+        consent.HasIndex(x => new { x.PatientID, x.Version }).IsUnique();
+        var query = b.Entity<PatientPortalQuery>();
+        query.ToTable("Patient_Portal_Query");
+        query.HasIndex(x => new { x.PatientID, x.SubmittedAt });
+        query.HasIndex(x => new { x.Status, x.SubmittedAt });
     }
 
     private static void ConfigureHrm(ModelBuilder b)
@@ -1708,5 +1730,48 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         cert.HasIndex(x => new { x.CertificateType, x.IssueDate });
         cert.HasIndex(x => x.PatientID);
         cert.HasIndex(x => x.RegNo);
+    }
+
+    private static void ConfigureBloodBank(ModelBuilder b)
+    {
+        var donor = b.Entity<BloodDonor>();
+        donor.ToTable("Blood_Donor");
+        donor.Property(x => x.WeightKg).HasColumnType("decimal(5,2)");
+        donor.HasIndex(x => x.DonorNo).IsUnique();
+        donor.HasIndex(x => x.ContactNo);
+
+        var donation = b.Entity<BloodDonation>();
+        donation.ToTable("Blood_Donation");
+        donation.HasIndex(x => x.BagNo).IsUnique();
+        donation.HasIndex(x => new { x.BloodGroup, x.Status });
+        donation.HasOne(x => x.Donor).WithMany(x => x.Donations).HasForeignKey(x => x.DonorID).OnDelete(DeleteBehavior.Restrict);
+
+        var screening = b.Entity<BloodScreening>();
+        screening.ToTable("Blood_Screening");
+        screening.HasIndex(x => x.DonationID).IsUnique();
+        screening.HasOne(x => x.Donation).WithOne(x => x.Screening).HasForeignKey<BloodScreening>(x => x.DonationID).OnDelete(DeleteBehavior.Cascade);
+
+        var component = b.Entity<BloodComponent>();
+        component.ToTable("Blood_Component");
+        component.HasIndex(x => x.ComponentNo).IsUnique();
+        component.HasIndex(x => new { x.BloodGroup, x.ComponentType, x.Status, x.ExpiresAt });
+        component.HasOne(x => x.Donation).WithMany(x => x.Components).HasForeignKey(x => x.DonationID).OnDelete(DeleteBehavior.Restrict);
+
+        var requisition = b.Entity<BloodRequisition>();
+        requisition.ToTable("Blood_Requisition");
+        requisition.HasIndex(x => x.RequisitionNo).IsUnique();
+        requisition.HasIndex(x => new { x.PatientID, x.Status });
+
+        var crossMatch = b.Entity<BloodCrossMatch>();
+        crossMatch.ToTable("Blood_CrossMatch");
+        crossMatch.HasIndex(x => new { x.RequisitionID, x.ComponentID }).IsUnique();
+        crossMatch.HasIndex(x => x.ComponentID).IsUnique().HasFilter("[Result] = N'Compatible'");
+        crossMatch.HasOne(x => x.Requisition).WithMany(x => x.CrossMatches).HasForeignKey(x => x.RequisitionID).OnDelete(DeleteBehavior.Restrict);
+        crossMatch.HasOne(x => x.Component).WithMany().HasForeignKey(x => x.ComponentID).OnDelete(DeleteBehavior.Restrict);
+
+        var issue = b.Entity<BloodIssue>();
+        issue.ToTable("Blood_Issue");
+        issue.HasIndex(x => x.CrossMatchID).IsUnique();
+        issue.HasOne(x => x.CrossMatch).WithOne(x => x.Issue).HasForeignKey<BloodIssue>(x => x.CrossMatchID).OnDelete(DeleteBehavior.Restrict);
     }
 }

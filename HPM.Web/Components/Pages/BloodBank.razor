@@ -1,0 +1,438 @@
+@page "/blood-bank"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.BloodBankOperator + "," + RoleNames.LabTechnician + "," + RoleNames.Doctor + "," + RoleNames.Nurse + "," + RoleNames.IPDOperator)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>Blood Bank & Transfusion | @Branding.HospitalName</PageTitle>
+
+<style>
+    .bb-skeleton { display: grid; gap: 10px; }
+    .bb-skeleton .bb-card { margin-bottom: 0; }
+    .bb-skeleton-kpis { margin-bottom: 0; }
+    .bb-skeleton-kpis article { min-height: 96px; gap: 8px; }
+    .bb-skeleton-heading { display: grid; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+    .bb-skeleton-line, .bb-skeleton-field, .bb-skeleton-tile { display: block; position: relative; overflow: hidden; background: #e5eaf0; border-radius: 5px; }
+    .bb-skeleton-line { width: 100%; height: 9px; }
+    .bb-skeleton-line.short { width: 25%; }
+    .bb-skeleton-line.medium { width: 55%; }
+    .bb-skeleton-line.title { width: 42%; height: 15px; }
+    .bb-skeleton-line.number { width: 22%; height: 29px; }
+    .bb-skeleton-line.badge { width: 44px; height: 17px; border-radius: 10px; }
+    .bb-skeleton-blood-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 14px; }
+    .bb-skeleton-tile { min-height: 65px; border-radius: 8px; }
+    .bb-skeleton-rows { padding: 5px 14px; }
+    .bb-skeleton-rows > div { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 45px; border-bottom: 1px solid #f1f5f9; }
+    .bb-skeleton-rows > div:last-child { border-bottom: 0; }
+    .bb-skeleton-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 13px; padding: 14px; }
+    .bb-skeleton-form > div { display: grid; gap: 6px; }
+    .bb-skeleton-field { height: 35px; }
+    .bb-skeleton-line::after, .bb-skeleton-field::after, .bb-skeleton-tile::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,.78), transparent); animation: bb-skeleton-shimmer 1.3s infinite; }
+    @@keyframes bb-skeleton-shimmer { to { transform: translateX(100%); } }
+    @@media (max-width: 900px) { .bb-skeleton-blood-grid { grid-template-columns: repeat(2, 1fr); } }
+    @@media (max-width: 560px) { .bb-skeleton-form { grid-template-columns: 1fr; } }
+    @@media (prefers-reduced-motion: reduce) { .bb-skeleton-line::after, .bb-skeleton-field::after, .bb-skeleton-tile::after { animation: none; } }
+</style>
+
+<div class="bb-page">
+    <header class="bb-hero">
+        <div><span>BLOOD BANK OPERATIONS</span><h1>Blood Bank & Transfusion</h1><p>Donor-to-recipient traceability, safe screening and component inventory.</p></div>
+        <div class="bb-date"><b>@DateTime.Today.ToString("dd")</b><span>@DateTime.Today.ToString("MMM yyyy")</span></div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="bb-alert @(isError ? "error" : "success")">@message</div>
+    }
+
+    <nav class="bb-tabs">
+        @foreach (var tab in VisibleTabs)
+        {
+            <button class="@(activeTab == tab.Key ? "active" : null)" @onclick="() => activeTab = tab.Key"><span>@tab.Icon</span>@tab.Label @if (tab.Count > 0) { <b>@tab.Count</b> }</button>
+        }
+    </nav>
+
+    @if (loading)
+    {
+        <div class="bb-skeleton" role="status" aria-label="Loading blood bank records" aria-busy="true">
+            <span class="visually-hidden">Loading blood bank records…</span>
+            @if (activeTab == "overview")
+            {
+                <section class="bb-kpis bb-skeleton-kpis" aria-hidden="true">
+                    @for (var i = 0; i < 4; i++)
+                    {
+                        <article><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line number"></i><i class="bb-skeleton-line medium"></i></article>
+                    }
+                </section>
+                <section class="bb-two-col bb-skeleton-panels" aria-hidden="true">
+                    <article class="bb-card"><div class="bb-skeleton-heading"><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line title"></i></div><div class="bb-skeleton-blood-grid">@for (var i = 0; i < 8; i++) { <i class="bb-skeleton-tile"></i> }</div></article>
+                    <article class="bb-card"><div class="bb-skeleton-heading"><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line title"></i></div><div class="bb-skeleton-rows">@for (var i = 0; i < 4; i++) { <div><i class="bb-skeleton-line medium"></i><i class="bb-skeleton-line badge"></i></div> }</div></article>
+                </section>
+            }
+            else
+            {
+                <section class="bb-split bb-skeleton-panels" aria-hidden="true">
+                    <article class="bb-card"><div class="bb-skeleton-heading"><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line title"></i></div><div class="bb-skeleton-form">@for (var i = 0; i < 6; i++) { <div><i class="bb-skeleton-line short"></i><i class="bb-skeleton-field"></i></div> }</div></article>
+                    <article class="bb-card"><div class="bb-skeleton-heading"><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line title"></i></div><div class="bb-skeleton-rows">@for (var i = 0; i < 6; i++) { <div><i class="bb-skeleton-line medium"></i><i class="bb-skeleton-line badge"></i></div> }</div></article>
+                </section>
+            }
+            <section class="bb-card bb-skeleton-history" aria-hidden="true"><div class="bb-skeleton-heading"><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line title"></i></div><div class="bb-skeleton-rows">@for (var i = 0; i < 4; i++) { <div><i class="bb-skeleton-line medium"></i><i class="bb-skeleton-line short"></i><i class="bb-skeleton-line badge"></i></div> }</div></section>
+        </div>
+    }
+    else if (activeTab == "overview")
+    {
+        <section class="bb-kpis">
+            <article><small>AVAILABLE UNITS</small><strong>@AvailableComponents.Count()</strong><span>screened and in date</span></article>
+            <article><small>QUARANTINE</small><strong>@donations.Count(x => x.Status == "Quarantine")</strong><span>awaiting screening</span></article>
+            <article><small>URGENT REQUESTS</small><strong>@requisitions.Count(x => x.Priority == "Emergency" && x.Status != "Fulfilled" && x.Status != "Cancelled")</strong><span>not yet fulfilled</span></article>
+            <article class="danger"><small>EXPIRING ≤ 7 DAYS</small><strong>@ExpiringComponents.Count()</strong><span>use first or discard</span></article>
+        </section>
+        <section class="bb-two-col">
+            <article class="bb-card">
+                <div class="bb-card-head"><div><small>LIVE INVENTORY</small><h2>Available units by blood group</h2></div></div>
+                <div class="blood-grid">
+                    @foreach (var group in BloodGroups)
+                    {
+                        <button @onclick="() => OpenStock(group)"><b>@group</b><strong>@AvailableComponents.Count(x => x.BloodGroup == group)</strong><span>units</span></button>
+                    }
+                </div>
+            </article>
+            <article class="bb-card">
+                <div class="bb-card-head"><div><small>ACTION QUEUE</small><h2>Pending clinical work</h2></div></div>
+                <div class="queue-list">
+                    <button @onclick='() => SetTab("screening")'><span>Unscreened donations</span><b>@donations.Count(x => x.Status == "Quarantine")</b></button>
+                    <button @onclick='() => SetTab("requests")'><span>Pending requisitions</span><b>@requisitions.Count(x => x.Status == "Pending")</b></button>
+                    <button @onclick='() => SetTab("crossmatch")'><span>Matched, awaiting issue</span><b>@crossMatches.Count(x => x.Result == "Compatible" && x.Issue == null)</b></button>
+                    <button @onclick='() => SetTab("stock")'><span>Expired units</span><b>@components.Count(x => x.Status == "Available" && x.ExpiresAt <= DateTime.Now)</b></button>
+                </div>
+            </article>
+        </section>
+        <section class="bb-card">
+            <div class="bb-card-head"><div><small>RECENT ACTIVITY</small><h2>Latest issued units</h2></div></div>
+            @IssueTable(issues.Take(8))
+        </section>
+    }
+    else if (activeTab == "donors")
+    {
+        <section class="bb-split">
+            <EditForm Model="donorForm" OnValidSubmit="SaveDonor" class="bb-card form-card"><DataAnnotationsValidator />
+                <div class="bb-card-head"><div><small>REGISTRATION</small><h2>New donor</h2></div></div>
+                <div class="bb-form">
+                    <label class="wide">Full name<InputText @bind-Value="donorForm.Name" /></label>
+                    <label>Sex<InputSelect @bind-Value="donorForm.Sex"><option value="">Select</option><option>Male</option><option>Female</option><option>Other</option></InputSelect></label>
+                    <label>Date of birth<InputDate @bind-Value="donorForm.DateOfBirth" /></label>
+                    <label>Blood group<InputSelect @bind-Value="donorForm.BloodGroup"><option value="">Select</option>@foreach (var x in BloodGroups) { <option>@x</option> }</InputSelect></label>
+                    <label>Weight (kg)<InputNumber @bind-Value="donorForm.WeightKg" /></label>
+                    <label>Contact<InputText @bind-Value="donorForm.ContactNo" /></label>
+                    <label>NID / Passport<InputText @bind-Value="donorForm.NationalId" /></label>
+                    <label class="wide">Address<InputText @bind-Value="donorForm.Address" /></label>
+                    <label class="wide">Medical notes<InputTextArea @bind-Value="donorForm.MedicalNotes" /></label>
+                    <ValidationSummary />
+                    <button class="primary wide" type="submit">Register donor</button>
+                </div>
+            </EditForm>
+            <article class="bb-card">
+                <div class="bb-card-head"><div><small>@donors.Count RECORDS</small><h2>Donor registry</h2></div><input placeholder="Search donor…" @bind="donorSearch" @bind:event="oninput" /></div>
+                <div class="table-wrap"><table><thead><tr><th>Donor</th><th>Group</th><th>Contact</th><th>Last donation</th><th>Status</th></tr></thead><tbody>
+                    @foreach (var x in FilteredDonors)
+                    {<tr><td><b>@x.Name</b><small>@x.DonorNo</small></td><td><span class="blood-pill">@x.BloodGroup</span></td><td>@x.ContactNo</td><td>@(x.Donations.OrderByDescending(d => d.CollectedAt).FirstOrDefault()?.CollectedAt.ToString("dd MMM yyyy") ?? "Never")</td><td><span class="status @(x.IsDeferred ? "bad" : "good")">@(x.IsDeferred ? "Deferred" : "Eligible")</span></td></tr>}
+                </tbody></table></div>
+            </article>
+        </section>
+    }
+    else if (activeTab == "collections")
+    {
+        <section class="bb-split">
+            <EditForm Model="donationForm" OnValidSubmit="SaveDonation" class="bb-card form-card"><DataAnnotationsValidator />
+                <div class="bb-card-head"><div><small>COLLECTION</small><h2>Record donation</h2></div></div>
+                <div class="bb-form">
+                    <label class="wide">Eligible donor<select @bind="donationForm.DonorID"><option value="0">Select donor</option>@foreach (var x in EligibleDonors) { <option value="@x.ID">@x.DonorNo · @x.Name · @x.BloodGroup</option> }</select></label>
+                    <label>Collected at<InputDate @bind-Value="donationForm.CollectedAt" /></label>
+                    <label>Volume (ml)<InputNumber @bind-Value="donationForm.VolumeMl" /></label>
+                    <label>Collection type<InputSelect @bind-Value="donationForm.CollectionType"><option>Whole Blood</option><option>Apheresis</option></InputSelect></label>
+                    <label class="wide">Remarks<InputTextArea @bind-Value="donationForm.Remarks" /></label>
+                    <button class="primary wide" type="submit">Save collection & quarantine</button>
+                </div>
+            </EditForm>
+            <article class="bb-card">
+                <div class="bb-card-head"><div><small>CHAIN OF CUSTODY</small><h2>Recent collections</h2></div></div>
+                <div class="table-wrap"><table><thead><tr><th>Bag</th><th>Donor</th><th>Group</th><th>Collected</th><th>Status</th></tr></thead><tbody>
+                    @foreach (var x in donations.Take(50)) { <tr><td><b>@x.BagNo</b></td><td>@x.Donor?.Name</td><td><span class="blood-pill">@x.BloodGroup</span></td><td>@x.CollectedAt.ToString("dd MMM, HH:mm")</td><td><span class="status @StatusClass(x.Status)">@x.Status</span></td></tr> }
+                </tbody></table></div>
+            </article>
+        </section>
+    }
+    else if (activeTab == "screening")
+    {
+        <section class="bb-split">
+            <EditForm Model="screenForm" OnValidSubmit="SaveScreening" class="bb-card form-card"><DataAnnotationsValidator />
+                <div class="bb-card-head"><div><small>TTI SCREENING</small><h2>Test & prepare component</h2></div></div>
+                <div class="bb-form">
+                    <label class="wide">Quarantined bag<select @bind="screenForm.DonationID"><option value="0">Select bag</option>@foreach (var x in donations.Where(x => x.Status == "Quarantine")) { <option value="@x.ID">@x.BagNo · @x.BloodGroup · @x.Donor?.Name</option> }</select></label>
+                    @foreach (var test in ScreeningTests)
+                    {
+                        <label>@test.Label<select value="@test.Get()" @onchange="e => ChangeScreening(test, e)"><option>Negative</option><option>Reactive</option><option>Indeterminate</option></select></label>
+                    }
+                    <label>Prepare as<InputSelect @bind-Value="screenForm.ComponentType">@foreach (var x in ComponentTypes) { <option>@x</option> }</InputSelect></label>
+                    <label>Component volume (ml)<InputNumber @bind-Value="screenForm.ComponentVolumeMl" /></label>
+                    <label>Storage location<InputText @bind-Value="screenForm.StorageLocation" /></label>
+                    <label class="wide">Remarks<InputTextArea @bind-Value="screenForm.Remarks" /></label>
+                    <button class="primary wide" type="submit">Verify screening & release</button>
+                    <p class="form-note wide">Any reactive or indeterminate result rejects the bag. Only all-negative screening creates an available component.</p>
+                </div>
+            </EditForm>
+            <article class="bb-card"><div class="bb-card-head"><div><small>SCREENING HISTORY</small><h2>Verified donations</h2></div></div>
+                <div class="table-wrap"><table><thead><tr><th>Bag</th><th>Donor</th><th>Screened</th><th>Result</th><th>Components</th></tr></thead><tbody>
+                @foreach (var x in donations.Where(x => x.Screening != null).Take(50)) { <tr><td><b>@x.BagNo</b><small>@x.BloodGroup</small></td><td>@x.Donor?.Name</td><td>@x.Screening!.ScreenedAt.ToString("dd MMM, HH:mm")</td><td><span class="status @(x.Screening.Result == "Negative" ? "good" : "bad")">@x.Screening.Result</span></td><td>@x.Components.Count</td></tr> }
+                </tbody></table></div>
+            </article>
+        </section>
+    }
+    else if (activeTab == "stock")
+    {
+        <section class="bb-card">
+            <div class="bb-card-head"><div><small>COMPONENT INVENTORY</small><h2>Blood stock</h2></div><div class="filters"><select @bind="stockGroup"><option value="">All groups</option>@foreach (var x in BloodGroups) { <option>@x</option> }</select><select @bind="stockType"><option value="">All components</option>@foreach (var x in ComponentTypes) { <option>@x</option> }</select></div></div>
+            <div class="table-wrap"><table><thead><tr><th>Component</th><th>Group</th><th>Type</th><th>Volume</th><th>Location</th><th>Expiry</th><th>Status</th></tr></thead><tbody>
+                @foreach (var x in FilteredComponents) { var expired = x.ExpiresAt <= DateTime.Now; <tr class="@(expired ? "expired" : null)"><td><b>@x.ComponentNo</b><small>Bag @x.Donation?.BagNo</small></td><td><span class="blood-pill">@x.BloodGroup</span></td><td>@x.ComponentType</td><td>@x.VolumeMl ml</td><td>@x.StorageLocation</td><td>@x.ExpiresAt.ToString("dd MMM yyyy HH:mm")</td><td><span class="status @(expired ? "bad" : StatusClass(x.Status))">@(expired && x.Status == "Available" ? "Expired" : x.Status)</span></td></tr> }
+            </tbody></table></div>
+        </section>
+    }
+    else if (activeTab == "requests")
+    {
+        <section class="bb-split">
+            <EditForm Model="requestForm" OnValidSubmit="SaveRequisition" class="bb-card form-card"><DataAnnotationsValidator />
+                <div class="bb-card-head"><div><small>CLINICAL REQUEST</small><h2>Blood requisition</h2></div></div>
+                <div class="bb-form">
+                    <label>Patient ID<div class="input-action"><InputText @bind-Value="requestForm.PatientID" /><button type="button" @onclick="FindPatient">Find</button></div></label>
+                    <label>Patient name<InputText @bind-Value="requestForm.PatientName" /></label>
+                    <label>IPD Reg. no.<InputText @bind-Value="requestForm.RegNo" /></label>
+                    <label>Blood group<InputSelect @bind-Value="requestForm.BloodGroup"><option value="">Select</option>@foreach (var x in BloodGroups) { <option>@x</option> }</InputSelect></label>
+                    <label>Component<InputSelect @bind-Value="requestForm.ComponentType">@foreach (var x in ComponentTypes) { <option>@x</option> }</InputSelect></label>
+                    <label>Units<InputNumber @bind-Value="requestForm.UnitsRequested" /></label>
+                    <label>Priority<InputSelect @bind-Value="requestForm.Priority"><option>Routine</option><option>Urgent</option><option>Emergency</option></InputSelect></label>
+                    <label>Required at<InputDate @bind-Value="requestForm.RequiredAt" /></label>
+                    <label class="wide">Clinical indication<InputTextArea @bind-Value="requestForm.ClinicalIndication" /></label>
+                    <ValidationSummary /><button class="primary wide" type="submit">Submit requisition</button>
+                </div>
+            </EditForm>
+            <article class="bb-card"><div class="bb-card-head"><div><small>REQUEST QUEUE</small><h2>Patient requisitions</h2></div></div>
+                <div class="table-wrap"><table><thead><tr><th>Request</th><th>Patient</th><th>Need</th><th>Priority</th><th>Status</th></tr></thead><tbody>
+                @foreach (var x in requisitions.Take(50)) { <tr><td><b>@x.RequisitionNo</b><small>@x.RequestedAt.ToString("dd MMM, HH:mm")</small></td><td>@x.PatientName<small>@x.PatientID</small></td><td>@x.UnitsRequested × @x.ComponentType<small>@x.BloodGroup</small></td><td><span class="status @(x.Priority == "Emergency" ? "bad" : "neutral")">@x.Priority</span></td><td><span class="status @StatusClass(x.Status)">@x.Status</span></td></tr> }
+                </tbody></table></div>
+            </article>
+        </section>
+    }
+    else if (activeTab == "crossmatch")
+    {
+        <section class="bb-split">
+            <EditForm Model="matchForm" OnValidSubmit="SaveCrossMatch" class="bb-card form-card"><DataAnnotationsValidator />
+                <div class="bb-card-head"><div><small>COMPATIBILITY</small><h2>Cross-match</h2></div></div>
+                <div class="bb-form">
+                    <label class="wide">Open requisition<select @bind="matchForm.RequisitionID" @bind:after="OnRequestSelected"><option value="0">Select request</option>@foreach (var x in OpenRequisitions) { <option value="@x.ID">@x.RequisitionNo · @x.PatientName · @x.BloodGroup @x.ComponentType</option> }</select></label>
+                    <label class="wide">Available exact-match unit<select @bind="matchForm.ComponentID"><option value="0">Select unit</option>@foreach (var x in MatchingComponents) { <option value="@x.ID">@x.ComponentNo · expires @x.ExpiresAt.ToString("dd MMM HH:mm")</option> }</select></label>
+                    <label>Result<InputSelect @bind-Value="matchForm.Result"><option>Compatible</option><option>Incompatible</option></InputSelect></label>
+                    <label>Method<InputText @bind-Value="matchForm.Method" /></label>
+                    <label class="wide">Remarks<InputTextArea @bind-Value="matchForm.Remarks" /></label>
+                    <button class="primary wide" type="submit">Save cross-match</button>
+                </div>
+            </EditForm>
+            <article class="bb-card"><div class="bb-card-head"><div><small>ISSUE DESK</small><h2>Compatible units awaiting issue</h2></div></div>
+                @foreach (var x in crossMatches.Where(x => x.Result == "Compatible" && x.Issue == null))
+                {
+                    <div class="issue-row"><div><b>@x.Component?.ComponentNo · @x.Component?.BloodGroup</b><span>@x.Requisition?.PatientName · @x.Requisition?.RequisitionNo</span></div><button class="primary" @onclick="() => StartIssue(x.ID)">Issue unit</button></div>
+                }
+                @if (issueForm.CrossMatchID > 0)
+                {
+                    <EditForm Model="issueForm" OnValidSubmit="IssueUnit" class="inline-form"><DataAnnotationsValidator /><h3>Handover details</h3><label>Received by<InputText @bind-Value="issueForm.ReceivedBy" /></label><label>Ward / location<InputText @bind-Value="issueForm.WardOrLocation" /></label><button class="danger-btn" type="submit">Confirm issue</button><button type="button" @onclick="() => issueForm = new()">Cancel</button></EditForm>
+                }
+            </article>
+        </section>
+        <section class="bb-card"><div class="bb-card-head"><div><small>TRANSFUSION TRACE</small><h2>Issue & return history</h2></div></div>@IssueTable(issues)</section>
+    }
+</div>
+
+@code {
+    private bool loading = true, isError, canOperate;
+    private string activeTab = "overview", message = "", donorSearch = "", stockGroup = "", stockType = "";
+    private int userId;
+    private List<BloodDonor> donors = [];
+    private List<BloodDonation> donations = [];
+    private List<BloodComponent> components = [];
+    private List<BloodRequisition> requisitions = [];
+    private List<BloodCrossMatch> crossMatches = [];
+    private List<BloodIssue> issues = [];
+    private BloodDonor donorForm = NewDonor();
+    private BloodDonation donationForm = new();
+    private ScreeningInput screenForm = new();
+    private BloodRequisition requestForm = NewRequest();
+    private BloodCrossMatch matchForm = new();
+    private BloodIssue issueForm = new();
+
+    private static readonly string[] BloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    private static readonly string[] ComponentTypes = ["Whole Blood", "Packed Red Cells", "Platelets", "Fresh Frozen Plasma", "Cryoprecipitate"];
+    private IEnumerable<BloodComponent> AvailableComponents => components.Where(x => x.Status == "Available" && x.ExpiresAt > DateTime.Now);
+    private IEnumerable<BloodComponent> ExpiringComponents => AvailableComponents.Where(x => x.ExpiresAt <= DateTime.Now.AddDays(7));
+    private IEnumerable<BloodDonor> EligibleDonors => donors.Where(x => !x.IsDeferred || x.DeferredUntil < DateTime.Today);
+    private IEnumerable<BloodDonor> FilteredDonors => donors.Where(x => string.IsNullOrWhiteSpace(donorSearch) || x.Name.Contains(donorSearch, StringComparison.OrdinalIgnoreCase) || x.DonorNo.Contains(donorSearch, StringComparison.OrdinalIgnoreCase) || x.ContactNo.Contains(donorSearch, StringComparison.OrdinalIgnoreCase));
+    private IEnumerable<BloodComponent> FilteredComponents => components.Where(x => (stockGroup == "" || x.BloodGroup == stockGroup) && (stockType == "" || x.ComponentType == stockType));
+    private IEnumerable<BloodRequisition> OpenRequisitions => requisitions.Where(x => x.Status is "Pending" or "Partially Matched" or "Matched");
+    private IEnumerable<BloodComponent> MatchingComponents { get { var req = requisitions.FirstOrDefault(x => x.ID == matchForm.RequisitionID); return req is null ? [] : AvailableComponents.Where(x => x.BloodGroup == req.BloodGroup && x.ComponentType == req.ComponentType).OrderBy(x => x.ExpiresAt); } }
+    private IReadOnlyList<(string Key, string Label, string Icon, int Count)> VisibleTabs =>
+    new List<(string Key, string Label, string Icon, int Count)>
+    {
+        ("overview", "Overview", "◫", 0), ("donors", "Donors", "♥", donors.Count), ("collections", "Collection", "+", donations.Count(x => x.Status == "Quarantine")),
+        ("screening", "Screening", "⌁", donations.Count(x => x.Status == "Quarantine")), ("stock", "Stock", "▦", AvailableComponents.Count()),
+        ("requests", "Requisitions", "≡", requisitions.Count(x => x.Status == "Pending")), ("crossmatch", "Cross-match & Issue", "✓", crossMatches.Count(x => x.Result == "Compatible" && x.Issue == null))
+    }.Where(x => canOperate || x.Key is "overview" or "stock" or "requests").ToList();
+    private IReadOnlyList<ScreenTest> ScreeningTests =>
+    [
+        new("HIV 1 & 2", () => screenForm.HIV, x => screenForm.HIV = x), new("Hepatitis B", () => screenForm.HepatitisB, x => screenForm.HepatitisB = x),
+        new("Hepatitis C", () => screenForm.HepatitisC, x => screenForm.HepatitisC = x), new("Syphilis", () => screenForm.Syphilis, x => screenForm.Syphilis = x),
+        new("Malaria", () => screenForm.Malaria, x => screenForm.Malaria = x)
+    ];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        int.TryParse(state.User.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
+        canOperate = state.User.IsInRole(RoleNames.Administrator) || state.User.IsInRole(RoleNames.BloodBankOperator) || state.User.IsInRole(RoleNames.LabTechnician);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        donors = await db.BloodDonors.Include(x => x.Donations).OrderByDescending(x => x.ID).AsNoTracking().ToListAsync();
+        donations = await db.BloodDonations.Include(x => x.Donor).Include(x => x.Screening).Include(x => x.Components).OrderByDescending(x => x.CollectedAt).AsNoTracking().ToListAsync();
+        components = await db.BloodComponents.Include(x => x.Donation).OrderByDescending(x => x.PreparedAt).AsNoTracking().ToListAsync();
+        requisitions = await db.BloodRequisitions.Include(x => x.CrossMatches).OrderByDescending(x => x.RequestedAt).AsNoTracking().ToListAsync();
+        crossMatches = await db.BloodCrossMatches.Include(x => x.Requisition).Include(x => x.Component).Include(x => x.Issue).OrderByDescending(x => x.TestedAt).AsNoTracking().ToListAsync();
+        issues = await db.BloodIssues.Include(x => x.CrossMatch)!.ThenInclude(x => x!.Requisition).Include(x => x.CrossMatch)!.ThenInclude(x => x!.Component).OrderByDescending(x => x.IssuedAt).AsNoTracking().ToListAsync();
+        loading = false;
+    }
+
+    private async Task SaveDonor()
+    {
+        if (!RequireOperator()) return;
+        var age = DateTime.Today.Year - donorForm.DateOfBirth.Year - (donorForm.DateOfBirth.Date > DateTime.Today.AddYears(-(DateTime.Today.Year - donorForm.DateOfBirth.Year)) ? 1 : 0);
+        if (age is < 18 or > 65 || donorForm.WeightKg is < 45) { Fail("Donor must be 18–65 years old and weigh at least 45 kg."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        donorForm.DonorNo = await NextNo(db.BloodDonors.Select(x => x.ID), "DNR"); donorForm.CreatedBy = userId; donorForm.CreatedAt = DateTime.Now;
+        db.BloodDonors.Add(donorForm); await db.SaveChangesAsync(); donorForm = NewDonor(); await Done("Donor registered successfully.");
+    }
+
+    private async Task SaveDonation()
+    {
+        if (!RequireOperator()) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var donor = await db.BloodDonors.Include(x => x.Donations).SingleOrDefaultAsync(x => x.ID == donationForm.DonorID);
+        if (donor is null) { Fail("Select an eligible donor."); return; }
+        if (donor.IsDeferred && (!donor.DeferredUntil.HasValue || donor.DeferredUntil >= DateTime.Today)) { Fail("This donor is currently deferred."); return; }
+        if (donor.Donations.Any() && (donationForm.CollectedAt - donor.Donations.Max(x => x.CollectedAt)).TotalDays < 90) { Fail("At least 90 days are required between whole-blood donations."); return; }
+        if (donationForm.VolumeMl is < 300 or > 500) { Fail("Collection volume must be between 300 and 500 ml."); return; }
+        donationForm.BagNo = $"BAG-{DateTime.Now:yyyyMMddHHmmssfff}"; donationForm.BloodGroup = donor.BloodGroup; donationForm.Status = "Quarantine"; donationForm.CollectedBy = userId;
+        db.BloodDonations.Add(donationForm); await db.SaveChangesAsync(); donationForm = new(); await Done("Donation collected and placed in quarantine.");
+    }
+
+    private async Task SaveScreening()
+    {
+        if (!RequireOperator()) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var donation = await db.BloodDonations.Include(x => x.Screening).Include(x => x.Components).SingleOrDefaultAsync(x => x.ID == screenForm.DonationID);
+        if (donation is null || donation.Status != "Quarantine" || donation.Screening is not null) { Fail("Select a quarantined, unscreened donation."); return; }
+        var results = new[] { screenForm.HIV, screenForm.HepatitisB, screenForm.HepatitisC, screenForm.Syphilis, screenForm.Malaria };
+        var allNegative = results.All(x => x == "Negative");
+        var screening = new BloodScreening { DonationID = donation.ID, HIV = screenForm.HIV, HepatitisB = screenForm.HepatitisB, HepatitisC = screenForm.HepatitisC, Syphilis = screenForm.Syphilis, Malaria = screenForm.Malaria, Result = allNegative ? "Negative" : results.Any(x => x == "Reactive") ? "Reactive" : "Indeterminate", ScreenedAt = DateTime.Now, ScreenedBy = userId, Remarks = screenForm.Remarks };
+        db.BloodScreenings.Add(screening);
+        if (allNegative)
+        {
+            donation.Status = "Screened";
+            db.BloodComponents.Add(new BloodComponent { DonationID = donation.ID, ComponentNo = $"{donation.BagNo}-{ComponentCode(screenForm.ComponentType)}", ComponentType = screenForm.ComponentType, BloodGroup = donation.BloodGroup, VolumeMl = screenForm.ComponentVolumeMl, PreparedAt = DateTime.Now, ExpiresAt = ExpiryFor(screenForm.ComponentType), Status = "Available", StorageLocation = screenForm.StorageLocation, PreparedBy = userId });
+        }
+        else donation.Status = "Rejected";
+        await db.SaveChangesAsync(); screenForm = new(); await Done(allNegative ? "Screening verified; component released to stock." : "Screening flagged; bag rejected and blocked from stock.");
+    }
+
+    private async Task FindPatient()
+    {
+        if (string.IsNullOrWhiteSpace(requestForm.PatientID)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patient = await db.Registrations.AsNoTracking().SingleOrDefaultAsync(x => x.PatientID == requestForm.PatientID.Trim());
+        if (patient is null) { Fail("Patient ID was not found."); return; }
+        requestForm.PatientName = patient.Name; requestForm.BloodGroup = patient.BloodGroup ?? "";
+        var admission = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patient.PatientID && x.IsAdmitted == true).OrderByDescending(x => x.AdmissionDate).FirstOrDefaultAsync();
+        requestForm.RegNo = admission?.RegNo; message = "Patient loaded."; isError = false;
+    }
+
+    private async Task SaveRequisition()
+    {
+        if (requestForm.UnitsRequested is < 1 or > 20) { Fail("Requested units must be between 1 and 20."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (!await db.Registrations.AnyAsync(x => x.PatientID == requestForm.PatientID)) { Fail("A valid registered Patient ID is required."); return; }
+        requestForm.RequisitionNo = await NextNo(db.BloodRequisitions.Select(x => x.ID), "BRQ"); requestForm.EnteredBy = userId; requestForm.RequestedAt = DateTime.Now; requestForm.Status = "Pending";
+        db.BloodRequisitions.Add(requestForm); await db.SaveChangesAsync(); requestForm = NewRequest(); await Done("Blood requisition submitted.");
+    }
+
+    private Task OnRequestSelected() { matchForm.ComponentID = MatchingComponents.FirstOrDefault()?.ID ?? 0; return Task.CompletedTask; }
+    private async Task SaveCrossMatch()
+    {
+        if (!RequireOperator()) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var req = await db.BloodRequisitions.Include(x => x.CrossMatches).SingleOrDefaultAsync(x => x.ID == matchForm.RequisitionID);
+        var component = await db.BloodComponents.SingleOrDefaultAsync(x => x.ID == matchForm.ComponentID);
+        if (req is null || component is null || component.Status != "Available" || component.ExpiresAt <= DateTime.Now || component.BloodGroup != req.BloodGroup || component.ComponentType != req.ComponentType) { Fail("Select an available, in-date exact-match component."); return; }
+        matchForm.TestedAt = DateTime.Now; matchForm.TestedBy = userId; db.BloodCrossMatches.Add(matchForm);
+        if (matchForm.Result == "Compatible") { component.Status = "Reserved"; var compatibleCount = req.CrossMatches.Count(x => x.Result == "Compatible") + 1; req.Status = compatibleCount >= req.UnitsRequested ? "Matched" : "Partially Matched"; }
+        await db.SaveChangesAsync(); matchForm = new(); await Done("Cross-match result saved.");
+    }
+
+    private void StartIssue(long id) { issueForm = new BloodIssue { CrossMatchID = id, IssuedAt = DateTime.Now }; }
+    private async Task IssueUnit()
+    {
+        if (!RequireOperator()) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var match = await db.BloodCrossMatches.Include(x => x.Component).Include(x => x.Requisition).ThenInclude(x => x!.CrossMatches).ThenInclude(x => x.Issue).SingleOrDefaultAsync(x => x.ID == issueForm.CrossMatchID);
+        if (match is null || match.Result != "Compatible" || match.Component?.Status != "Reserved" || match.Component.ExpiresAt <= DateTime.Now) { Fail("Only a compatible, reserved, in-date unit can be issued."); return; }
+        issueForm.IssuedBy = userId; issueForm.IssuedAt = DateTime.Now; issueForm.Status = "Issued"; db.BloodIssues.Add(issueForm); match.Component.Status = "Issued";
+        var issuedCount = match.Requisition!.CrossMatches.Count(x => x.Issue != null) + 1; match.Requisition.Status = issuedCount >= match.Requisition.UnitsRequested ? "Fulfilled" : "Partially Issued";
+        await db.SaveChangesAsync(); issueForm = new(); await Done("Blood component issued with full traceability.");
+    }
+
+    private async Task ReturnIssue(long id)
+    {
+        if (!RequireOperator()) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var issue = await db.BloodIssues.Include(x => x.CrossMatch).ThenInclude(x => x!.Component).SingleOrDefaultAsync(x => x.ID == id);
+        if (issue is null || issue.Status != "Issued") return;
+        issue.Status = "Returned"; issue.ReturnedAt = DateTime.Now; issue.ReturnedBy = userId; issue.ReturnDisposition = "Discarded";
+        issue.CrossMatch!.Component!.Status = "Discarded";
+        await db.SaveChangesAsync(); await Done("Returned unit recorded and removed from usable stock.");
+    }
+
+    private RenderFragment IssueTable(IEnumerable<BloodIssue> rows) => @<div class="table-wrap"><table><thead><tr><th>Unit</th><th>Patient</th><th>Issued</th><th>Received by</th><th>Status</th><th></th></tr></thead><tbody>
+        @foreach (var x in rows) { <tr><td><b>@x.CrossMatch?.Component?.ComponentNo</b><small>@x.CrossMatch?.Component?.BloodGroup · @x.CrossMatch?.Component?.ComponentType</small></td><td>@x.CrossMatch?.Requisition?.PatientName<small>@x.CrossMatch?.Requisition?.PatientID</small></td><td>@x.IssuedAt.ToString("dd MMM, HH:mm")</td><td>@x.ReceivedBy<small>@x.WardOrLocation</small></td><td><span class="status @StatusClass(x.Status)">@x.Status</span></td><td>@if (x.Status == "Issued" && canOperate) { <button class="mini danger-btn" @onclick="() => ReturnIssue(x.ID)">Record returned / discard</button> }</td></tr> }
+        </tbody></table></div>
+    ;
+
+    private async Task Done(string text) { message = text; isError = false; await LoadAsync(); }
+    private void Fail(string text) { message = text; isError = true; }
+    private bool RequireOperator() { if (canOperate) return true; Fail("Blood Bank Operator or Lab Technician permission is required for this action."); return false; }
+    private void SetTab(string tab) => activeTab = tab;
+    private void OpenStock(string group) { stockGroup = group; activeTab = "stock"; }
+    private static void ChangeScreening(ScreenTest test, ChangeEventArgs e) => test.Set(e.Value?.ToString() ?? "Negative");
+    private static string StatusClass(string value) => value is "Available" or "Screened" or "Fulfilled" or "Compatible" ? "good" : value is "Rejected" or "Expired" or "Discarded" or "Incompatible" ? "bad" : value is "Quarantine" or "Pending" or "Reserved" ? "warn" : "neutral";
+    private static BloodDonor NewDonor() => new() { DateOfBirth = DateTime.Today.AddYears(-25), Sex = "", BloodGroup = "", WeightKg = 50 };
+    private static BloodRequisition NewRequest() => new() { RequiredAt = DateTime.Now.AddHours(4), ComponentType = "Packed Red Cells", Priority = "Routine", UnitsRequested = 1 };
+    private static string ComponentCode(string type) => type switch { "Packed Red Cells" => "PRC", "Platelets" => "PLT", "Fresh Frozen Plasma" => "FFP", "Cryoprecipitate" => "CRYO", _ => "WB" };
+    private static DateTime ExpiryFor(string type) => DateTime.Now.AddDays(type switch { "Platelets" => 5, "Packed Red Cells" => 42, "Whole Blood" => 35, _ => 365 });
+    private static async Task<string> NextNo(IQueryable<long> ids, string prefix) { var next = (await ids.OrderByDescending(x => x).FirstOrDefaultAsync()) + 1; return $"{prefix}-{DateTime.Today:yyyyMMdd}-{next:000000}"; }
+
+    private sealed class ScreeningInput
+    {
+        public long DonationID { get; set; }
+        public string HIV { get; set; } = "Negative"; public string HepatitisB { get; set; } = "Negative"; public string HepatitisC { get; set; } = "Negative"; public string Syphilis { get; set; } = "Negative"; public string Malaria { get; set; } = "Negative";
+        public string ComponentType { get; set; } = "Whole Blood"; public int ComponentVolumeMl { get; set; } = 450; public string StorageLocation { get; set; } = "Blood refrigerator"; public string? Remarks { get; set; }
+    }
+    private sealed record ScreenTest(string Label, Func<string> Get, Action<string> Set);
+}

@@ -1,0 +1,44 @@
+@page "/admin/patient-queries"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@using System.Security.Claims
+
+<PageTitle>Patient Queries | @Branding.HospitalName</PageTitle>
+<div class="queries-page"><header><h1>Patient portal queries</h1><p>Reply to messages sent through the patient portal.</p></header>
+@if (!string.IsNullOrWhiteSpace(message)) { <p role="status">@message</p> }
+@foreach (var query in queries)
+{
+    <article><div class="query-head"><b>@query.Topic · @query.PatientID</b><span>@query.SubmittedAt.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt") · @query.Status</span></div><p>@query.Message</p>
+        @if (!string.IsNullOrWhiteSpace(query.Reply)) { <div class="reply"><b>Reply:</b> @query.Reply</div> }
+        else if (selectedId == query.ID) { <textarea @bind="replyText" maxlength="1000" rows="4" placeholder="Write a reply for this patient"></textarea><button @onclick="() => SendReplyAsync(query.ID)">Send reply</button><button class="secondary" @onclick="() => selectedId = 0">Cancel</button> }
+        else { <button class="secondary" @onclick="() => SelectQuery(query.ID)">Reply</button> }
+    </article>
+}
+@if (queries.Count == 0) { <p>No patient queries yet.</p> }
+</div>
+
+@code {
+    private List<PatientPortalQuery> queries = [];
+    private long selectedId;
+    private string replyText = "", message = "";
+    private void SelectQuery(long id) { selectedId = id; replyText = ""; }
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        queries = await db.PatientPortalQueries.AsNoTracking().OrderBy(x => x.Status == "Open" ? 0 : 1).ThenByDescending(x => x.SubmittedAt).Take(200).ToListAsync();
+    }
+    private async Task SendReplyAsync(long id)
+    {
+        if (string.IsNullOrWhiteSpace(replyText)) { message = "Enter a reply first."; return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = await db.PatientPortalQueries.SingleOrDefaultAsync(x => x.ID == id && x.Status == "Open");
+        if (query is null) { message = "Query is no longer open."; await LoadAsync(); return; }
+        var state = await AuthStateProvider.GetAuthenticationStateAsync();
+        query.Reply = replyText.Trim(); query.Status = "Answered"; query.RepliedAt = DateTime.UtcNow;
+        if (int.TryParse(state.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)) query.RepliedBy = userId;
+        db.AuditLogs.Add(new AuditLog { UserID = query.RepliedBy, UserName = state.User.Identity?.Name ?? "unknown", Action = "Reply", EntityName = "PatientPortalQuery", EntityID = id.ToString(), EventTime = DateTime.UtcNow });
+        await db.SaveChangesAsync(); selectedId = 0; replyText = ""; message = "Reply sent."; await LoadAsync();
+    }
+}

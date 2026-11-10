@@ -12,6 +12,8 @@ public static class RoleNames
     public const string Doctor = "Doctor";
     public const string LabTechnician = "Lab Technician";
     public const string PharmacyOperator = "Pharmacy Operator";
+    public const string BloodBankOperator = "Blood Bank Operator";
+    public const string Patient = "Patient";
     public const string Authorizer = "Authorizer";
 
     public static readonly string[] All =
@@ -26,6 +28,8 @@ public static class RoleNames
         Doctor,
         LabTechnician,
         PharmacyOperator,
+        BloodBankOperator,
+        Patient,
         Authorizer
     ];
 }

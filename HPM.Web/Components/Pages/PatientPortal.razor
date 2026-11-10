@@ -1,0 +1,190 @@
+@page "/patient"
+@attribute [Authorize(Roles = RoleNames.Patient)]
+@layout Layout.LoginLayout
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserManager<AppUser> Users
+@inject IJSRuntime JS
+@using System.Security.Claims
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>My Patient Portal | @Branding.HospitalName</PageTitle>
+
+<div class="patient-portal">
+    <header class="patient-portal-header">
+        <div><small>PATIENT PORTAL</small><h1>@Branding.HospitalName</h1><p>Appointments, reports and care documents</p></div>
+        <form method="post" action="/patient/logout"><AntiforgeryToken /><button type="submit">Sign out</button></form>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(message)) { <div class="patient-portal-message @(isError ? "error" : "success")" role="status">@message</div> }
+
+    @if (loading) { <div class="patient-portal-loading" role="status">Loading your records…</div> }
+    else if (patient is null) { <div class="patient-portal-card">Your patient account could not be verified. Please sign in again or contact reception.</div> }
+    else if (!hasConsent)
+    {
+        <section class="patient-portal-card consent-card">
+            <h2>Before you continue</h2>
+            <p>This portal shows your appointments and medical records. Use a private device, keep your registered phone number confidential, and sign out when you finish. Your portal activity is recorded for security.</p>
+            <label><input type="checkbox" @bind="consentChecked" /> I understand and agree to use the patient portal for my own records.</label>
+            <button class="primary" disabled="@(!consentChecked)" @onclick="AcceptConsentAsync">Continue to my records</button>
+        </section>
+    }
+    else
+    {
+        <section class="patient-portal-welcome"><div><small>WELCOME BACK</small><h2>@patient.Name</h2><span>Patient ID: @patient.PatientID</span></div><div class="patient-portal-stats"><span><b>@appointments.Count</b> Appointments</span><span><b>@reports.Count</b> Reports</span><span><b>@prescriptions.Count</b> Prescriptions</span></div></section>
+        <nav class="patient-portal-tabs" aria-label="Patient portal sections">
+            @foreach (var tab in new[] { ("overview", "Overview"), ("doctors", "Find doctor"), ("appointments", "Appointments"), ("documents", "My documents"), ("queries", "My queries") })
+            { <button class="@(activeTab == tab.Item1 ? "active" : null)" @onclick="() => activeTab = tab.Item1">@tab.Item2</button> }
+        </nav>
+
+        @if (activeTab == "overview")
+        {
+            <div class="patient-portal-grid">
+                <section class="patient-portal-card"><h3>Upcoming appointments</h3>@foreach (var a in appointments.Where(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled").Take(5)) { <div class="record"><b>@DoctorName(a.DoctorID)</b><span>@a.ApptDate.ToString("dd MMM yyyy") · Serial @a.ApptSLNO · @a.Status</span></div> }@if (!appointments.Any(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled")) { <p>No upcoming appointments.</p> }<button class="text-button" @onclick='() => activeTab = "doctors"'>Find a doctor →</button></section>
+                <section class="patient-portal-card"><h3>Available documents</h3><div class="record"><b>Verified diagnostic reports</b><span>@reports.Count available</span></div><div class="record"><b>Signed prescriptions</b><span>@prescriptions.Count available</span></div><div class="record"><b>Discharge documents</b><span>@discharges.Count available</span></div><button class="text-button" @onclick='() => activeTab = "documents"'>Open documents →</button></section>
+            </div>
+        }
+        else if (activeTab == "doctors")
+        {
+            <section class="patient-portal-card"><h3>Find a doctor and book an appointment</h3><input class="portal-search" @bind="doctorSearch" @bind:event="oninput" placeholder="Search doctor name, degree or department" />
+                <div class="doctor-results">@foreach (var doctor in FilteredDoctors.Take(30)) { <article><div><b>@DoctorName(doctor.ID)</b><span>@DepartmentName(doctor.Department) · @doctor.Degree</span><small>Consultation: @(doctor.ConsultationTime ?? "Contact reception for schedule")</small></div><button @onclick="() => SelectDoctor(doctor.ID)">Book</button></article> }</div>
+                @if (selectedDoctorId > 0) { <div class="booking-box"><h4>Book with @DoctorName(selectedDoctorId)</h4><label>Appointment date <InputDate @bind-Value="bookingDate" /></label><button class="primary" @onclick="BookAppointmentAsync">Confirm appointment</button><p>Appointment booking does not collect payment. Reception can confirm timing and fees.</p></div> }
+            </section>
+        }
+        else if (activeTab == "appointments")
+        {
+            <section class="patient-portal-card"><h3>My appointments</h3>@foreach (var a in appointments) { <div class="record"><b>@DoctorName(a.DoctorID) · Serial @a.ApptSLNO</b><span>@a.ApptDate.ToString("dd MMM yyyy") · @a.Status</span></div> }@if (appointments.Count == 0) { <p>No appointments yet.</p> }</section>
+        }
+        else if (activeTab == "documents")
+        {
+            <div class="patient-portal-grid">
+                <section class="patient-portal-card"><h3>Verified diagnostic reports</h3>@foreach (var r in reports) { <div class="record"><b>Report #@r.ID</b><span>@r.TransDate.ToString("dd MMM yyyy")</span><a href="/portal/report/@r.ID" target="_blank">View / print report</a></div> }@if (reports.Count == 0) { <p>No verified, released reports available.</p> }</section>
+                <section class="patient-portal-card"><h3>Signed prescriptions</h3>@foreach (var rx in prescriptions) { <div class="record"><b>Prescription #@rx.ID</b><span>@(rx.SignedAt ?? rx.VisitDate)?.ToString("dd MMM yyyy")</span><a href="/patient/document/prescription/@rx.ID" target="_blank">View / print prescription</a></div> }@if (prescriptions.Count == 0) { <p>No signed prescriptions available.</p> }</section>
+                <section class="patient-portal-card"><h3>Discharge documents</h3>@foreach (var d in discharges) { <div class="record"><b>Discharge #@d.BillNo</b><span>@d.DischargeDate.ToString("dd MMM yyyy")</span><a href="/patient/document/discharge/@d.BillNo" target="_blank">View / print discharge document</a></div> }@if (discharges.Count == 0) { <p>No completed discharge documents available.</p> }</section>
+            </div>
+        }
+        else if (activeTab == "queries")
+        {
+            <div class="patient-portal-grid"><section class="patient-portal-card"><h3>Send a query</h3><label>Topic<select @bind="queryTopic"><option>General</option><option>Appointment</option><option>Report</option><option>Billing</option><option>Other</option></select></label><label>Message<textarea @bind="queryMessage" maxlength="1000" rows="6" placeholder="How can the hospital help? Please do not include urgent medical issues here."></textarea></label><button class="primary" @onclick="SendQueryAsync">Send query</button></section><section class="patient-portal-card"><h3>Previous queries</h3>@foreach (var q in queries) { <div class="record"><b>@q.Topic · @q.Status</b><span>@q.SubmittedAt.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt")</span><p>@q.Message</p>@if (!string.IsNullOrWhiteSpace(q.Reply)) { <p class="query-reply"><b>Hospital reply:</b> @q.Reply</p> }</div> }@if (queries.Count == 0) { <p>No queries submitted.</p> }</section></div>
+        }
+    }
+</div>
+
+@code {
+    private Registration? patient;
+    private bool loading = true, hasConsent, consentChecked, isError;
+    private string activeTab = "overview", message = "", doctorSearch = "", queryTopic = "General", queryMessage = "";
+    private int selectedDoctorId, userId;
+    private DateTime bookingDate = DateTime.Today.AddDays(1);
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<int, string> departments = [];
+    private List<DoctorAppointment> appointments = [];
+    private List<Prescription> prescriptions = [];
+    private List<CashMemoDInvestigation> reports = [];
+    private List<IpdFinalBill> discharges = [];
+    private List<PatientPortalQuery> queries = [];
+    private IEnumerable<DoctorsProfile> FilteredDoctors => doctors.Where(x => string.IsNullOrWhiteSpace(doctorSearch) || (x.Name?.Contains(doctorSearch, StringComparison.OrdinalIgnoreCase) ?? false) || (x.Degree?.Contains(doctorSearch, StringComparison.OrdinalIgnoreCase) ?? false) || DepartmentName(x.Department).Contains(doctorSearch, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out userId);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var patientId = await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db);
+        if (patientId is null) { patient = null; loading = false; return; }
+        patient = await db.Registrations.AsNoTracking().Where(x => x.PatientID == patientId).SelectWithoutPhoto().SingleOrDefaultAsync();
+        hasConsent = await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patientId && x.Version == "2026-11");
+        if (patient is null || !hasConsent) { loading = false; return; }
+
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        departments = await db.Departments.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+        appointments = await db.DoctorAppointments.AsNoTracking().Where(x => x.PatientID == patientId).OrderByDescending(x => x.ApptDate).Take(100).ToListAsync();
+        prescriptions = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).Where(x => x.PatientID == patientId && x.Status == "Signed").OrderByDescending(x => x.SignedAt).Take(50).ToListAsync();
+
+        var memos = await db.EmergencyMemos.AsNoTracking().Where(x => x.PatientID == patientId && (x.ModuleID == 2 || x.ModuleID == 11)).OrderByDescending(x => x.TransDate).Take(100).ToListAsync();
+        var memoIds = memos.Select(x => x.ID).ToList();
+        var results = await db.LabTestResults.AsNoTracking().Where(x => memoIds.Contains(x.MemoID) && x.Status == "Active").ToListAsync();
+        reports = memos.Where(x =>
+        {
+            var ownResults = results.Where(r => r.MemoID == x.ID).ToList();
+            var released = x.Paid >= x.Total - x.Discount - 0.01m || (!string.IsNullOrWhiteSpace(x.Remarks) && (x.Remarks.Contains("[AUTH_RELEASE]", StringComparison.OrdinalIgnoreCase) || x.Remarks.Contains("Authorized Release", StringComparison.OrdinalIgnoreCase)));
+            return released && ownResults.Count > 0 && ownResults.All(r => r.IsVerified && !string.IsNullOrWhiteSpace(r.ResultValue));
+        }).ToList();
+
+        var admissionIds = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patientId).Select(x => x.ID).ToListAsync();
+        var completedOrders = await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x => admissionIds.Contains(x.AdmissionID) && x.Status == "Completed").OrderByDescending(x => x.OrderedAt).ToListAsync();
+        var completedOrderIds = completedOrders.Select(x => (long?)x.ID).ToList();
+        discharges = await db.IpdFinalBills.AsNoTracking().Where(x => admissionIds.Contains(x.AdmissionID) && completedOrderIds.Contains(x.MedicalDischargeOrderID)).OrderByDescending(x => x.DischargeDate).Take(50).ToListAsync();
+        queries = await db.PatientPortalQueries.AsNoTracking().Where(x => x.PatientID == patientId).OrderByDescending(x => x.SubmittedAt).Take(50).ToListAsync();
+        loading = false;
+    }
+
+    private async Task AcceptConsentAsync()
+    {
+        if (!consentChecked || patient is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db) != patient.PatientID) return;
+        if (!await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patient.PatientID && x.Version == "2026-11"))
+        {
+            db.PatientPortalConsents.Add(new PatientPortalConsent { PatientID = patient.PatientID, UserID = userId, Version = "2026-11" });
+            db.AuditLogs.Add(new AuditLog { UserID = userId, UserName = patient.PatientID, Action = "Consent", EntityName = "PatientPortal", EntityID = patient.PatientID, EventTime = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+        await LoadAsync();
+    }
+
+    private void SelectDoctor(int id) { selectedDoctorId = id; activeTab = "doctors"; }
+    private async Task BookAppointmentAsync()
+    {
+        if (patient is null || selectedDoctorId <= 0 || bookingDate.Date < DateTime.Today || bookingDate.Date > DateTime.Today.AddDays(90)) { Fail("Choose an appointment date within the next 90 days."); return; }
+        var patientId = patient.PatientID;
+        try
+        {
+            await using var strategyDb = await DbFactory.CreateDbContextAsync();
+            await strategyDb.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+                if (await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db) != patientId || !await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patientId && x.Version == "2026-11")) throw new InvalidOperationException("Your patient session is no longer valid.");
+                var doctor = await db.Doctors.AsNoTracking().SingleOrDefaultAsync(x => x.ID == selectedDoctorId && x.IsActive);
+                if (doctor is null) throw new InvalidOperationException("Selected doctor is not available.");
+                await using var transaction = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+                await SqlServerConcurrency.AcquireTransactionLockAsync(db, $"HPM:Appointment:{selectedDoctorId}:{bookingDate:yyyyMMdd}");
+                var dayEnd = bookingDate.Date.AddDays(1);
+                if (await db.DoctorAppointments.AnyAsync(x => x.PatientID == patientId && x.DoctorID == selectedDoctorId && x.ApptDate >= bookingDate.Date && x.ApptDate < dayEnd && x.Status != "Cancelled")) throw new InvalidOperationException("You already have an appointment with this doctor on this date.");
+                var serial = (await db.DoctorAppointments.Where(x => x.DoctorID == selectedDoctorId && x.ApptDate >= bookingDate.Date && x.ApptDate < dayEnd).MaxAsync(x => (int?)x.ApptSLNO) ?? 0) + 1;
+                var entity = new DoctorAppointment { PatientID = patientId, Name = patient!.Name, Sex = patient.Sex, ContactNo = patient.Contact, DoctorID = selectedDoctorId, ApptDate = bookingDate.Date, ApptSLNO = serial, Status = "Booked", EnteredBy = userId, TransDate = DateTime.Now };
+                db.DoctorAppointments.Add(entity);
+                await db.SaveChangesAsync();
+                db.AuditLogs.Add(new AuditLog { UserID = userId, UserName = patientId, Action = "Create", EntityName = "PatientPortalAppointment", EntityID = entity.ID.ToString(), EventTime = DateTime.UtcNow });
+                await db.SaveChangesAsync();
+                await transaction.CommitAsync();
+            });
+            message = "Appointment booked successfully."; isError = false; activeTab = "appointments"; await LoadAsync();
+        }
+        catch (Exception ex) { Fail(ex is InvalidOperationException ? ex.Message : "Could not book the appointment. Please try again."); }
+    }
+
+    private async Task SendQueryAsync()
+    {
+        if (patient is null || string.IsNullOrWhiteSpace(queryMessage) || queryMessage.Trim().Length > 1000) { Fail("Enter a message of up to 1000 characters."); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db) != patient.PatientID || !await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patient.PatientID && x.Version == "2026-11")) { Fail("Your patient session is no longer valid."); return; }
+        var query = new PatientPortalQuery { PatientID = patient.PatientID, Topic = queryTopic, Message = queryMessage.Trim(), SubmittedAt = DateTime.UtcNow };
+        db.PatientPortalQueries.Add(query); await db.SaveChangesAsync();
+        db.AuditLogs.Add(new AuditLog { UserID = userId, UserName = patient.PatientID, Action = "Create", EntityName = "PatientPortalQuery", EntityID = query.ID.ToString(), EventTime = DateTime.UtcNow }); await db.SaveChangesAsync();
+        queryMessage = ""; message = "Your query has been sent to the hospital."; isError = false; await LoadAsync();
+    }
+
+    private string DoctorName(int id) { var doctor = doctors.FirstOrDefault(x => x.ID == id); return doctor is null ? $"Doctor #{id}" : $"{doctor.Title} {doctor.Name}".Trim(); }
+    private string DepartmentName(int? id) => id.HasValue && departments.TryGetValue(id.Value, out var name) ? name : "General";
+    private void Fail(string text) { message = text; isError = true; }
+}

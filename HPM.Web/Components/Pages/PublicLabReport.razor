@@ -1,12 +1,15 @@
 @page "/portal/report"
 @page "/portal/report/{Id:long}"
-@attribute [AllowAnonymous]
+@attribute [Authorize(Policy = "PortalReportAccess")]
 @layout Layout.LoginLayout
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserManager<AppUser> Users
+@using HPM.Web.Security
 @using HPM.Web.Data
 @using HPM.Web.Data.Entities
 @using HPM.Web.Localization
@@ -713,6 +716,14 @@
     {
         errorMessage = "";
         var q = searchQuery?.Trim() ?? "";
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (principal.IsInRole(RoleNames.Patient))
+        {
+            await using var accessDb = await DbFactory.CreateDbContextAsync();
+            var ownId = await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, accessDb);
+            if (ownId is null || !await accessDb.PatientPortalConsents.AnyAsync(x => x.PatientID == ownId && x.Version == "2026-11")) { errorMessage = "Your patient session is no longer valid."; return; }
+            q = ownId;
+        }
         if (string.IsNullOrWhiteSpace(q))
         {
             errorMessage = isBangla
@@ -761,11 +772,12 @@
             // - PatientID matches query or any matched patient's PatientID
             // - Contact matches query or any matched patient's Contact
             // - PatientName matches query
-            var rawMemos = await query
-                .Where(m => (parsedNum > 0 && m.ID == parsedNum) ||
+            var rawMemos = await (principal.IsInRole(RoleNames.Patient)
+                ? query.Where(m => m.PatientID == q)
+                : query.Where(m => (parsedNum > 0 && m.ID == parsedNum) ||
                             (m.PatientID != null && (m.PatientID == q || m.PatientID == cleanQ || (patientIds.Count > 0 && patientIds.Contains(m.PatientID)))) ||
                             (m.Contact != null && (m.Contact == q || m.Contact == cleanQ || (patientContacts.Count > 0 && patientContacts.Contains(m.Contact)))) ||
-                            (q.Length >= 3 && m.PatientName.ToLower().Contains(q.ToLower())))
+                            (q.Length >= 3 && m.PatientName.ToLower().Contains(q.ToLower()))))
                 .OrderByDescending(m => m.TransDate)
                 .ToListAsync();
 
@@ -781,14 +793,14 @@
             // Fetch test results for these memos to compute status
             var memoIds = rawMemos.Select(m => m.ID).ToList();
             var allResultsForMemos = await db.LabTestResults.AsNoTracking()
-                .Where(r => memoIds.Contains(r.MemoID))
+                .Where(r => memoIds.Contains(r.MemoID) && r.Status == "Active")
                 .ToListAsync();
 
             matchedReports = rawMemos.Select(m =>
             {
                 var mResults = allResultsForMemos.Where(r => r.MemoID == m.ID).ToList();
                 var hasEntered = mResults.Any(r => !string.IsNullOrWhiteSpace(r.ResultValue));
-                var isVer = mResults.Count > 0 && mResults.All(r => r.IsVerified);
+                var isVer = mResults.Count > 0 && mResults.All(r => r.IsVerified && !string.IsNullOrWhiteSpace(r.ResultValue));
                 var isAuth = !string.IsNullOrWhiteSpace(m.Remarks) &&
                              (m.Remarks.Contains("[AUTH_RELEASE]", StringComparison.OrdinalIgnoreCase) ||
                               m.Remarks.Contains("Authorized Release", StringComparison.OrdinalIgnoreCase));
@@ -809,7 +821,7 @@
                     DoctorID = m.DoctorID,
                     TestNames = m.Items.Select(i => ServiceName(i.TestID)).ToList(),
                     HasResults = hasEntered,
-                    IsVerified = isVer || (hasEntered && mResults.Any(r => r.IsVerified))
+                    IsVerified = isVer
                 };
             }).OrderByDescending(m => m.TransDate).ToList();
 
@@ -884,6 +896,19 @@
                 .Include(x => x.Items)
                 .FirstOrDefaultAsync(x => x.ID == memoId && (x.ModuleID == 2 || x.ModuleID == 11));
 
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            if (principal.IsInRole(RoleNames.Patient))
+            {
+                var ownId = await PatientPortalAccess.CurrentPatientIdAsync(principal, Users, db);
+                if (ownId is null || memo?.PatientID != ownId || !await db.PatientPortalConsents.AnyAsync(x => x.PatientID == ownId && x.Version == "2026-11"))
+                {
+                    memo = null;
+                    errorMessage = "This report is not available in your account.";
+                    isLoading = false;
+                    return;
+                }
+            }
+
             if (memo == null)
             {
                 errorMessage = isBangla
@@ -911,7 +936,7 @@
                 .ToListAsync();
 
             allResults = await db.LabTestResults.AsNoTracking()
-                .Where(x => x.MemoID == memoId)
+                .Where(x => x.MemoID == memoId && x.Status == "Active")
                 .ToListAsync();
 
             // Check sample status
@@ -928,15 +953,21 @@
             expectedDeliveryDate = memo.TransDate.AddHours(24);
 
             // Determine if published: must have results and at least verified or results entered
-            var hasEnteredResults = allResults.Count > 0 && allResults.Any(x => !string.IsNullOrWhiteSpace(x.ResultValue));
+            var hasEnteredResults = allResults.Count > 0 && allResults.All(x => !string.IsNullOrWhiteSpace(x.ResultValue));
             var areResultsVerified = allResults.Count > 0 && allResults.All(x => x.IsVerified);
 
-            isPublished = hasEnteredResults && (areResultsVerified || allResults.Any(x => x.IsVerified));
+            isPublished = hasEnteredResults && areResultsVerified;
 
             if (isPublished)
             {
                 reportReleaseDate = allResults.Where(x => x.ReportedAt.HasValue).Select(x => x.ReportedAt).Max() ?? DateTime.Now;
                 verifyingDoctorId = allResults.Where(x => x.ReportedBy.HasValue).Select(x => x.ReportedBy).FirstOrDefault() ?? memo.DoctorID;
+                if (canViewReport && principal.IsInRole(RoleNames.Patient))
+                {
+                    var portalUser = await Users.GetUserAsync(principal);
+                    db.AuditLogs.Add(new AuditLog { UserID = portalUser?.Id, UserName = memo.PatientID ?? "unknown", Action = "View", EntityName = "PatientPortalReport", EntityID = memo.ID.ToString(), EventTime = DateTime.UtcNow });
+                    await db.SaveChangesAsync();
+                }
             }
         }
         catch (Exception ex)
