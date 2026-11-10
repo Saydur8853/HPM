@@ -1,0 +1,1150 @@
+@page "/app-owner"
+@attribute [Authorize(Roles = RoleNames.AppOwner)]
+@layout Layout.AppOwnerLayout
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject UserManager<AppUser> Users
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
+@using System.Security.Cryptography
+
+<PageTitle>App Owner Console | @Branding.HospitalName</PageTitle>
+
+<div class="owner-page">
+    <!-- Top Global App Owner Bar -->
+    <header class="owner-header">
+        <div class="owner-header-inner">
+            <div class="owner-brand">
+                <span class="owner-brand-mark">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" />
+                    </svg>
+                </span>
+                <div class="owner-brand-text">
+                    <div class="owner-brand-badge">
+                        <span class="owner-eyebrow">APP OWNER CONSOLE</span>
+                        <span class="owner-live-tag"><span class="pulse-dot"></span> MASTER ENVIRONMENT</span>
+                    </div>
+                    <strong class="owner-hospital-title">@Branding.HospitalName</strong>
+                </div>
+            </div>
+
+            <div class="owner-header-actions">
+                <a href="/" target="_blank" class="owner-btn-portal" title="Open Hospital Web App in a new tab">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                    <span>Hospital Portal</span>
+                </a>
+                <div class="owner-user-pill">
+                    <span class="owner-user-avatar">AO</span>
+                    <span class="owner-user-name">App Owner</span>
+                </div>
+                <form method="post" action="/account/logout">
+                    <AntiforgeryToken />
+                    <button class="owner-signout" type="submit" title="Sign out of App Owner Console">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                        <span>Sign out</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </header>
+
+    <div class="owner-content">
+        <!-- Modern Executive Hero Banner -->
+        <section class="owner-hero">
+            <div class="owner-hero-left">
+                <div class="owner-hero-badge">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    <span>HOSPITAL LICENSING & SUBSCRIPTION CENTER</span>
+                </div>
+                <h1>Hospital Package & License Management</h1>
+                <p>Configure active hospital modules, set custom recurring pricing, manage the hospital owner credentials, and issue verified subscription invoices.</p>
+            </div>
+
+            @if (!loading)
+            {
+                <div class="owner-hero-stats">
+                    <div class="owner-hero-stat-card">
+                        <div class="stat-icon-wrapper">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        </div>
+                        <div class="stat-meta">
+                            <span class="stat-label">Active Modules</span>
+                            <div class="stat-value-group">
+                                <strong>@modules.Count(x => x.Selected)</strong>
+                                <span class="stat-total">/ @modules.Count</span>
+                            </div>
+                            <div class="stat-progress">
+                                <div class="stat-progress-bar" style="width: @(modules.Count == 0 ? 0 : (modules.Count(x => x.Selected) * 100 / modules.Count))%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="owner-hero-stat-card">
+                        <div class="stat-icon-wrapper">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        </div>
+                        <div class="stat-meta">
+                            <span class="stat-label">Billing Cycle</span>
+                            <strong class="stat-highlight">@license.BillingCycle</strong>
+                            <span class="stat-sub">
+                                @if (license.SubscriptionExpiresAt.HasValue)
+                                {
+                                    var days = (license.SubscriptionExpiresAt.Value.Date - DateTime.Today).Days;
+                                    @(days > 0 ? $"{days} days left" : "Expired")
+                                }
+                                else
+                                {
+                                    <span>Not set</span>
+                                }
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="owner-hero-stat-card highlight">
+                        <div class="stat-icon-wrapper">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                        </div>
+                        <div class="stat-meta">
+                            <span class="stat-label">Current Rate (@license.BillingCycle)</span>
+                            <strong>৳ @CurrentCycleRate.ToString("N0")</strong>
+                            <span class="stat-sub">৳ @modules.Where(x => x.Selected).Sum(x => x.MonthlyPrice).ToString("N0")/mo equivalent</span>
+                        </div>
+                    </div>
+                </div>
+            }
+        </section>
+
+        <!-- Notification Banner -->
+        @if (!string.IsNullOrWhiteSpace(message))
+        {
+            <div class="owner-message-banner @(isError ? "error" : "success")" role="alert">
+                <div class="owner-message-icon">
+                    @if (isError)
+                    {
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    }
+                    else
+                    {
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    }
+                </div>
+                <div class="owner-message-text">@message</div>
+                <button type="button" class="owner-message-close" @onclick="() => message = string.Empty" aria-label="Dismiss message">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+        }
+
+        @if (loading)
+        {
+            <div class="owner-card owner-loading" role="status">
+                <div class="loading-spinner"></div>
+                <p>Loading hospital licensing data and subscriptions...</p>
+            </div>
+        }
+        else
+        {
+            <!-- Quick Navigation Jump Bar -->
+            <nav class="owner-quick-nav">
+                <a href="#section-owner" class="quick-nav-pill">
+                    <span class="pill-num">01</span> Owner Account
+                </a>
+                <a href="#section-financial" class="quick-nav-pill">
+                    <span class="pill-num">02</span> Financial Overview
+                </a>
+                <a href="#section-modules" class="quick-nav-pill">
+                    <span class="pill-num">03</span> Licensed Modules & Prices
+                </a>
+                <a href="#section-invoices" class="quick-nav-pill">
+                    <span class="pill-num">04</span> Subscription Invoices
+                </a>
+            </nav>
+
+            <div class="owner-top-grid">
+                <!-- STEP 01: HOSPITAL OWNER ACCOUNT -->
+                <section id="section-owner" class="owner-card owner-account-card">
+                    <div class="owner-card-heading">
+                        <span class="owner-step-badge">
+                            <span class="step-badge-num">01</span>
+                        </span>
+                        <div class="heading-with-actions">
+                            <div>
+                                <h2>Hospital Owner Credentials</h2>
+                                <p>Manage primary login username and password for this hospital administrator.</p>
+                            </div>
+                            @if (hospitalOwnerName is not null && !string.IsNullOrEmpty(ownerPassword))
+                            {
+                                <button type="button" class="btn-cred-tool @(copiedCredentials ? "copied" : "")" @onclick="CopyCredentialsAsync" title="Copy User ID and Password to clipboard">
+                                    @if (copiedCredentials)
+                                    {
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                        <span>Copied!</span>
+                                    }
+                                    else
+                                    {
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                        <span>Copy Login Info</span>
+                                    }
+                                </button>
+                            }
+                        </div>
+                    </div>
+
+                    @if (hospitalOwnerName is not null)
+                    {
+                        <div class="owner-verified-strip">
+                            <div class="verified-strip-left">
+                                <span class="verified-dot"></span>
+                                <span class="verified-lbl">Current Owner:</span>
+                                <strong class="verified-user">@hospitalOwnerName</strong>
+                            </div>
+                            <span class="role-chip">Primary Administrator</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="owner-notice-box">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            <div>
+                                <strong>No Hospital Owner Created Yet</strong>
+                                <span>Enter User ID and Password below to provision the hospital administrator credentials.</span>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="owner-fields-aligned">
+                        <div class="form-field-aligned">
+                            <div class="field-header-row">
+                                <label for="ownerUserId">User ID (Username)</label>
+                                <span class="field-pill-note">Editable</span>
+                            </div>
+                            <div class="input-with-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                                <input id="ownerUserId" @bind="ownerUserName" maxlength="50" autocomplete="off" placeholder="e.g. hospital_owner" />
+                            </div>
+                            <span class="field-bottom-hint">Primary username for hospital login</span>
+                        </div>
+
+                        <div class="form-field-aligned">
+                            <div class="field-header-row">
+                                <label for="ownerPass">Login Password</label>
+                                <button type="button" class="btn-sub-link" @onclick="GeneratePassword" title="Generate strong random password">🎲 Suggest Strong</button>
+                            </div>
+                            <div class="input-with-icon input-with-right-tools">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                <input id="ownerPass" type="@(showPassword ? "text" : "password")" @bind="ownerPassword" autocomplete="off" placeholder="Enter owner password..." />
+                                <button type="button" class="btn-toggle-pw" @onclick="() => showPassword = !showPassword" tabindex="-1" title="Toggle password visibility">
+                                    @if (showPassword)
+                                    {
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+                                        <span>Hide</span>
+                                    }
+                                    else
+                                    {
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                        <span>Show</span>
+                                    }
+                                </button>
+                            </div>
+                            <span class="field-bottom-hint">Min 8 chars with uppercase, number & symbol. Copy after saving; it cannot be recovered later.</span>
+                        </div>
+                    </div>
+
+                    <div class="card-footer-action">
+                        <button class="owner-btn-primary" @onclick="SaveHospitalOwnerAsync">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                            <span>@(hospitalOwnerName is null ? "Create Hospital Owner" : "Save Credentials (Update ID & Password)")</span>
+                        </button>
+                    </div>
+                </section>
+
+                <!-- STEP 02: FINANCIAL OVERVIEW -->
+                <section id="section-financial" class="owner-card owner-overview-card">
+                    <div class="owner-card-heading">
+                        <span class="owner-step-badge">
+                            <span class="step-badge-num">02</span>
+                        </span>
+                        <div>
+                            <h2>Package Overview & Pricing</h2>
+                            <p>Calculated figures for current module selection and infrastructure add-ons.</p>
+                        </div>
+                    </div>
+
+                    <div class="owner-totals-grid">
+                        <div class="totals-tile monthly">
+                            <div class="tile-tag">MONTHLY RECURRING</div>
+                            <strong class="tile-val">৳ @modules.Where(x => x.Selected).Sum(x => x.MonthlyPrice).ToString("N2")</strong>
+                            <span class="tile-sub">Per month for @modules.Count(x => x.Selected) active modules</span>
+                        </div>
+                        <div class="totals-tile yearly">
+                            <div class="tile-tag">ANNUAL RECURRING</div>
+                            <strong class="tile-val">৳ @modules.Where(x => x.Selected).Sum(x => x.YearlyPrice).ToString("N2")</strong>
+                            <span class="tile-sub">Per year for @modules.Count(x => x.Selected) active modules</span>
+                        </div>
+                    </div>
+
+                    <div class="infra-mini-summary">
+                        <div class="infra-item">
+                            <span class="infra-label">Hosting Cost:</span>
+                            <strong class="infra-val">৳ @license.HostingCost.ToString("N2")</strong>
+                            @if (license.HostingExpiresAt.HasValue)
+                            {
+                                <span class="infra-exp">Expires: @license.HostingExpiresAt.Value.ToString("dd MMM yyyy")</span>
+                            }
+                        </div>
+                        <div class="infra-item">
+                            <span class="infra-label">Domain Cost:</span>
+                            <strong class="infra-val">৳ @license.DomainCost.ToString("N2")</strong>
+                            @if (license.DomainExpiresAt.HasValue)
+                            {
+                                <span class="infra-exp">Expires: @license.DomainExpiresAt.Value.ToString("dd MMM yyyy")</span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="owner-core-notice">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        <span>Prices are billed in Bangladeshi Taka (BDT). <strong>Patient Registration</strong> is included as the core platform at ৳0.00 base.</span>
+                    </div>
+                </section>
+            </div>
+
+            <!-- STEP 03: LICENSED MODULES & PRICES -->
+            <section id="section-modules" class="owner-card owner-package-card">
+                <div class="owner-card-heading">
+                    <span class="owner-step-badge">
+                        <span class="step-badge-num">03</span>
+                    </span>
+                    <div class="heading-with-actions">
+                        <div>
+                            <h2>Licensed Modules & Pricing Rules</h2>
+                            <p>Toggle individual modules for this hospital and set custom monthly / yearly subscription prices.</p>
+                        </div>
+                        <div class="package-presets">
+                            <button type="button" class="btn-preset" @onclick="SelectAllModules" title="Enable all available modules">Select All</button>
+                            <button type="button" class="btn-preset" @onclick="SelectStandardPack" title="Enable recommended standard clinical package">Standard Clinical</button>
+                            <button type="button" class="btn-preset" @onclick="ResetToCoreOnly" title="Disable optional modules, keep core">Core Only</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Module Filter & Search Toolbar -->
+                <div class="modules-filter-toolbar">
+                    <div class="category-tabs">
+                        <button type="button" class="cat-tab @(selectedCategory == "all" ? "active" : "")" @onclick='() => selectedCategory = "all"'>
+                            All Modules (@modules.Count)
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "clinical" ? "active" : "")" @onclick='() => selectedCategory = "clinical"'>
+                            Clinical & OPD
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "inpatient" ? "active" : "")" @onclick='() => selectedCategory = "inpatient"'>
+                            IPD & Surgery
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "diagnostics" ? "active" : "")" @onclick='() => selectedCategory = "diagnostics"'>
+                            Diagnostics
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "pharmacy_store" ? "active" : "")" @onclick='() => selectedCategory = "pharmacy_store"'>
+                            Pharmacy & Stores
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "finance_hr" ? "active" : "")" @onclick='() => selectedCategory = "finance_hr"'>
+                            Accounts & HRM
+                        </button>
+                        <button type="button" class="cat-tab @(selectedCategory == "reports_portal" ? "active" : "")" @onclick='() => selectedCategory = "reports_portal"'>
+                            Reports & Portal
+                        </button>
+                    </div>
+
+                    <div class="module-search-box">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" @bind="searchFilter" @bind:event="oninput" placeholder="Search module by name..." />
+                        @if (!string.IsNullOrEmpty(searchFilter))
+                        {
+                            <button type="button" class="btn-clear-search" @onclick='() => searchFilter = ""'>✕</button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Modules Table -->
+                <div class="owner-table-wrapper">
+                    <div class="owner-module-head" aria-hidden="true">
+                        <span class="col-module">Module</span>
+                        <span class="col-dependency">Dependency</span>
+                        <span class="col-price">Monthly (BDT)</span>
+                        <span class="col-price">Yearly (BDT)</span>
+                    </div>
+
+                    <div class="owner-modules">
+                        @foreach (var row in FilteredModules)
+                        {
+                            var requiredBy = modules.Where(x => x.Selected && x.Definition.Dependencies.Contains(row.Definition.Code)).Select(x => x.Definition.Name).ToList();
+                            var isCore = row.Definition.Code == LicensedModules.Registration;
+                            var isLocked = isCore || requiredBy.Count > 0;
+
+                            <div class="owner-module-row @(row.Selected ? "selected" : "") @(isLocked ? "locked" : "")">
+                                <div class="col-module">
+                                    <label class="custom-toggle-label">
+                                        <input type="checkbox" checked="@row.Selected" disabled="@isLocked" @onchange="e => Toggle(row, e.Value is true)" />
+                                        <span class="custom-switch-slider"></span>
+                                        <div class="module-info-group">
+                                            <span class="module-icon">@GetModuleEmoji(row.Definition.Code)</span>
+                                            <strong class="module-name" title="@row.Definition.Name">@row.Definition.Name</strong>
+                                        </div>
+                                    </label>
+                                </div>
+
+                                <div class="col-dependency">
+                                    @if (isCore)
+                                    {
+                                        <span class="badge-dep core">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                            Platform Core (Included)
+                                        </span>
+                                    }
+                                    else if (requiredBy.Count > 0)
+                                    {
+                                        <span class="badge-dep required-by" title="Required by @string.Join(", ", requiredBy)">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                                            Required by: @string.Join(", ", requiredBy.Take(2))@(requiredBy.Count > 2 ? $" +{requiredBy.Count - 2}" : "")
+                                        </span>
+                                    }
+                                    else if (row.Definition.Dependencies.Length > 0)
+                                    {
+                                        <span class="badge-dep depends-on" title="Requires: @string.Join(", ", row.Definition.Dependencies.Select(x => LicensedModules.ByCode.TryGetValue(x, out var dep) ? dep.Name : x))">
+                                            Requires: @string.Join(", ", row.Definition.Dependencies.Select(x => LicensedModules.ByCode.TryGetValue(x, out var dep) ? dep.Name : x))
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge-dep independent">No dependency</span>
+                                    }
+                                </div>
+
+                                <div class="col-price">
+                                    <div class="price-input-group">
+                                        <span class="currency-tag">৳</span>
+                                        <input type="number" min="0" step="0.01" aria-label="Monthly price for @row.Definition.Name" @bind="row.MonthlyPrice" />
+                                    </div>
+                                </div>
+
+                                <div class="col-price">
+                                    <div class="price-input-group">
+                                        <span class="currency-tag">৳</span>
+                                        <input type="number" min="0" step="0.01" aria-label="Yearly price for @row.Definition.Name" @bind="row.YearlyPrice" />
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- Subscription Term & Cloud Hosting Sub-Panels -->
+                <div class="owner-config-grid">
+                    <div class="config-panel">
+                        <div class="config-header">
+                            <span class="config-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            </span>
+                            <div>
+                                <h3>Hospital Subscription Terms</h3>
+                                <p>Cadence and validity period for the hospital's active license.</p>
+                            </div>
+                        </div>
+
+                        <div class="config-fields">
+                            <div class="form-field">
+                                <label>Billing Cycle</label>
+                                <div class="cycle-pill-group">
+                                    <button type="button" class="cycle-pill @(license.BillingCycle == "Monthly" ? "active" : "")" @onclick='() => license.BillingCycle = "Monthly"'>
+                                        Monthly
+                                    </button>
+                                    <button type="button" class="cycle-pill @(license.BillingCycle == "Yearly" ? "active" : "")" @onclick='() => license.BillingCycle = "Yearly"'>
+                                        Yearly
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="form-field">
+                                <label for="purchaseDate">Purchase / Period Start</label>
+                                <input id="purchaseDate" type="date" @bind="license.PurchasedAt" @bind:format="yyyy-MM-dd" />
+                            </div>
+
+                            <div class="form-field">
+                                <div class="label-with-quick">
+                                    <label for="expiryDate">Subscription Expiry</label>
+                                    <div class="quick-date-chips">
+                                        <button type="button" class="date-chip" @onclick="() => AddMonthsToExpiry(1)">+1 Mo</button>
+                                        <button type="button" class="date-chip" @onclick="() => AddMonthsToExpiry(6)">+6 Mo</button>
+                                        <button type="button" class="date-chip" @onclick="() => AddYearsToExpiry(1)">+1 Yr</button>
+                                    </div>
+                                </div>
+                                <input id="expiryDate" type="date" @bind="license.SubscriptionExpiresAt" @bind:format="yyyy-MM-dd" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-panel">
+                        <div class="config-header">
+                            <span class="config-icon">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                            </span>
+                            <div>
+                                <h3>Cloud Hosting & Domain Costs</h3>
+                                <p>Track server and domain maintenance costs and renewal expiration dates.</p>
+                            </div>
+                        </div>
+
+                        <div class="config-fields two-col">
+                            <div class="form-field">
+                                <label for="hostingCost">Hosting Cost (BDT)</label>
+                                <div class="price-input-group">
+                                    <span class="currency-tag">৳</span>
+                                    <input id="hostingCost" type="number" min="0" step="0.01" @bind="license.HostingCost" />
+                                </div>
+                            </div>
+
+                            <div class="form-field">
+                                <label for="hostingExp">Hosting Expiry</label>
+                                <input id="hostingExp" type="date" @bind="license.HostingExpiresAt" @bind:format="yyyy-MM-dd" />
+                            </div>
+
+                            <div class="form-field">
+                                <label for="domainCost">Domain Cost (BDT)</label>
+                                <div class="price-input-group">
+                                    <span class="currency-tag">৳</span>
+                                    <input id="domainCost" type="number" min="0" step="0.01" @bind="license.DomainCost" />
+                                </div>
+                            </div>
+
+                            <div class="form-field">
+                                <label for="domainExp">Domain Expiry</label>
+                                <input id="domainExp" type="date" @bind="license.DomainExpiresAt" @bind:format="yyyy-MM-dd" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Save Action Footer Bar -->
+                <div class="owner-sticky-footer">
+                    <div class="save-bar-summary">
+                        <span class="summary-count">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            <strong>@modules.Count(x => x.Selected)</strong> modules active
+                        </span>
+                        <span class="summary-sep">·</span>
+                        <span class="summary-amount">Monthly Total: <strong>৳ @modules.Where(x => x.Selected).Sum(x => x.MonthlyPrice).ToString("N2")</strong></span>
+                        <span class="summary-sep">·</span>
+                        <span class="summary-amount">Yearly Total: <strong>৳ @modules.Where(x => x.Selected).Sum(x => x.YearlyPrice).ToString("N2")</strong></span>
+                    </div>
+
+                    <button class="owner-btn-save" @onclick="SaveLicenseAsync">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                        <span>Save Package & Prices</span>
+                    </button>
+                </div>
+            </section>
+
+            <!-- STEP 04: SUBSCRIPTION INVOICES -->
+            <section id="section-invoices" class="owner-card owner-invoices-card">
+                <div class="owner-card-heading">
+                    <span class="owner-step-badge">
+                        <span class="step-badge-num">04</span>
+                    </span>
+                    <div>
+                        <h2>Subscription Invoices & Billing</h2>
+                        <p>Invoices snapshot the saved package rates for the billing period. Include hosting or domain costs when applicable.</p>
+                    </div>
+                </div>
+
+                <!-- Issue New Invoice Creator -->
+                <div class="invoice-creator-box">
+                    <div class="creator-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        <span>Issue New Official Invoice</span>
+                    </div>
+
+                    <div class="creator-controls">
+                        <div class="form-field date-field">
+                            <label for="invStart">Period Start Date</label>
+                            <input id="invStart" type="date" @bind="invoiceStart" @bind:format="yyyy-MM-dd" />
+                        </div>
+
+                        <div class="creator-addons">
+                            <label class="custom-addon-check">
+                                <input type="checkbox" @bind="includeHosting" />
+                                <span class="addon-box">
+                                    <span class="addon-name">Include Hosting</span>
+                                    <strong class="addon-cost">৳ @license.HostingCost.ToString("N2")</strong>
+                                </span>
+                            </label>
+
+                            <label class="custom-addon-check">
+                                <input type="checkbox" @bind="includeDomain" />
+                                <span class="addon-box">
+                                    <span class="addon-name">Include Domain</span>
+                                    <strong class="addon-cost">৳ @license.DomainCost.ToString("N2")</strong>
+                                </span>
+                            </label>
+                        </div>
+
+                        <div class="creator-preview">
+                            <span class="preview-label">Estimated Invoice Total</span>
+                            <strong class="preview-value">৳ @EstimatedInvoiceTotal.ToString("N2")</strong>
+                            <span class="preview-sub">for 1 @(license.BillingCycle == "Monthly" ? "Month" : "Year") cycle</span>
+                        </div>
+
+                        <button class="owner-btn-issue" @onclick="IssueInvoiceAsync">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+                            <span>Issue Invoice</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Invoices List -->
+                @if (invoices.Count == 0)
+                {
+                    <div class="owner-empty-state">
+                        <div class="empty-icon-wrap">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                        </div>
+                        <h3>No Invoices Issued Yet</h3>
+                        <p>Configure and save your module package and billing cycle above, then click <strong>Issue Invoice</strong> to generate your first subscription bill.</p>
+                    </div>
+                }
+                else
+                {
+                    <!-- Invoice Summary Stats -->
+                    <div class="invoices-kpi-bar">
+                        <div class="kpi-pill">
+                            <span>Total Issued:</span>
+                            <strong>@invoices.Count</strong>
+                        </div>
+                        <div class="kpi-pill paid">
+                            <span>Paid Invoices:</span>
+                            <strong>৳ @invoices.Where(x => x.Status == "Paid").Sum(x => x.Total).ToString("N2") (@invoices.Count(x => x.Status == "Paid"))</strong>
+                        </div>
+                        <div class="kpi-pill due">
+                            <span>Outstanding Due:</span>
+                            <strong>৳ @invoices.Where(x => x.Status != "Paid").Sum(x => x.Total).ToString("N2") (@invoices.Count(x => x.Status != "Paid"))</strong>
+                        </div>
+                    </div>
+
+                    <div class="owner-invoices-list">
+                        @foreach (var invoice in invoices)
+                        {
+                            var isPaid = invoice.Status == "Paid";
+                            <article class="owner-invoice-card @(isPaid ? "status-paid" : "status-due")">
+                                <div class="invoice-card-top">
+                                    <div class="inv-identity">
+                                        <div class="inv-number-wrap">
+                                            <span class="inv-hash">#</span>
+                                            <strong class="inv-id">@invoice.ID</strong>
+                                            <span class="inv-cycle-chip">@invoice.BillingCycle</span>
+                                        </div>
+                                        <div class="inv-dates">
+                                            <span class="inv-period">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                                                @invoice.PeriodStart.ToString("dd MMM yyyy") – @invoice.PeriodEnd.ToString("dd MMM yyyy")
+                                            </span>
+                                            <span class="inv-created">Issued: @invoice.IssuedAt.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt")</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="inv-financials">
+                                        <div class="inv-amount">
+                                            <span class="amount-tag">TOTAL INVOICE</span>
+                                            <strong class="amount-value">৳ @invoice.Total.ToString("N2")</strong>
+                                        </div>
+                                        <span class="inv-status-badge @(isPaid ? "paid" : "due")">
+                                            @if (isPaid)
+                                            {
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                <span>Paid</span>
+                                            }
+                                            else
+                                            {
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 14 14"></polyline></svg>
+                                                <span>Issued (Due)</span>
+                                            }
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div class="invoice-card-bottom">
+                                    <div class="inv-actions">
+                                        <a href="/app-owner/invoice/@invoice.ID" target="_blank" rel="noopener" class="btn-inv-view">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                            <span>View & Print</span>
+                                        </a>
+
+                                        @if (!isPaid)
+                                        {
+                                            <button type="button" class="btn-inv-pay" @onclick="() => MarkPaidAsync(invoice.ID)">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                <span>Mark as Paid</span>
+                                            </button>
+                                        }
+                                        else if (invoice.PaidAt.HasValue)
+                                        {
+                                            <span class="inv-paid-time">Paid on @invoice.PaidAt.Value.ToLocalTime().ToString("dd MMM yyyy")</span>
+                                        }
+                                    </div>
+
+                                    <details class="inv-breakdown-details">
+                                        <summary>
+                                            <span class="summary-text">Itemized Breakdown (@(invoice.Items.Count + (invoice.HostingCost > 0 ? 1 : 0) + (invoice.DomainCost > 0 ? 1 : 0)) items)</span>
+                                            <svg class="summary-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                        </summary>
+                                        <div class="inv-breakdown-table">
+                                            @foreach (var item in invoice.Items)
+                                            {
+                                                <div class="breakdown-row">
+                                                    <span class="item-name">@item.ModuleName</span>
+                                                    <strong class="item-cost">৳ @item.Price.ToString("N2")</strong>
+                                                </div>
+                                            }
+                                            @if (invoice.HostingCost > 0)
+                                            {
+                                                <div class="breakdown-row infra">
+                                                    <span class="item-name">Hosting Infrastructure</span>
+                                                    <strong class="item-cost">৳ @invoice.HostingCost.ToString("N2")</strong>
+                                                </div>
+                                            }
+                                            @if (invoice.DomainCost > 0)
+                                            {
+                                                <div class="breakdown-row infra">
+                                                    <span class="item-name">Domain Name Service</span>
+                                                    <strong class="item-cost">৳ @invoice.DomainCost.ToString("N2")</strong>
+                                                </div>
+                                            }
+                                            <div class="breakdown-row total-row">
+                                                <span>Grand Total</span>
+                                                <strong>৳ @invoice.Total.ToString("N2")</strong>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private sealed class ModuleRow(LicensedModule definition)
+    {
+        public LicensedModule Definition { get; } = definition;
+        public bool Selected { get; set; }
+        public decimal MonthlyPrice { get; set; }
+        public decimal YearlyPrice { get; set; }
+    }
+
+    private List<ModuleRow> modules = [];
+    private List<HospitalSubscriptionInvoice> invoices = [];
+    private HospitalLicense license = new() { PurchasedAt = DateTime.Today };
+    private string? hospitalOwnerName;
+    private string ownerUserName = "", ownerPassword = "", message = "";
+    private bool loading = true, isError, includeHosting, includeDomain, showPassword;
+    private DateTime invoiceStart = DateTime.Today;
+    private string selectedCategory = "all";
+    private string searchFilter = "";
+
+    private decimal CurrentCycleRate => license.BillingCycle == "Yearly"
+        ? modules.Where(x => x.Selected).Sum(x => x.YearlyPrice)
+        : modules.Where(x => x.Selected).Sum(x => x.MonthlyPrice);
+
+    private decimal EstimatedInvoiceTotal
+    {
+        get
+        {
+            var activeTotal = license.BillingCycle == "Yearly"
+                ? modules.Where(x => x.Selected).Sum(x => x.YearlyPrice)
+                : modules.Where(x => x.Selected).Sum(x => x.MonthlyPrice);
+            if (includeHosting) activeTotal += license.HostingCost;
+            if (includeDomain) activeTotal += license.DomainCost;
+            return activeTotal;
+        }
+    }
+
+    private IEnumerable<ModuleRow> FilteredModules => modules
+        .Where(m => selectedCategory == "all" || GetModuleCategory(m.Definition.Code) == selectedCategory)
+        .Where(m => string.IsNullOrWhiteSpace(searchFilter) ||
+                    m.Definition.Name.Contains(searchFilter, StringComparison.OrdinalIgnoreCase) ||
+                    m.Definition.Code.Contains(searchFilter, StringComparison.OrdinalIgnoreCase));
+
+    private bool copiedCredentials;
+
+    private async Task CopyCredentialsAsync()
+    {
+        if (string.IsNullOrEmpty(ownerPassword)) return;
+        var text = $"PrimeHPM Hospital Owner Credentials:\nHospital: {Branding.HospitalName}\nUser ID: {ownerUserName}\nPassword: {ownerPassword}\nLogin: /login";
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            copiedCredentials = true;
+            StateHasChanged();
+            await Task.Delay(2500);
+            copiedCredentials = false;
+            StateHasChanged();
+        }
+        catch
+        {
+            // Fallback
+        }
+    }
+
+    private void GeneratePassword()
+    {
+        var specialChars = "@#$%&*!";
+        var lettersUpper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+        var lettersLower = "abcdefghjkmnpqrstuvwxyz";
+        var digits = "23456789";
+        ownerPassword = $"Hpm{lettersUpper[RandomNumberGenerator.GetInt32(lettersUpper.Length)]}{lettersLower[RandomNumberGenerator.GetInt32(lettersLower.Length)]}{digits[RandomNumberGenerator.GetInt32(digits.Length)]}{specialChars[RandomNumberGenerator.GetInt32(specialChars.Length)]}{RandomNumberGenerator.GetInt32(100, 999)}!";
+        showPassword = true;
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var existingLicense = await db.HospitalLicenses.AsNoTracking().SingleOrDefaultAsync(x => x.ID == 1);
+        license = existingLicense ?? new HospitalLicense { ID = 1, IsActivated = true, PurchasedAt = DateTime.Today };
+        var saved = await db.HospitalModuleLicenses.AsNoTracking().ToDictionaryAsync(x => x.ModuleCode);
+        modules = LicensedModules.All.Select(def => new ModuleRow(def)
+        {
+            Selected = existingLicense is null || def.Code == LicensedModules.Registration || (saved.TryGetValue(def.Code, out var item) && item.IsEnabled),
+            MonthlyPrice = saved.TryGetValue(def.Code, out item) ? item.MonthlyPrice : 0,
+            YearlyPrice = saved.TryGetValue(def.Code, out item) ? item.YearlyPrice : 0
+        }).ToList();
+        var ownerRole = await db.Roles.AsNoTracking().Where(x => x.Name == RoleNames.HospitalOwner).Select(x => x.Id).FirstOrDefaultAsync();
+        hospitalOwnerName = await (from user in db.Users.AsNoTracking() join userRole in db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId where userRole.RoleId == ownerRole select user.UserName).FirstOrDefaultAsync();
+        ownerUserName = hospitalOwnerName ?? "";
+        ownerPassword = "";
+        showPassword = false;
+        invoices = await db.HospitalSubscriptionInvoices.AsNoTracking().Include(x => x.Items).OrderByDescending(x => x.ID).Take(50).ToListAsync();
+        loading = false;
+    }
+
+    private void Toggle(ModuleRow row, bool selected)
+    {
+        row.Selected = selected;
+        var expanded = LicensedModules.WithDependencies(modules.Where(x => x.Selected).Select(x => x.Definition.Code));
+        foreach (var item in modules) item.Selected = expanded.Contains(item.Definition.Code);
+    }
+
+    private void SelectAllModules()
+    {
+        foreach (var m in modules) m.Selected = true;
+    }
+
+    private void SelectStandardPack()
+    {
+        var standardCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            LicensedModules.Registration,
+            LicensedModules.Appointments,
+            LicensedModules.Diagnostics,
+            LicensedModules.Doctor,
+            LicensedModules.Pharmacy,
+            LicensedModules.Ipd,
+            LicensedModules.Emergency,
+            LicensedModules.Nursing,
+            LicensedModules.Reports
+        };
+        var expanded = LicensedModules.WithDependencies(standardCodes);
+        foreach (var m in modules) m.Selected = expanded.Contains(m.Definition.Code);
+    }
+
+    private void ResetToCoreOnly()
+    {
+        foreach (var m in modules) m.Selected = (m.Definition.Code == LicensedModules.Registration);
+    }
+
+    private void AddMonthsToExpiry(int months)
+    {
+        var baseDate = license.SubscriptionExpiresAt ?? DateTime.Today;
+        license.SubscriptionExpiresAt = baseDate.AddMonths(months);
+    }
+
+    private void AddYearsToExpiry(int years)
+    {
+        var baseDate = license.SubscriptionExpiresAt ?? DateTime.Today;
+        license.SubscriptionExpiresAt = baseDate.AddYears(years);
+    }
+
+    private static string GetModuleCategory(string code) => code switch
+    {
+        LicensedModules.Registration or LicensedModules.Appointments or LicensedModules.Doctor or LicensedModules.Emergency => "clinical",
+        LicensedModules.Ipd or LicensedModules.Ot or LicensedModules.Nursing or LicensedModules.BloodBank => "inpatient",
+        LicensedModules.Diagnostics => "diagnostics",
+        LicensedModules.Pharmacy or LicensedModules.Canteen or LicensedModules.Store => "pharmacy_store",
+        LicensedModules.Accounts or LicensedModules.Hrm => "finance_hr",
+        _ => "reports_portal"
+    };
+
+    private static string GetModuleEmoji(string code) => code switch
+    {
+        LicensedModules.Registration => "🏥",
+        LicensedModules.Appointments => "📅",
+        LicensedModules.Diagnostics => "🔬",
+        LicensedModules.Doctor => "🩺",
+        LicensedModules.Pharmacy => "💊",
+        LicensedModules.Ipd => "🛏️",
+        LicensedModules.Emergency => "🚨",
+        LicensedModules.Ot => "✂️",
+        LicensedModules.Nursing => "👩‍⚕️",
+        LicensedModules.BloodBank => "🩸",
+        LicensedModules.Canteen => "🍽️",
+        LicensedModules.Accounts => "💰",
+        LicensedModules.Hrm => "👥",
+        LicensedModules.Store => "📦",
+        LicensedModules.Reports => "📊",
+        LicensedModules.Mis => "📈",
+        LicensedModules.PatientPortal => "🌐",
+        _ => "📦"
+    };
+
+    private async Task SaveLicenseAsync()
+    {
+        if (modules.Any(x => x.MonthlyPrice < 0 || x.YearlyPrice < 0) || license.HostingCost < 0 || license.DomainCost < 0 || license.BillingCycle is not ("Monthly" or "Yearly"))
+        {
+            Fail("Enter valid non-negative prices and a valid billing cycle.");
+            return;
+        }
+        if (license.PurchasedAt is null || license.SubscriptionExpiresAt is null || license.SubscriptionExpiresAt <= license.PurchasedAt ||
+            license.HostingCost > 0 && license.HostingExpiresAt is null || license.DomainCost > 0 && license.DomainExpiresAt is null)
+        {
+            Fail("Set a valid purchase date and later subscription expiry. Paid hosting or domain also requires expiry dates.");
+            return;
+        }
+
+        var selected = LicensedModules.WithDependencies(modules.Where(x => x.Selected).Select(x => x.Definition.Code));
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var current = await db.HospitalLicenses.SingleOrDefaultAsync(x => x.ID == 1);
+        if (current is null)
+        {
+            current = new HospitalLicense { ID = 1 };
+            db.HospitalLicenses.Add(current);
+        }
+        current.IsActivated = true;
+        current.BillingCycle = license.BillingCycle;
+        current.PurchasedAt = license.PurchasedAt;
+        current.SubscriptionExpiresAt = license.SubscriptionExpiresAt;
+        current.HostingCost = license.HostingCost;
+        current.HostingExpiresAt = license.HostingExpiresAt;
+        current.DomainCost = license.DomainCost;
+        current.DomainExpiresAt = license.DomainExpiresAt;
+        current.UpdatedAt = DateTime.UtcNow;
+
+        var saved = await db.HospitalModuleLicenses.ToDictionaryAsync(x => x.ModuleCode);
+        foreach (var row in modules)
+        {
+            if (!saved.TryGetValue(row.Definition.Code, out var item))
+            {
+                item = new HospitalModuleLicense { ModuleCode = row.Definition.Code };
+                db.HospitalModuleLicenses.Add(item);
+            }
+            item.IsEnabled = selected.Contains(row.Definition.Code);
+            item.MonthlyPrice = row.MonthlyPrice;
+            item.YearlyPrice = row.YearlyPrice;
+        }
+
+        await AuditAsync(db, "Update", "HospitalLicense", "1", string.Join(",", selected));
+        await db.SaveChangesAsync();
+        message = "Hospital package configuration and custom prices successfully saved!";
+        isError = false;
+        await LoadAsync();
+    }
+
+    private async Task SaveHospitalOwnerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ownerUserName))
+        {
+            Fail("Please enter a valid User ID.");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(ownerPassword))
+        {
+            Fail("Please enter a password.");
+            return;
+        }
+
+        var targetUserName = ownerUserName.Trim();
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var ownerRole = await db.Roles.AsNoTracking().Where(x => x.Name == RoleNames.HospitalOwner).Select(x => x.Id).FirstOrDefaultAsync();
+            AppUser? ownerUser = null;
+            if (!string.IsNullOrEmpty(hospitalOwnerName))
+            {
+                ownerUser = await Users.FindByNameAsync(hospitalOwnerName);
+            }
+            if (ownerUser is null && ownerRole != 0)
+            {
+                var existingOwnerId = await db.UserRoles.AsNoTracking().Where(x => x.RoleId == ownerRole).Select(x => x.UserId).FirstOrDefaultAsync();
+                if (existingOwnerId != 0)
+                {
+                    ownerUser = await Users.FindByIdAsync(existingOwnerId.ToString());
+                }
+            }
+
+            if (ownerUser is null)
+            {
+                var existingWithSameName = await Users.FindByNameAsync(targetUserName);
+                if (existingWithSameName is not null)
+                {
+                    Fail($"User ID '{targetUserName}' is already in use by another account.");
+                    return;
+                }
+
+                var user = new AppUser
+                {
+                    UserName = targetUserName,
+                    DisplayName = "Hospital Owner",
+                    IsActive = true,
+                    EmailConfirmed = true
+                };
+                var result = await Users.CreateAsync(user, ownerPassword);
+                if (!result.Succeeded)
+                {
+                    Fail(string.Join(" ", result.Errors.Select(x => x.Description)));
+                    return;
+                }
+                result = await Users.AddToRolesAsync(user, [RoleNames.HospitalOwner, RoleNames.Administrator]);
+                if (!result.Succeeded)
+                {
+                    await Users.DeleteAsync(user);
+                    Fail(string.Join(" ", result.Errors.Select(x => x.Description)));
+                    return;
+                }
+                hospitalOwnerName = user.UserName;
+            }
+            else
+            {
+                // 1. If username was changed
+                if (!string.Equals(ownerUser.UserName, targetUserName, StringComparison.OrdinalIgnoreCase))
+                {
+                    var existingWithSameName = await Users.FindByNameAsync(targetUserName);
+                    if (existingWithSameName is not null && existingWithSameName.Id != ownerUser.Id)
+                    {
+                        Fail($"User ID '{targetUserName}' is already taken by another user.");
+                        return;
+                    }
+                    ownerUser.UserName = targetUserName;
+                    ownerUser.NormalizedUserName = Users.NormalizeName(targetUserName);
+                    var nameResult = await Users.UpdateAsync(ownerUser);
+                    if (!nameResult.Succeeded)
+                    {
+                        Fail(string.Join(" ", nameResult.Errors.Select(x => x.Description)));
+                        return;
+                    }
+                    hospitalOwnerName = ownerUser.UserName;
+                }
+
+                // 2. Update password
+                var token = await Users.GeneratePasswordResetTokenAsync(ownerUser);
+                var pwResult = await Users.ResetPasswordAsync(ownerUser, token, ownerPassword);
+                if (!pwResult.Succeeded)
+                {
+                    Fail(string.Join(" ", pwResult.Errors.Select(x => x.Description)));
+                    return;
+                }
+                await Users.UpdateSecurityStampAsync(ownerUser);
+            }
+
+            await AuditAsync(db, "Update", "HospitalOwner", hospitalOwnerName ?? targetUserName, $"Credentials updated: UserID={targetUserName}");
+            await db.SaveChangesAsync();
+
+            message = $"Hospital Owner credentials saved for '{targetUserName}'. Copy the password now; it cannot be recovered after leaving this page.";
+            isError = false;
+        }
+        catch (Exception ex)
+        {
+            Fail(ex.GetBaseException().Message);
+        }
+    }
+
+    private async Task IssueInvoiceAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var config = await db.HospitalLicenses.AsNoTracking().SingleOrDefaultAsync(x => x.ID == 1);
+        if (config is null || config.BillingCycle is not ("Monthly" or "Yearly"))
+        {
+            Fail("Please configure and save the subscription package first.");
+            return;
+        }
+        var end = config.BillingCycle == "Monthly" ? invoiceStart.Date.AddMonths(1) : invoiceStart.Date.AddYears(1);
+        if (await db.HospitalSubscriptionInvoices.AnyAsync(x => x.PeriodStart == invoiceStart.Date && x.PeriodEnd == end))
+        {
+            Fail($"An invoice for the period {invoiceStart:dd MMM yyyy} to {end:dd MMM yyyy} already exists.");
+            return;
+        }
+        var active = await db.HospitalModuleLicenses.AsNoTracking().Where(x => x.IsEnabled).ToListAsync();
+        var invoice = new HospitalSubscriptionInvoice
+        {
+            BillingCycle = config.BillingCycle,
+            PeriodStart = invoiceStart.Date,
+            PeriodEnd = end,
+            HostingCost = includeHosting ? config.HostingCost : 0,
+            DomainCost = includeDomain ? config.DomainCost : 0
+        };
+        invoice.Items = active.Select(x => new HospitalSubscriptionInvoiceItem
+        {
+            ModuleCode = x.ModuleCode,
+            ModuleName = LicensedModules.ByCode.GetValueOrDefault(x.ModuleCode)?.Name ?? x.ModuleCode,
+            Price = config.BillingCycle == "Monthly" ? x.MonthlyPrice : x.YearlyPrice
+        }).ToList();
+        invoice.ModuleTotal = invoice.Items.Sum(x => x.Price);
+        invoice.Total = invoice.ModuleTotal + invoice.HostingCost + invoice.DomainCost;
+        db.HospitalSubscriptionInvoices.Add(invoice);
+        await db.SaveChangesAsync();
+        await AuditAsync(db, "Create", "SubscriptionInvoice", invoice.ID.ToString(), $"Total={invoice.Total}");
+        await db.SaveChangesAsync();
+        message = $"Subscription Invoice #{invoice.ID} has been successfully issued for ৳{invoice.Total:N2}!";
+        isError = false;
+        await LoadAsync();
+    }
+
+    private async Task MarkPaidAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var invoice = await db.HospitalSubscriptionInvoices.SingleOrDefaultAsync(x => x.ID == id && x.Status == "Issued");
+        if (invoice is null) { Fail("Invoice not found or already marked paid."); return; }
+        invoice.Status = "Paid";
+        invoice.PaidAt = DateTime.UtcNow;
+        await AuditAsync(db, "Pay", "SubscriptionInvoice", id.ToString(), $"Total={invoice.Total}");
+        await db.SaveChangesAsync();
+        message = $"Invoice #{id} marked as Paid successfully!";
+        isError = false;
+        await LoadAsync();
+    }
+
+    private async Task AuditAsync(HpmDbContext db, string action, string entity, string id, string detail)
+    {
+        var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        _ = int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var actorId);
+        db.AuditLogs.Add(new AuditLog
+        {
+            UserID = actorId,
+            UserName = user.Identity?.Name ?? "App Owner",
+            Action = action,
+            EntityName = entity,
+            EntityID = id,
+            ChangedFields = detail,
+            EventTime = DateTime.UtcNow
+        });
+    }
+
+    private void Fail(string text) { message = text; isError = true; }
+}

@@ -1,0 +1,194 @@
+@page "/app-owner/invoice/{Id:long}"
+@attribute [Authorize(Roles = RoleNames.AppOwner)]
+@layout Layout.AppOwnerLayout
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@using HPM.Web.Data
+@using HPM.Web.Data.Entities
+@using HPM.Web.Security
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Invoice #@Id | @Branding.HospitalName</PageTitle>
+
+<div class="owner-invoice-page">
+    <div class="owner-invoice-actions">
+        <a href="/app-owner" class="btn-action back">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+            <span>Back to App Owner Console</span>
+        </a>
+        <div class="right-actions">
+            <button class="btn-action print" @onclick="PrintAsync">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+                <span>Print / Save PDF</span>
+            </button>
+        </div>
+    </div>
+
+    @if (invoice is null)
+    {
+        <div class="invoice-not-found">
+            <h2>Invoice Not Found</h2>
+            <p>The requested invoice #@Id could not be located in the hospital billing registry.</p>
+            <a href="/app-owner" class="btn-action back">Return to App Owner</a>
+        </div>
+    }
+    else
+    {
+        var isPaid = invoice.Status == "Paid";
+        <article class="owner-invoice-sheet">
+            <!-- Official Header -->
+            <header class="sheet-header">
+                <div class="sheet-brand">
+                    <div class="brand-logo-circle">H+</div>
+                    <div>
+                        <span class="brand-eyebrow">HEALTHCARE MANAGEMENT SYSTEM</span>
+                        <h1 class="sheet-title">PrimeHPM Software Licensing</h1>
+                        <span class="sheet-vendor-sub">Official Enterprise Software Subscription</span>
+                    </div>
+                </div>
+
+                <div class="sheet-inv-meta">
+                    <span class="inv-badge">SUBSCRIPTION INVOICE</span>
+                    <strong class="inv-id-tag">#INV-@invoice.ID.ToString("D5")</strong>
+                    <div class="inv-stamp @(isPaid ? "paid" : "due")">
+                        @(isPaid ? "PAID" : "PAYMENT DUE")
+                    </div>
+                </div>
+            </header>
+
+            <!-- Billed To & Dates Bar -->
+            <div class="sheet-parties-bar">
+                <div class="party-col">
+                    <span class="party-label">BILLED TO (HOSPITAL):</span>
+                    <strong class="party-name">@Branding.HospitalName</strong>
+                    <span class="party-meta">Hospital License ID: #1</span>
+                    <span class="party-meta">Status: Licensed & Active</span>
+                </div>
+
+                <div class="party-col right">
+                    <div class="meta-row">
+                        <span class="meta-label">Invoice Date:</span>
+                        <strong class="meta-value">@invoice.IssuedAt.ToLocalTime().ToString("dd MMMM yyyy")</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Billing Cycle:</span>
+                        <strong class="meta-value">@invoice.BillingCycle Plan</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Service Period:</span>
+                        <strong class="meta-value">@invoice.PeriodStart.ToString("dd MMM yyyy") – @invoice.PeriodEnd.ToString("dd MMM yyyy")</strong>
+                    </div>
+                    @if (isPaid && invoice.PaidAt.HasValue)
+                    {
+                        <div class="meta-row paid-highlight">
+                            <span class="meta-label">Payment Date:</span>
+                            <strong class="meta-value">@invoice.PaidAt.Value.ToLocalTime().ToString("dd MMM yyyy, hh:mm tt")</strong>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <!-- Itemized Table -->
+            <table class="sheet-table">
+                <thead>
+                    <tr>
+                        <th class="col-num">#</th>
+                        <th class="col-desc">Module / Service Description</th>
+                        <th class="col-cycle">Billing Cadence</th>
+                        <th class="col-rate">Amount (BDT)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var index = 1; }
+                    @foreach (var item in invoice.Items)
+                    {
+                        <tr>
+                            <td class="col-num">@(index++)</td>
+                            <td class="col-desc">
+                                <strong>@item.ModuleName</strong>
+                                <span class="item-sub">Software license fee for module [@item.ModuleCode]</span>
+                            </td>
+                            <td class="col-cycle">@invoice.BillingCycle</td>
+                            <td class="col-rate">৳ @item.Price.ToString("N2")</td>
+                        </tr>
+                    }
+
+                    @if (invoice.HostingCost > 0)
+                    {
+                        <tr class="infra-row">
+                            <td class="col-num">@(index++)</td>
+                            <td class="col-desc">
+                                <strong>Cloud Hosting Infrastructure & Maintenance</strong>
+                                <span class="item-sub">Dedicated cloud application server hosting & daily backup service</span>
+                            </td>
+                            <td class="col-cycle">@invoice.BillingCycle</td>
+                            <td class="col-rate">৳ @invoice.HostingCost.ToString("N2")</td>
+                        </tr>
+                    }
+
+                    @if (invoice.DomainCost > 0)
+                    {
+                        <tr class="infra-row">
+                            <td class="col-num">@(index++)</td>
+                            <td class="col-desc">
+                                <strong>Custom Domain Name & SSL Certificate</strong>
+                                <span class="item-sub">Domain name renewal & secure TLS/SSL encryption service</span>
+                            </td>
+                            <td class="col-cycle">@invoice.BillingCycle</td>
+                            <td class="col-rate">৳ @invoice.DomainCost.ToString("N2")</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="3" class="foot-label">Subtotal Modules:</td>
+                        <td class="foot-val">৳ @invoice.ModuleTotal.ToString("N2")</td>
+                    </tr>
+                    @if (invoice.HostingCost > 0 || invoice.DomainCost > 0)
+                    {
+                        <tr>
+                            <td colspan="3" class="foot-label">Infrastructure Add-ons (Hosting & Domain):</td>
+                            <td class="foot-val">৳ @((invoice.HostingCost + invoice.DomainCost).ToString("N2"))</td>
+                        </tr>
+                    }
+                    <tr class="grand-total-row">
+                        <td colspan="3" class="foot-label">Grand Total Billed:</td>
+                        <td class="foot-val total">৳ @invoice.Total.ToString("N2")</td>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <!-- Footer Notes & Signatures -->
+            <footer class="sheet-footer">
+                <div class="footer-terms">
+                    <strong>Billing Terms & License Notice:</strong>
+                    <p>This invoice is an official electronic statement for software subscription and hosting services rendered to <strong>@Branding.HospitalName</strong>. All modules listed above are licensed under the PrimeHPM Master Enterprise Agreement.</p>
+                </div>
+
+                <div class="sheet-signatures">
+                    <div class="sig-box">
+                        <div class="sig-line"></div>
+                        <span>Prepared By (App Owner)</span>
+                    </div>
+                    <div class="sig-box">
+                        <div class="sig-line"></div>
+                        <span>Hospital Authority Acceptance</span>
+                    </div>
+                </div>
+            </footer>
+        </article>
+    }
+</div>
+
+@code {
+    [Parameter] public long Id { get; set; }
+    private HospitalSubscriptionInvoice? invoice;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        invoice = await db.HospitalSubscriptionInvoices.AsNoTracking().Include(x => x.Items).SingleOrDefaultAsync(x => x.ID == Id);
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("window.print");
+}

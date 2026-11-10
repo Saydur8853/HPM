@@ -7,6 +7,29 @@ namespace HPM.Web.Security;
 
 public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
 {
+    private static async Task ValidateActorAsync(IServiceProvider services, int? actorId, string role, int? targetId = null)
+    {
+        if (actorId is null) throw new InvalidOperationException("An authenticated administrator is required.");
+        var users = services.GetRequiredService<UserManager<AppUser>>();
+        var actor = await users.FindByIdAsync(actorId.Value.ToString()) ?? throw new InvalidOperationException("Administrator account was not found.");
+        if (!actor.IsActive || !await users.IsInRoleAsync(actor, RoleNames.Administrator)) throw new InvalidOperationException("Administrator access is required.");
+        if (role is RoleNames.AppOwner or RoleNames.HospitalOwner or RoleNames.Patient) throw new InvalidOperationException("This account type cannot be created here.");
+        var hospitalOwner = await users.IsInRoleAsync(actor, RoleNames.HospitalOwner);
+        if (hospitalOwner && role == RoleNames.Administrator) throw new InvalidOperationException("Hospital Owner cannot create another administrator.");
+        if (hospitalOwner)
+        {
+            var enabled = await services.GetRequiredService<HospitalLicenseService>().EnabledModulesAsync();
+            if (!HospitalLicenseService.StaffRoleAvailable(role, enabled)) throw new InvalidOperationException("This role is not covered by your licensed modules.");
+        }
+        if (targetId is int id)
+        {
+            var target = await users.FindByIdAsync(id.ToString()) ?? throw new InvalidOperationException("User account was not found.");
+            var roles = await users.GetRolesAsync(target);
+            if (roles.Contains(RoleNames.AppOwner) || roles.Contains(RoleNames.HospitalOwner) || (hospitalOwner && roles.Contains(RoleNames.Administrator)))
+                throw new InvalidOperationException("This protected account cannot be managed here.");
+        }
+    }
+
     public async Task<UserAdminResult> CreateAsync(UserAdminCommand command, int? actorId, string actorName)
     {
         if (!RoleNames.All.Contains(command.Role)) return UserAdminResult.Fail("Select a valid role.");
@@ -16,6 +39,7 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
                 scopeFactory,
                 async (services, db) =>
                 {
+                    await ValidateActorAsync(services, actorId, command.Role);
                     var users = services.GetRequiredService<UserManager<AppUser>>();
                     var doctorProfileId = await ValidateDoctorProfileAsync(db, command);
                     var user = new AppUser
@@ -49,6 +73,7 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
                 scopeFactory,
                 async (services, db) =>
                 {
+                    await ValidateActorAsync(services, actorId, command.Role, command.ID);
                     var users = services.GetRequiredService<UserManager<AppUser>>();
                     var doctorProfileId = await ValidateDoctorProfileAsync(db, command);
                     var user = await users.FindByIdAsync(command.ID.ToString()) ?? throw new InvalidOperationException("User account was not found.");
@@ -91,6 +116,8 @@ public sealed class UserAdministrationService(IServiceScopeFactory scopeFactory)
                 {
                     var users = services.GetRequiredService<UserManager<AppUser>>();
                     var user = await users.FindByIdAsync(userId.ToString()) ?? throw new InvalidOperationException("User account was not found.");
+                    var role = (await users.GetRolesAsync(user)).FirstOrDefault() ?? string.Empty;
+                    await ValidateActorAsync(services, actorId, role, userId);
                     Ensure(await users.SetLockoutEndDateAsync(user, null));
                     Ensure(await users.ResetAccessFailedCountAsync(user));
                     AddAudit(db, actorId, actorName, "Update", user.Id, "Account unlocked");

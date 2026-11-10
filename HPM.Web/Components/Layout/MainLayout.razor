@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
 @implements IDisposable
 
 <div class="app-shell">
@@ -107,7 +108,7 @@
                                             @if (hasSections)
                                             {
                                                 <div class="header-backoffice-sections-grid">
-                                                    @foreach (var section in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles)).GroupBy(x => x.Section))
+                                                    @foreach (var section in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)).GroupBy(x => x.Section))
                                                     {
                                                         <div class="header-backoffice-group">
                                                             <h3>@I18n.T(section.Key)</h3>
@@ -134,7 +135,7 @@
                                             else
                                             {
                                                 <div class="header-backoffice-list">
-                                                    @foreach (var item in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles)))
+                                                    @foreach (var item in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)))
                                                     {
                                                         <NavLink class="header-backoffice-item" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseHeaderModule">@I18n.T(item.Label)</NavLink>
                                                     }
@@ -315,6 +316,12 @@
             </div>
             <NavMenu />
         </div>
+        @if (renewalWarnings.Count > 0)
+        {
+            <div role="alert" style="background:#fee2e2;color:#991b1b;border:2px solid #ef4444;border-radius:9px;padding:13px 16px;margin:12px 18px;font-weight:800">
+                Renewal required: @string.Join(" ", renewalWarnings)
+            </div>
+        }
                 <section class="page-content">@Body</section>
     </main>
 </div>
@@ -326,6 +333,12 @@
 </div>
 
 @code {
+    [Inject] private HospitalLicenseService Licenses { get; set; } = default!;
+    private HashSet<string> enabledModules = [];
+    private IReadOnlyList<string> renewalWarnings = [];
+    private bool Licensed(string? href) =>
+        (href?.StartsWith("/doctor/prescription", StringComparison.OrdinalIgnoreCase) == true && enabledModules.Contains(LicensedModules.Pharmacy)) ||
+        LicensedModules.ForPath(href) is not string code || enabledModules.Contains(code);
 #pragma warning disable CS0414
     private string activeSection = "Clinical Operations";
     private string activeTitle = "Command Center";
@@ -364,6 +377,11 @@
         Nav.LocationChanged += OnLocationChanged;
         I18n.OnLanguageChanged += HandleLanguageChanged;
         Branding.OnSettingsChanged += HandleSettingsChanged;
+        enabledModules = await Licenses.EnabledModulesAsync();
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        if (principal.IsInRole(RoleNames.AppOwner))
+            enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (principal.IsInRole(RoleNames.HospitalOwner)) renewalWarnings = await Licenses.RenewalWarningsAsync();
         UpdateBreadcrumb(Nav.Uri);
     }
 
@@ -405,7 +423,7 @@
         isSettingsMenuOpen = false;
         openHeaderModule = null;
         UpdateBreadcrumb(e.Location);
-        StateHasChanged();
+        _ = InvokeAsync(async () => { enabledModules = await Licenses.EnabledModulesAsync(); if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner)) enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase); StateHasChanged(); });
     }
 
     private void ToggleMobileNav()
@@ -661,7 +679,7 @@
         get
         {
             if (string.IsNullOrWhiteSpace(settingsSearch))
-                return SettingCategories;
+                return SettingCategories.Select(cat => new SettingCategory(cat.Title, cat.Icon, cat.Theme, cat.Items.Where(x => Licensed(x.Href)).ToList())).Where(x => x.Items.Any());
 
             var q = settingsSearch.Trim();
             return SettingCategories
@@ -669,9 +687,9 @@
                     cat.Title,
                     cat.Icon,
                     cat.Theme,
-                    cat.Items.Where(i => i.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
+                    cat.Items.Where(i => Licensed(i.Href) && (i.Label.Contains(q, StringComparison.OrdinalIgnoreCase)
                                       || i.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
-                                      || cat.Title.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList()
+                                      || cat.Title.Contains(q, StringComparison.OrdinalIgnoreCase))).ToList()
                 ))
                 .Where(cat => cat.Items.Any());
         }
@@ -767,13 +785,15 @@
         ])
     ];
 
-    private static bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, BackOfficeGroup group) =>
+    private bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, BackOfficeGroup group) =>
         ModuleAccess.CanView(user, group.Roles) &&
-        (group.Href is not null || group.Items.Any(item => ModuleAccess.CanView(user, item.Roles)));
+        (group.Href is not null ? Licensed(group.Href) : group.Items.Any(item => ModuleAccess.CanView(user, item.Roles) && Licensed(item.Href)));
     private static string LegacyHref(string module, string name) => $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(name)}";
 
     private static string GetUserRole(System.Security.Claims.ClaimsPrincipal user)
     {
+        if (user.IsInRole(RoleNames.HospitalOwner)) return "Hospital Owner";
+        if (user.IsInRole(RoleNames.AppOwner)) return "App Owner";
         if (user.IsInRole(RoleNames.Administrator)) return "Admin";
         if (user.IsInRole(RoleNames.Reception)) return "Reception";
         if (user.IsInRole(RoleNames.Cashier)) return "Cashier";

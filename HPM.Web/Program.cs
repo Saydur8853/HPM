@@ -51,6 +51,7 @@ builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<HospitalMasterCacheService>();
 builder.Services.AddSingleton<UserAdministrationService>();
 builder.Services.AddSingleton<HospitalSetupService>();
+builder.Services.AddScoped<HospitalLicenseService>();
 builder.Services.AddScoped<I18nService>();
 builder.Services.AddScoped<PatientSelectionState>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
@@ -137,14 +138,22 @@ await using (var scope = app.Services.CreateAsyncScope())
             await HrmDemoDataSeeder.SeedAsync(db);
 
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
-        if (!await roleManager.RoleExistsAsync(RoleNames.Authorizer))
+        foreach (var requiredRole in new[] { RoleNames.Administrator, RoleNames.Authorizer, RoleNames.AppOwner, RoleNames.HospitalOwner })
         {
-            var roleResult = await roleManager.CreateAsync(new IdentityRole<int>(RoleNames.Authorizer));
-            if (!roleResult.Succeeded)
-                throw new InvalidOperationException(string.Join("; ", roleResult.Errors.Select(x => x.Description)));
+            if (!await roleManager.RoleExistsAsync(requiredRole))
+            {
+                var roleResult = await roleManager.CreateAsync(new IdentityRole<int>(requiredRole));
+                if (!roleResult.Succeeded)
+                    throw new InvalidOperationException(string.Join("; ", roleResult.Errors.Select(x => x.Description)));
+            }
         }
 
         const string patientColSql = """
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_License]') AND name = 'OwnerPassword')
+            BEGIN
+                ALTER TABLE [Hospital_License] ADD [OwnerPassword] nvarchar(100) NULL;
+            END
+
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Weight')
             BEGIN
                 ALTER TABLE [Registration] ADD [Weight] nvarchar(20) NULL;
@@ -256,6 +265,32 @@ await using (var scope = app.Services.CreateAsyncScope())
 
         var branding = app.Services.GetRequiredService<HospitalSetupService>();
         await branding.LoadAsync();
+        var bootstrapName = app.Configuration["InitialAppOwner:UserName"]?.Trim();
+        var bootstrapPassword = app.Configuration["InitialAppOwner:Password"];
+        if (branding.IsSetupComplete && !string.IsNullOrWhiteSpace(bootstrapName) && !string.IsNullOrWhiteSpace(bootstrapPassword))
+        {
+            var users = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
+            var appOwnerRole = await roleManager.FindByNameAsync(RoleNames.AppOwner);
+            var hasAppOwner = appOwnerRole is not null && await db.UserRoles.AnyAsync(x => x.RoleId == appOwnerRole.Id);
+            if (!hasAppOwner)
+            {
+                var existing = await users.FindByNameAsync(bootstrapName);
+                if (existing is not null) throw new InvalidOperationException("InitialAppOwner user ID already belongs to another account.");
+                var owner = new AppUser { UserName = bootstrapName, DisplayName = "App Owner", IsActive = true, MustChangePassword = true };
+                var created = await users.CreateAsync(owner, bootstrapPassword);
+                if (!created.Succeeded) throw new InvalidOperationException(string.Join("; ", created.Errors.Select(x => x.Description)));
+                var assigned = await users.AddToRolesAsync(owner, [RoleNames.AppOwner, RoleNames.Administrator]);
+                if (!assigned.Succeeded) { await users.DeleteAsync(owner); throw new InvalidOperationException(string.Join("; ", assigned.Errors.Select(x => x.Description))); }
+            }
+        }
+        var appUsers = scope.ServiceProvider.GetRequiredService<UserManager<AppUser>>();
+        foreach (var appOwner in await appUsers.GetUsersInRoleAsync(RoleNames.AppOwner))
+        {
+            if (await appUsers.IsInRoleAsync(appOwner, RoleNames.Administrator)) continue;
+            var result = await appUsers.AddToRoleAsync(appOwner, RoleNames.Administrator);
+            if (!result.Succeeded)
+                throw new InvalidOperationException($"Could not grant App Owner administrative access: {string.Join("; ", result.Errors.Select(x => x.Description))}");
+        }
     }
     catch (Exception ex)
     {
@@ -311,15 +346,18 @@ app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery,
     {
         var result = await signInManager.PasswordSignInAsync(user, password, rememberMe, lockoutOnFailure: true);
         if (result.Succeeded)
-            return Results.LocalRedirect(user.MustChangePassword ? "/account/change-password" : returnUrl);
+            return Results.LocalRedirect(user.MustChangePassword ? "/account/change-password" :
+                await userManager.IsInRoleAsync(user, RoleNames.AppOwner) ? "/app-owner" : returnUrl);
     }
 
     return Results.LocalRedirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
 }).AllowAnonymous();
 
-app.MapPost("/patient/login-submit", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory) =>
+app.MapPost("/patient/login-submit", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory, HospitalLicenseService licenses) =>
 {
     await antiforgery.ValidateRequestAsync(http);
+    if (!(await licenses.EnabledModulesAsync()).Contains(LicensedModules.PatientPortal))
+        return Results.LocalRedirect("/access-denied");
     var form = await http.Request.ReadFormAsync();
     var patientId = form["PatientID"].ToString().Trim();
     var phone = form["Phone"].ToString().Trim();
@@ -413,7 +451,7 @@ app.MapPost("/account/change-password-submit", async (HttpContext http, IAntifor
         EventTime = DateTime.UtcNow
     });
     await db.SaveChangesAsync();
-    return Results.LocalRedirect("/account/change-password?success=1");
+    return Results.LocalRedirect(await userManager.IsInRoleAsync(user, RoleNames.AppOwner) ? "/app-owner" : "/account/change-password?success=1");
 }).RequireAuthorization("PasswordChangeAllowed");
 
 app.MapRazorComponents<App>()

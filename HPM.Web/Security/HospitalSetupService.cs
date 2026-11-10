@@ -215,6 +215,7 @@ public sealed class HospitalSetupService(
         string userName,
         string password,
         string confirmPassword,
+        string? logoData = null,
         CancellationToken cancellationToken = default)
     {
         hospitalName = hospitalName.Trim();
@@ -248,17 +249,17 @@ public sealed class HospitalSetupService(
                         }
                     }
 
-                    var admin = new AppUser
+                    var appOwner = new AppUser
                     {
                         UserName = userName,
-                        DisplayName = "Super Administrator",
+                        DisplayName = "App Owner",
                         IsActive = true,
                         MustChangePassword = false,
                         CreatedAt = DateTime.UtcNow
                     };
-                    var createResult = await users.CreateAsync(admin, password);
+                    var createResult = await users.CreateAsync(appOwner, password);
                     if (!createResult.Succeeded) throw new InvalidOperationException(Errors(createResult));
-                    var roleAssignment = await users.AddToRoleAsync(admin, RoleNames.Administrator);
+                    var roleAssignment = await users.AddToRolesAsync(appOwner, [RoleNames.AppOwner, RoleNames.Administrator]);
                     if (!roleAssignment.Succeeded) throw new InvalidOperationException(Errors(roleAssignment));
 
                     if (savedProfile is null)
@@ -268,9 +269,12 @@ public sealed class HospitalSetupService(
                     }
 
                     savedProfile.HospitalName = hospitalName;
+                    savedProfile.LogoData = logoData ?? "";
                     savedProfile.IsSetupComplete = true;
                     savedProfile.SetupCompletedAt = DateTime.UtcNow;
                     savedProfile.SetupBy = userName;
+                    db.HospitalLicenses.Add(new HospitalLicense { ID = 1, IsActivated = true });
+                    db.HospitalModuleLicenses.Add(new HospitalModuleLicense { ModuleCode = LicensedModules.Registration, IsEnabled = true });
                     await db.SaveChangesAsync(cancellationToken);
                     return savedProfile;
                 },

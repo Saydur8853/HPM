@@ -2268,6 +2268,79 @@ namespace HPM.Web.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalLicense", b =>
+                {
+                    b.Property<int>("ID")
+                        .HasColumnType("int");
+
+                    b.Property<string>("BillingCycle")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("DomainCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("DomainExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("HostingCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("HostingExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActivated")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("PurchasedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("SubscriptionExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Hospital_License", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalModuleLicense", b =>
+                {
+                    b.Property<int>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ID"));
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("MonthlyPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("YearlyPrice")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("ModuleCode")
+                        .IsUnique();
+
+                    b.ToTable("Hospital_Module_License", (string)null);
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.HospitalProfile", b =>
                 {
                     b.Property<int>("ID")
@@ -2368,6 +2441,89 @@ namespace HPM.Web.Data.Migrations
                     b.HasKey("ID");
 
                     b.ToTable("Hospital_Profile", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalSubscriptionInvoice", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<string>("BillingCycle")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("DomainCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("HostingCost")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("IssuedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ModuleTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("PaidAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(25)
+                        .HasColumnType("nvarchar(25)");
+
+                    b.Property<decimal>("Total")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.ToTable("Hospital_Subscription_Invoice", (string)null);
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalSubscriptionInvoiceItem", b =>
+                {
+                    b.Property<long>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("ID"));
+
+                    b.Property<long>("InvoiceID")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ModuleName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal>("Price")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("InvoiceID");
+
+                    b.ToTable("Hospital_Subscription_Invoice_Item", (string)null);
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.HrmAttendanceRecord", b =>
@@ -7035,6 +7191,17 @@ namespace HPM.Web.Data.Migrations
                     b.Navigation("Order");
                 });
 
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalSubscriptionInvoiceItem", b =>
+                {
+                    b.HasOne("HPM.Web.Data.Entities.HospitalSubscriptionInvoice", "Invoice")
+                        .WithMany("Items")
+                        .HasForeignKey("InvoiceID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Invoice");
+                });
+
             modelBuilder.Entity("HPM.Web.Data.Entities.HrmAttendanceRecord", b =>
                 {
                     b.HasOne("HPM.Web.Data.Entities.HrmEmployee", "Employee")
@@ -7652,6 +7819,11 @@ namespace HPM.Web.Data.Migrations
                 });
 
             modelBuilder.Entity("HPM.Web.Data.Entities.DiagnosticOrder", b =>
+                {
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HPM.Web.Data.Entities.HospitalSubscriptionInvoice", b =>
                 {
                     b.Navigation("Items");
                 });

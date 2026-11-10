@@ -6,6 +6,7 @@
 @inject UserAdministrationService UserAdministration
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IDbContextFactory<HpmDbContext> DbFactory
+@inject HospitalLicenseService Licenses
 
 <PageTitle>@I18n.T("Users & Roles", "Users & Roles") | @Branding.HospitalName</PageTitle>
 
@@ -105,7 +106,7 @@
                         </div>
                         <InputSelect @bind-Value="editor.Role" class="useradmin-select">
                             <option value="">@I18n.T("-- Select Operational Role --", "-- Select Operational Role --")</option>
-                            @foreach (var role in RoleNames.All)
+                            @foreach (var role in allowedRoles)
                             {
                                 <option value="@role">@role</option>
                             }
@@ -284,7 +285,7 @@
 
                     <select @bind="roleFilter" class="staff-select-filter">
                         <option value="">@I18n.T("All Roles", "All Roles")</option>
-                        @foreach (var r in RoleNames.All)
+                        @foreach (var r in allowedRoles)
                         {
                             <option value="@r">@r</option>
                         }
@@ -450,6 +451,7 @@
     private List<AppUser> users = [];
     private List<DoctorsProfile> doctors = [];
     private Dictionary<int, string> userRoles = [];
+    private List<string> allowedRoles = [];
     private string message = string.Empty;
     private string messageClass = "success";
     private bool showPassword = false;
@@ -531,6 +533,8 @@
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        var enabled = await Licenses.EnabledModulesAsync();
+        allowedRoles = RoleNames.All.Where(x => HospitalLicenseService.StaffRoleAvailable(x, enabled)).ToList();
         await using (var db = await DbFactory.CreateDbContextAsync())
         {
             doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).OrderBy(x => x.Name).ToListAsync();
@@ -553,8 +557,9 @@
         userRoles = new();
         foreach (var user in users)
         {
-            userRoles[user.Id] = (await UserManager.GetRolesAsync(user)).FirstOrDefault() ?? "No role";
+            userRoles[user.Id] = (await UserManager.GetRolesAsync(user)).FirstOrDefault(x => allowedRoles.Contains(x)) ?? "No role";
         }
+        users = users.Where(x => allowedRoles.Contains(userRoles[x.Id])).ToList();
     }
 
     private void TogglePasswordVisibility()
@@ -582,7 +587,7 @@
             return;
         }
 
-        if (!RoleNames.All.Contains(editor.Role))
+        if (!allowedRoles.Contains(editor.Role))
         {
             Fail(I18n.IsBangla ? "সঠিক রোল নির্বাচন করুন।" : "Select a valid role.");
             return;

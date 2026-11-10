@@ -2,6 +2,8 @@
 @attribute [Authorize]
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject NavigationManager Nav
+@inject HospitalLicenseService Licenses
+@inject AuthenticationStateProvider AuthStateProvider
 @implements IDisposable
 @using HPM.Web.Data
 @using HPM.Web.Data.Entities
@@ -9,6 +11,13 @@
 @using System.Globalization
 
 <PageTitle>@I18n.T("Hospital Overview & Diagnostic Intelligence") | @Branding.HospitalName</PageTitle>
+
+@if (!canShowDashboard)
+{
+    <section class="panel" style="padding:28px;margin:20px 0"><h1>Hospital workspace</h1><p>Your licensed modules are available in the navigation menu.</p><p>Need another module? Please contact your App Owner.</p></section>
+}
+else
+{
 
 <!-- Top Dashboard Header & Controls -->
 <div class="dash-header-wrap">
@@ -720,7 +729,10 @@
     }
 </style>
 
+}
+
 @code {
+    private bool canShowDashboard = true;
     // State Variables
     private string datePreset = "30d"; // "today", "yesterday", "7d", "month", "30d", "custom"
     private DateTime startDate = DateTime.Today.AddDays(-29);
@@ -778,7 +790,14 @@
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        await LoadDashboardDataAsync();
+        if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner))
+        {
+            Nav.NavigateTo("/app-owner", true);
+            return;
+        }
+        var enabled = await Licenses.EnabledModulesAsync();
+        canShowDashboard = enabled.Contains(LicensedModules.Diagnostics) && enabled.Contains(LicensedModules.Reports);
+        if (canShowDashboard) await LoadDashboardDataAsync();
     }
 
     private async Task ChangeDatePreset(string preset)

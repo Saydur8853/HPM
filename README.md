@@ -89,10 +89,15 @@ Open [http://localhost:5180](http://localhost:5180).
 On a new database, visit [http://localhost:5180/setup](http://localhost:5180/setup) and provide:
 
 - the hospital name;
-- the first Superadmin user ID; and
+- an optional hospital photo/logo;
+- the App Owner user ID; and
 - a strong password with at least eight characters, including uppercase, lowercase, a number, and a special character.
 
-The setup page can be completed only once. After setup, sign in with the Superadmin account you created.
+The setup page can be completed only once. After setup, sign in with the App Owner account and open `/app-owner`. Select licensed modules (required dependencies are added automatically), enter module prices and subscription/hosting/domain dates, then create the Hospital Owner credentials. The App Owner has full administrative access regardless of the hospital's licensed package; opening `/` redirects them to `/app-owner`. The Hospital Owner receives access to licensed modules and can create staff users only within that license; unavailable modules are hidden and direct navigation is denied.
+
+For an existing installation, current module access is retained until an App Owner activates a package. To provision its first App Owner without changing existing users, set `InitialAppOwner__UserName` and `InitialAppOwner__Password` as environment variables before startup. The new account must change its temporary password at first sign-in. Do not put these credentials in source control.
+
+Subscription invoices are issued and marked paid manually in `/app-owner`. Hosting, domain and subscription renewals appear as red warnings to the Hospital Owner from 15 days before their expiry. Expiry warnings do not automatically remove clinical access; the App Owner controls module activation.
 
 ### Windows quick launcher
 

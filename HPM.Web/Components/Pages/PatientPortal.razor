@@ -5,6 +5,7 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject UserManager<AppUser> Users
 @inject IJSRuntime JS
+@inject HospitalLicenseService Licenses
 @using System.Security.Claims
 @using HPM.Web.Data
 @using HPM.Web.Data.Entities
@@ -36,14 +37,14 @@
     {
         <section class="patient-portal-welcome"><div><small>WELCOME BACK</small><h2>@patient.Name</h2><span>Patient ID: @patient.PatientID</span></div><div class="patient-portal-stats"><span><b>@appointments.Count</b> Appointments</span><span><b>@reports.Count</b> Reports</span><span><b>@prescriptions.Count</b> Prescriptions</span></div></section>
         <nav class="patient-portal-tabs" aria-label="Patient portal sections">
-            @foreach (var tab in new[] { ("overview", "Overview"), ("doctors", "Find doctor"), ("appointments", "Appointments"), ("documents", "My documents"), ("queries", "My queries") })
+            @foreach (var tab in PortalTabs)
             { <button class="@(activeTab == tab.Item1 ? "active" : null)" @onclick="() => activeTab = tab.Item1">@tab.Item2</button> }
         </nav>
 
         @if (activeTab == "overview")
         {
             <div class="patient-portal-grid">
-                <section class="patient-portal-card"><h3>Upcoming appointments</h3>@foreach (var a in appointments.Where(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled").Take(5)) { <div class="record"><b>@DoctorName(a.DoctorID)</b><span>@a.ApptDate.ToString("dd MMM yyyy") · Serial @a.ApptSLNO · @a.Status</span></div> }@if (!appointments.Any(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled")) { <p>No upcoming appointments.</p> }<button class="text-button" @onclick='() => activeTab = "doctors"'>Find a doctor →</button></section>
+                @if (Enabled(LicensedModules.Appointments)) { <section class="patient-portal-card"><h3>Upcoming appointments</h3>@foreach (var a in appointments.Where(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled").Take(5)) { <div class="record"><b>@DoctorName(a.DoctorID)</b><span>@a.ApptDate.ToString("dd MMM yyyy") · Serial @a.ApptSLNO · @a.Status</span></div> }@if (!appointments.Any(x => x.ApptDate.Date >= DateTime.Today && x.Status != "Cancelled")) { <p>No upcoming appointments.</p> }<button class="text-button" @onclick='() => activeTab = "doctors"'>Find a doctor →</button></section> }
                 <section class="patient-portal-card"><h3>Available documents</h3><div class="record"><b>Verified diagnostic reports</b><span>@reports.Count available</span></div><div class="record"><b>Signed prescriptions</b><span>@prescriptions.Count available</span></div><div class="record"><b>Discharge documents</b><span>@discharges.Count available</span></div><button class="text-button" @onclick='() => activeTab = "documents"'>Open documents →</button></section>
             </div>
         }
@@ -61,9 +62,9 @@
         else if (activeTab == "documents")
         {
             <div class="patient-portal-grid">
-                <section class="patient-portal-card"><h3>Verified diagnostic reports</h3>@foreach (var r in reports) { <div class="record"><b>Report #@r.ID</b><span>@r.TransDate.ToString("dd MMM yyyy")</span><a href="/portal/report/@r.ID" target="_blank">View / print report</a></div> }@if (reports.Count == 0) { <p>No verified, released reports available.</p> }</section>
-                <section class="patient-portal-card"><h3>Signed prescriptions</h3>@foreach (var rx in prescriptions) { <div class="record"><b>Prescription #@rx.ID</b><span>@(rx.SignedAt ?? rx.VisitDate)?.ToString("dd MMM yyyy")</span><a href="/patient/document/prescription/@rx.ID" target="_blank">View / print prescription</a></div> }@if (prescriptions.Count == 0) { <p>No signed prescriptions available.</p> }</section>
-                <section class="patient-portal-card"><h3>Discharge documents</h3>@foreach (var d in discharges) { <div class="record"><b>Discharge #@d.BillNo</b><span>@d.DischargeDate.ToString("dd MMM yyyy")</span><a href="/patient/document/discharge/@d.BillNo" target="_blank">View / print discharge document</a></div> }@if (discharges.Count == 0) { <p>No completed discharge documents available.</p> }</section>
+                @if (Enabled(LicensedModules.Diagnostics)) { <section class="patient-portal-card"><h3>Verified diagnostic reports</h3>@foreach (var r in reports) { <div class="record"><b>Report #@r.ID</b><span>@r.TransDate.ToString("dd MMM yyyy")</span><a href="/portal/report/@r.ID" target="_blank">View / print report</a></div> }@if (reports.Count == 0) { <p>No verified, released reports available.</p> }</section> }
+                @if (Enabled(LicensedModules.Doctor)) { <section class="patient-portal-card"><h3>Signed prescriptions</h3>@foreach (var rx in prescriptions) { <div class="record"><b>Prescription #@rx.ID</b><span>@(rx.SignedAt ?? rx.VisitDate)?.ToString("dd MMM yyyy")</span><a href="/patient/document/prescription/@rx.ID" target="_blank">View / print prescription</a></div> }@if (prescriptions.Count == 0) { <p>No signed prescriptions available.</p> }</section> }
+                @if (Enabled(LicensedModules.Ipd)) { <section class="patient-portal-card"><h3>Discharge documents</h3>@foreach (var d in discharges) { <div class="record"><b>Discharge #@d.BillNo</b><span>@d.DischargeDate.ToString("dd MMM yyyy")</span><a href="/patient/document/discharge/@d.BillNo" target="_blank">View / print discharge document</a></div> }@if (discharges.Count == 0) { <p>No completed discharge documents available.</p> }</section> }
             </div>
         }
         else if (activeTab == "queries")
@@ -86,6 +87,18 @@
     private List<CashMemoDInvestigation> reports = [];
     private List<IpdFinalBill> discharges = [];
     private List<PatientPortalQuery> queries = [];
+    private HashSet<string> enabledModules = [];
+    private bool Enabled(string code) => enabledModules.Contains(code);
+    private IEnumerable<(string, string)> PortalTabs
+    {
+        get
+        {
+            yield return ("overview", "Overview");
+            if (Enabled(LicensedModules.Appointments)) { yield return ("doctors", "Find doctor"); yield return ("appointments", "Appointments"); }
+            if (Enabled(LicensedModules.Diagnostics) || Enabled(LicensedModules.Doctor) || Enabled(LicensedModules.Ipd)) yield return ("documents", "My documents");
+            yield return ("queries", "My queries");
+        }
+    }
     private IEnumerable<DoctorsProfile> FilteredDoctors => doctors.Where(x => string.IsNullOrWhiteSpace(doctorSearch) || (x.Name?.Contains(doctorSearch, StringComparison.OrdinalIgnoreCase) ?? false) || (x.Degree?.Contains(doctorSearch, StringComparison.OrdinalIgnoreCase) ?? false) || DepartmentName(x.Department).Contains(doctorSearch, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
@@ -102,12 +115,18 @@
         hasConsent = await db.PatientPortalConsents.AnyAsync(x => x.PatientID == patientId && x.Version == "2026-11");
         if (patient is null || !hasConsent) { loading = false; return; }
 
-        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
-        departments = await db.Departments.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
-        appointments = await db.DoctorAppointments.AsNoTracking().Where(x => x.PatientID == patientId).OrderByDescending(x => x.ApptDate).Take(100).ToListAsync();
-        prescriptions = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).Where(x => x.PatientID == patientId && x.Status == "Signed").OrderByDescending(x => x.SignedAt).Take(50).ToListAsync();
+        enabledModules = await Licenses.EnabledModulesAsync();
 
-        var memos = await db.EmergencyMemos.AsNoTracking().Where(x => x.PatientID == patientId && (x.ModuleID == 2 || x.ModuleID == 11)).OrderByDescending(x => x.TransDate).Take(100).ToListAsync();
+        if (Enabled(LicensedModules.Appointments))
+        {
+            doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+            departments = await db.Departments.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+            appointments = await db.DoctorAppointments.AsNoTracking().Where(x => x.PatientID == patientId).OrderByDescending(x => x.ApptDate).Take(100).ToListAsync();
+        }
+        else { doctors = []; appointments = []; }
+        prescriptions = Enabled(LicensedModules.Doctor) ? await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).Where(x => x.PatientID == patientId && x.Status == "Signed").OrderByDescending(x => x.SignedAt).Take(50).ToListAsync() : [];
+
+        var memos = Enabled(LicensedModules.Diagnostics) ? await db.EmergencyMemos.AsNoTracking().Where(x => x.PatientID == patientId && (x.ModuleID == 2 || x.ModuleID == 11)).OrderByDescending(x => x.TransDate).Take(100).ToListAsync() : [];
         var memoIds = memos.Select(x => x.ID).ToList();
         var results = await db.LabTestResults.AsNoTracking().Where(x => memoIds.Contains(x.MemoID) && x.Status == "Active").ToListAsync();
         reports = memos.Where(x =>
@@ -117,7 +136,7 @@
             return released && ownResults.Count > 0 && ownResults.All(r => r.IsVerified && !string.IsNullOrWhiteSpace(r.ResultValue));
         }).ToList();
 
-        var admissionIds = await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patientId).Select(x => x.ID).ToListAsync();
+        var admissionIds = Enabled(LicensedModules.Ipd) ? await db.PatientAdmissions.AsNoTracking().Where(x => x.PatientID == patientId).Select(x => x.ID).ToListAsync() : [];
         var completedOrders = await db.IpdMedicalDischargeOrders.AsNoTracking().Where(x => admissionIds.Contains(x.AdmissionID) && x.Status == "Completed").OrderByDescending(x => x.OrderedAt).ToListAsync();
         var completedOrderIds = completedOrders.Select(x => (long?)x.ID).ToList();
         discharges = await db.IpdFinalBills.AsNoTracking().Where(x => admissionIds.Contains(x.AdmissionID) && completedOrderIds.Contains(x.MedicalDischargeOrderID)).OrderByDescending(x => x.DischargeDate).Take(50).ToListAsync();
@@ -143,6 +162,7 @@
     private void SelectDoctor(int id) { selectedDoctorId = id; activeTab = "doctors"; }
     private async Task BookAppointmentAsync()
     {
+        if (!(await Licenses.EnabledModulesAsync()).Contains(LicensedModules.Appointments)) { Fail("Appointment booking is not included in this hospital package."); return; }
         if (patient is null || selectedDoctorId <= 0 || bookingDate.Date < DateTime.Today || bookingDate.Date > DateTime.Today.AddDays(90)) { Fail("Choose an appointment date within the next 90 days."); return; }
         var patientId = patient.PatientID;
         try

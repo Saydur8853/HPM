@@ -135,6 +135,10 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<BloodIssue> BloodIssues => Set<BloodIssue>();
     public DbSet<PatientPortalConsent> PatientPortalConsents => Set<PatientPortalConsent>();
     public DbSet<PatientPortalQuery> PatientPortalQueries => Set<PatientPortalQuery>();
+    public DbSet<HospitalLicense> HospitalLicenses => Set<HospitalLicense>();
+    public DbSet<HospitalModuleLicense> HospitalModuleLicenses => Set<HospitalModuleLicense>();
+    public DbSet<HospitalSubscriptionInvoice> HospitalSubscriptionInvoices => Set<HospitalSubscriptionInvoice>();
+    public DbSet<HospitalSubscriptionInvoiceItem> HospitalSubscriptionInvoiceItems => Set<HospitalSubscriptionInvoiceItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -161,6 +165,31 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         ConfigureHrm(modelBuilder);
         ConfigureBloodBank(modelBuilder);
         ConfigurePatientPortal(modelBuilder);
+        ConfigureLicensing(modelBuilder);
+    }
+
+    private static void ConfigureLicensing(ModelBuilder b)
+    {
+        var license = b.Entity<HospitalLicense>();
+        license.ToTable("Hospital_License");
+        license.Property(x => x.ID).ValueGeneratedNever();
+        license.Property(x => x.HostingCost).HasPrecision(18, 2);
+        license.Property(x => x.DomainCost).HasPrecision(18, 2);
+        var module = b.Entity<HospitalModuleLicense>();
+        module.ToTable("Hospital_Module_License");
+        module.HasIndex(x => x.ModuleCode).IsUnique();
+        module.Property(x => x.MonthlyPrice).HasPrecision(18, 2);
+        module.Property(x => x.YearlyPrice).HasPrecision(18, 2);
+        var invoice = b.Entity<HospitalSubscriptionInvoice>();
+        invoice.ToTable("Hospital_Subscription_Invoice");
+        invoice.Property(x => x.ModuleTotal).HasPrecision(18, 2);
+        invoice.Property(x => x.HostingCost).HasPrecision(18, 2);
+        invoice.Property(x => x.DomainCost).HasPrecision(18, 2);
+        invoice.Property(x => x.Total).HasPrecision(18, 2);
+        var item = b.Entity<HospitalSubscriptionInvoiceItem>();
+        item.ToTable("Hospital_Subscription_Invoice_Item");
+        item.Property(x => x.Price).HasPrecision(18, 2);
+        item.HasOne(x => x.Invoice).WithMany(x => x.Items).HasForeignKey(x => x.InvoiceID).OnDelete(DeleteBehavior.Cascade);
     }
 
     private static void ConfigurePatientPortal(ModelBuilder b)

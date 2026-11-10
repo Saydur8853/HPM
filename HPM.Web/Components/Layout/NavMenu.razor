@@ -1,4 +1,6 @@
 @inject NavigationManager Nav
+@inject HospitalLicenseService Licenses
+@inject AuthenticationStateProvider AuthStateProvider
 @implements IDisposable
 
 <AuthorizeView Context="auth">
@@ -138,6 +140,7 @@
 
 @code {
     private string? openMenu;
+    private HashSet<string> enabledModules = [];
     private string? openSubmenu;
     private int menuHoverGeneration;
     private int submenuHoverGeneration;
@@ -190,7 +193,13 @@
             Item("Medical & Fitness Certificates", "/medical/certificates?type=fitness", ModuleAccess.MedicalCertificates, "💪", "Fitness / Leave", "Physical fitness & medical illness leave certificates"))
     ];
 
-    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+    protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        enabledModules = await Licenses.EnabledModulesAsync();
+        if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner))
+            enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
     private void ToggleMenu(string key) { openMenu = openMenu == key ? null : key; openSubmenu = null; }
     private void ToggleSubmenu(string key) => openSubmenu = openSubmenu == key ? null : key;
     private void CloseMenus()
@@ -265,11 +274,18 @@
 
         return false;
     }
-    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) { CloseMenus(); InvokeAsync(StateHasChanged); }
-    private static bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, MenuGroup group) =>
-        ModuleAccess.CanView(user, group.Roles) && (group.Items.Count == 0 || group.Items.Any(item => CanViewItem(user, item)));
-    private static bool CanViewItem(System.Security.Claims.ClaimsPrincipal user, MenuItem item) =>
-        item.IsSeparator || item.IsHeader || (ModuleAccess.CanView(user, item.Roles) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child))));
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        CloseMenus();
+        _ = InvokeAsync(async () => { enabledModules = await Licenses.EnabledModulesAsync(); if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner)) enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase); StateHasChanged(); });
+    }
+    private bool Licensed(string href) =>
+        (href.StartsWith("/doctor/prescription", StringComparison.OrdinalIgnoreCase) && enabledModules.Contains(LicensedModules.Pharmacy)) ||
+        LicensedModules.ForPath(href) is not string code || enabledModules.Contains(code);
+    private bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, MenuGroup group) =>
+        ModuleAccess.CanView(user, group.Roles) && Licensed(group.Href) && (group.Items.Count == 0 || group.Items.Any(item => CanViewItem(user, item)));
+    private bool CanViewItem(System.Security.Claims.ClaimsPrincipal user, MenuItem item) =>
+        item.IsSeparator || item.IsHeader || (ModuleAccess.CanView(user, item.Roles) && Licensed(item.Href) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child))));
     private static MenuGroup Group(string key, string label, params MenuItem[] items) => new(key, label, string.Empty, [], items);
     private static MenuGroup Group(string key, string label, string[] roles, params MenuItem[] items) => new(key, label, string.Empty, roles, items);
     private static MenuGroup Link(string key, string label, string href, string[] roles) => new(key, label, href, roles, []);
