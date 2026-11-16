@@ -139,6 +139,7 @@
 </AuthorizeView>
 
 @code {
+    [Parameter] public EventCallback OnNavigate { get; set; }
     private string? openMenu;
     private HashSet<string> enabledModules = [];
     private string? openSubmenu;
@@ -196,13 +197,23 @@
     protected override async Task OnInitializedAsync()
     {
         Nav.LocationChanged += OnLocationChanged;
+        HospitalLicenseService.OnLicenseChanged += HandleLicenseChanged;
         enabledModules = await Licenses.EnabledModulesAsync();
         if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner))
             enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
     private void ToggleMenu(string key) { openMenu = openMenu == key ? null : key; openSubmenu = null; }
     private void ToggleSubmenu(string key) => openSubmenu = openSubmenu == key ? null : key;
-    private void CloseMenus()
+    private async Task CloseMenus()
+    {
+        ResetMenus();
+        if (OnNavigate.HasDelegate)
+        {
+            await OnNavigate.InvokeAsync();
+        }
+    }
+
+    private void ResetMenus()
     {
         menuHoverGeneration++;
         submenuHoverGeneration++;
@@ -276,8 +287,18 @@
     }
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
-        CloseMenus();
-        _ = InvokeAsync(async () => { enabledModules = await Licenses.EnabledModulesAsync(); if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner)) enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase); StateHasChanged(); });
+        ResetMenus();
+    }
+
+    private void HandleLicenseChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            enabledModules = await Licenses.EnabledModulesAsync();
+            if ((await AuthStateProvider.GetAuthenticationStateAsync()).User.IsInRole(RoleNames.AppOwner))
+                enabledModules = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            StateHasChanged();
+        });
     }
     private bool Licensed(string href) =>
         (href.StartsWith("/doctor/prescription", StringComparison.OrdinalIgnoreCase) && enabledModules.Contains(LicensedModules.Pharmacy)) ||
@@ -296,7 +317,11 @@
     private static MenuItem Parent(string key, string label, params MenuItem[] children) => new(key, label, string.Empty, [], children, false, false);
     private static MenuItem Legacy(string label, string module, string[] roles) => Item(label, $"/legacy-module?module={Uri.EscapeDataString(module)}&name={Uri.EscapeDataString(label)}", roles);
     private static string Key(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("&", "and").Replace("'", string.Empty);
-    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        HospitalLicenseService.OnLicenseChanged -= HandleLicenseChanged;
+    }
     private sealed record MenuGroup(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Items);
     private sealed record MenuItem(string Key, string Label, string Href, IReadOnlyList<string> Roles, IReadOnlyList<MenuItem> Children, bool IsSeparator, bool IsLogout, bool IsHeader = false, string? Icon = null, string? Badge = null, string? Description = null);
 }

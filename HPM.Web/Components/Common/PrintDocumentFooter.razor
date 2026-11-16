@@ -1,3 +1,7 @@
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@using System.Security.Claims
+
 <div class="print-document-footer">
     @if (!HideSignatures)
     {
@@ -38,11 +42,14 @@
         <div class="print-legal-notice-strip">
             <p class="print-disclaimer-text">@I18n.T("It is an auto generated report. Please contact report delivery desk to collect the signed copy.", "It is an auto generated report. Please contact report delivery desk to collect the signed copy.")</p>
             <div class="print-meta-bottom-row">
+                <span class="print-prepared-by">@I18n.T("Prepared By"): <strong>@preparedByName</strong></span>
                 <span class="print-generated-time">@I18n.T("Printed on"): @DateTime.Now.ToString("dd MMM yyyy hh:mm tt")</span>
                 <span class="print-page-number">@PageNumberText</span>
             </div>
         </div>
     }
+
+    <PrintDeveloperFooter />
 </div>
 
 @code {
@@ -55,6 +62,23 @@
     [Parameter] public string PageNumberText { get; set; } = "Page 1 of 1";
 
     [Parameter] public IEnumerable<string>? Signatures { get; set; }
+    private string preparedByName = "User";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            preparedByName = AppUser.GetEffectiveName(principal);
+            if (int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var uid))
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == uid);
+                if (user is not null) preparedByName = user.GetEffectiveName();
+            }
+        }
+        catch { }
+    }
 
     protected override void OnParametersSet()
     {

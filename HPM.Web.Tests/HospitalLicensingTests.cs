@@ -32,7 +32,8 @@ public sealed class HospitalLicensingTests
         var core = new HashSet<string>(StringComparer.Ordinal)
         {
             "AccessDenied", "AppOwnerDashboard", "AppOwnerInvoice", "AuditLogs", "ChangePassword", "ClinicalMasters",
-            "DoctorsMaster", "Error", "Home", "HospitalSettings", "LegacyModule", "Login", "ServiceMasters", "Setup", "UserAdmin"
+            "DoctorsMaster", "Error", "Home", "HospitalSettings", "LegacyModule", "Login",
+            "PatientPortal", "PatientPortalDocument", "PatientPortalLogin", "PublicLabReport", "ServiceMasters", "Setup", "UserAdmin"
         };
         var uncovered = typeof(HpmDbContext).Assembly.GetTypes()
             .Where(x => x.GetCustomAttributes(typeof(RouteAttribute), true).Length > 0)

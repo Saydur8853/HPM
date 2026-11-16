@@ -47,6 +47,20 @@ public sealed class HospitalProfile
     [StringLength(500)]
     public string? ReceiptFooterNote { get; set; } = "";
 
+    [StringLength(200)]
+    public string? DeveloperCompanyName { get; set; } = "AsoftPro";
+
+    [StringLength(300)]
+    public string? DeveloperCopyright { get; set; } = $"Copyright © {DateTime.Now.Year} AsoftPro. All rights reserved.";
+
+    public string? DeveloperLogoData { get; set; } = "";
+
+    [StringLength(150)]
+    public string? DeveloperEmail { get; set; } = "info@asoftpro.com";
+
+    [StringLength(100)]
+    public string? DeveloperPhone { get; set; } = "+880 1700-000000";
+
     public bool IsSetupComplete { get; set; }
     public DateTime? SetupCompletedAt { get; set; }
 

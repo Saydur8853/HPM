@@ -914,6 +914,99 @@ window.hpm = {
         }
     },
 
+    _escapeHtml: function (str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    },
+
+    getDeveloperFooterHtml: function (isThermal) {
+        const footerEl = document.getElementById('hpm-global-dev-footer');
+        const company = footerEl?.dataset?.devCompany?.trim() || 'AsoftPro';
+        const contact = footerEl?.dataset?.devContact?.trim() || '';
+        const logo = footerEl?.dataset?.devLogo?.trim() || '';
+        const safeCompany = this._escapeHtml(company);
+        const safeContact = this._escapeHtml(contact);
+        const safeLogo = (logo.startsWith('data:image/') || logo.startsWith('/')) ? this._escapeHtml(logo) : '';
+        const logoHtml = safeLogo
+            ? `<img src="${safeLogo}" alt="${safeCompany}" class="print-dev-brand-logo" />`
+            : `<span class="print-dev-brand-badge">AP</span>`;
+        const contactHtml = safeContact
+            ? `<span class="print-dev-brand-sep">|</span><span class="print-dev-brand-contact">Contact: ${safeContact}</span>`
+            : '';
+
+        return `<div class="print-dev-brand-footer${isThermal ? ' compact-thermal' : ''}">`
+            + `<span class="print-dev-brand-left"><span>Developed by</span>${logoHtml}<strong>${safeCompany}</strong></span>`
+            + `${contactHtml}`
+            + `</div>`;
+    },
+
+    getDeveloperFooterCss: function () {
+        return `
+            .print-dev-brand-footer {
+                margin-top: 8px !important;
+                padding-top: 5px !important;
+                border-top: 1px dashed #cbd5e1 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                flex-wrap: wrap !important;
+                gap: 4px 8px !important;
+                font-size: 9px !important;
+                color: #475569 !important;
+                line-height: 1.3 !important;
+                page-break-inside: avoid !important;
+            }
+            .print-dev-brand-left {
+                display: inline-flex !important;
+                align-items: center !important;
+                gap: 4px !important;
+            }
+            .print-dev-brand-left strong { color: #0f172a !important; font-weight: 700 !important; }
+            .print-dev-brand-logo {
+                height: 13px !important;
+                max-width: 65px !important;
+                width: auto !important;
+                object-fit: contain !important;
+                vertical-align: middle !important;
+                display: inline-block !important;
+            }
+            .print-dev-brand-badge {
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                width: 14px !important;
+                height: 14px !important;
+                border-radius: 3px !important;
+                background: #0f172a !important;
+                color: #ffffff !important;
+                font-size: 7.5px !important;
+                font-weight: 800 !important;
+                line-height: 1 !important;
+            }
+            .print-dev-brand-sep { color: #94a3b8 !important; }
+            .print-dev-brand-contact { color: #334155 !important; font-weight: 600 !important; }
+            .print-dev-brand-footer.compact-thermal {
+                margin-top: 6px !important;
+                padding-top: 4px !important;
+                border-top: 1px dashed #000000 !important;
+                font-size: 8.5px !important;
+                color: #000000 !important;
+                text-align: center !important;
+                flex-direction: column !important;
+                gap: 2px !important;
+            }
+            .print-dev-brand-footer.compact-thermal .print-dev-brand-sep { display: none !important; }
+            .print-dev-brand-footer.compact-thermal .print-dev-brand-logo { height: 11px !important; }
+            .print-dev-brand-footer.compact-thermal .print-dev-brand-badge { background: #000000 !important; width: 12px !important; height: 12px !important; font-size: 7px !important; }
+            .print-dev-brand-footer.compact-thermal .print-dev-brand-left strong,
+            .print-dev-brand-footer.compact-thermal .print-dev-brand-contact { color: #000000 !important; }
+        `;
+    },
+
     printElement: function (elementId, title) {
         if (elementId === 'patient-print' || elementId === 'patient-card-print') {
             return this.printPatientCard(elementId, title);
@@ -932,11 +1025,14 @@ window.hpm = {
         document.body.appendChild(frame);
         const printWindow = frame.contentWindow;
         const isTubeLabel = elementId === 'sample-sticker-print' || elementId === 'tube-label-print' || elementId === 'imaging-tag-print' || (source && (source.classList.contains('specimen-tube-label') || source.classList.contains('tube-labels-container') || source.classList.contains('sample-sticker-label') || source.classList.contains('imaging-study-tag')));
-        const isThermal = !isTubeLabel && (elementId === 'pharmacy-thermal-print' || (source && source.classList.contains('pos-receipt-80mm')));
+        const isThermal = !isTubeLabel && (elementId === 'pharmacy-thermal-print' || (source && (source.classList.contains('pos-receipt-80mm') || !!source.querySelector('.pos-receipt-80mm, .pos-thermal-receipt'))));
         const isA5 = !isTubeLabel && ((source && (source.classList.contains('a5-memo-sheet') || source.classList.contains('print-a5-sheet'))) || (elementId === 'diagnostic-print' && source && !source.classList.contains('print-a4-sheet')));
+        const needsDevFooter = !isTubeLabel && !source.querySelector('.print-dev-brand-footer');
+        const devFooterHtml = needsDevFooter ? this.getDeveloperFooterHtml(isThermal) : '';
         printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title>
         <link rel="stylesheet" href="/app.css">
         <style>
+            ${this.getDeveloperFooterCss()}
             ${isTubeLabel ? `
             @page { size: 40mm 20mm; margin: 0; }
             * { box-sizing: border-box !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -1068,6 +1164,19 @@ window.hpm = {
             button, .btn, .no-print { display: none !important; }
         </style></head><body>${source.outerHTML}</body></html>`);
         printWindow.document.close();
+
+        if (devFooterHtml) {
+            const doc = printWindow.document;
+            const target = doc.querySelector('.pos-receipt-80mm, .pos-thermal-receipt')
+                || doc.querySelector('.a5-memo-sheet, .print-a5-sheet')
+                || doc.querySelector('.delta-report-sheet, .clinical-report-sheet, .a4-page-sheet')
+                || doc.querySelector('.print-sheet')
+                || doc.querySelector('.print-document')
+                || doc.body;
+            if (target && !target.querySelector('.print-dev-brand-footer')) {
+                target.insertAdjacentHTML('beforeend', devFooterHtml);
+            }
+        }
         
         const cleanup = () => {
             try {
@@ -1201,6 +1310,7 @@ window.hpm = {
             border-top: 1px solid #e2e8f0;
             padding-top: 4px;
         }
+        ${this.getDeveloperFooterCss()}
     </style>
 </head>
 <body>
@@ -1217,6 +1327,7 @@ window.hpm = {
         <span>Delta Medical College Hospital Information System</span>
         <span>Page 1</span>
     </div>
+    ${this.getDeveloperFooterHtml(false)}
 </body>
 </html>`);
         printWindow.document.close();

@@ -349,6 +349,11 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         profile.Property(x => x.LabHeaderDept).HasColumnName("Lab_Header_Dept").HasMaxLength(200);
         profile.Property(x => x.ReceiptHeaderNote).HasColumnName("Receipt_Header_Note").HasMaxLength(500);
         profile.Property(x => x.ReceiptFooterNote).HasColumnName("Receipt_Footer_Note").HasMaxLength(500);
+        profile.Property(x => x.DeveloperCompanyName).HasColumnName("Developer_Company_Name").HasMaxLength(200);
+        profile.Property(x => x.DeveloperCopyright).HasColumnName("Developer_Copyright").HasMaxLength(300);
+        profile.Property(x => x.DeveloperLogoData).HasColumnName("Developer_Logo_Data");
+        profile.Property(x => x.DeveloperEmail).HasColumnName("Developer_Email").HasMaxLength(150);
+        profile.Property(x => x.DeveloperPhone).HasColumnName("Developer_Phone").HasMaxLength(100);
         profile.Property(x => x.IsSetupComplete).HasColumnName("Is_Setup_Complete");
         profile.Property(x => x.SetupCompletedAt).HasColumnName("Setup_Completed_At").HasColumnType("datetime2");
         profile.Property(x => x.SetupBy).HasColumnName("Setup_By").HasMaxLength(100);

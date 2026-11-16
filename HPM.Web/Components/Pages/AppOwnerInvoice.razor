@@ -2,6 +2,7 @@
 @attribute [Authorize(Roles = RoleNames.AppOwner)]
 @layout Layout.AppOwnerLayout
 @inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
 @using HPM.Web.Data
 @using HPM.Web.Data.Entities
@@ -168,13 +169,14 @@
                 <div class="sheet-signatures">
                     <div class="sig-box">
                         <div class="sig-line"></div>
-                        <span>Prepared By (App Owner)</span>
+                        <span>Prepared By (@preparedByName)</span>
                     </div>
                     <div class="sig-box">
                         <div class="sig-line"></div>
                         <span>Hospital Authority Acceptance</span>
                     </div>
                 </div>
+                <PrintDeveloperFooter />
             </footer>
         </article>
     }
@@ -183,10 +185,15 @@
 @code {
     [Parameter] public long Id { get; set; }
     private HospitalSubscriptionInvoice? invoice;
+    private string preparedByName = "User";
 
     protected override async Task OnParametersSetAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userId = int.TryParse(auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : 0;
+        var dbUser = userId > 0 ? await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId) : null;
+        preparedByName = dbUser?.GetEffectiveName() ?? HPM.Web.Security.AppUser.GetEffectiveName(auth.User, "User");
         invoice = await db.HospitalSubscriptionInvoices.AsNoTracking().Include(x => x.Items).SingleOrDefaultAsync(x => x.ID == Id);
     }
 

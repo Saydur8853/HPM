@@ -153,6 +153,33 @@ await using (var scope = app.Services.CreateAsyncScope())
             BEGIN
                 ALTER TABLE [Hospital_License] ADD [OwnerPassword] nvarchar(100) NULL;
             END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Company_Name')
+            BEGIN
+                ALTER TABLE [Hospital_Profile] ADD [Developer_Company_Name] nvarchar(200) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Copyright')
+            BEGIN
+                ALTER TABLE [Hospital_Profile] ADD [Developer_Copyright] nvarchar(300) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Logo_Data')
+            BEGIN
+                ALTER TABLE [Hospital_Profile] ADD [Developer_Logo_Data] nvarchar(max) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Email')
+            BEGIN
+                ALTER TABLE [Hospital_Profile] ADD [Developer_Email] nvarchar(150) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Phone')
+            BEGIN
+                ALTER TABLE [Hospital_Profile] ADD [Developer_Phone] nvarchar(100) NULL;
+            END
+            IF OBJECT_ID(N'[AspNetUsers]', N'U') IS NOT NULL
+            BEGIN
+                UPDATE [AspNetUsers]
+                SET [DisplayName] = [UserName]
+                WHERE [DisplayName] IN (N'Hospital Owner', N'App Owner', N'System Administrator', N'Administrator', N'Staff', N'Staff Member', N'')
+                  AND [UserName] IS NOT NULL AND [UserName] <> N'';
+            END
 
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Registration]') AND name = 'Weight')
             BEGIN
@@ -276,7 +303,7 @@ await using (var scope = app.Services.CreateAsyncScope())
             {
                 var existing = await users.FindByNameAsync(bootstrapName);
                 if (existing is not null) throw new InvalidOperationException("InitialAppOwner user ID already belongs to another account.");
-                var owner = new AppUser { UserName = bootstrapName, DisplayName = "App Owner", IsActive = true, MustChangePassword = true };
+                var owner = new AppUser { UserName = bootstrapName, DisplayName = bootstrapName, IsActive = true, MustChangePassword = true };
                 var created = await users.CreateAsync(owner, bootstrapPassword);
                 if (!created.Succeeded) throw new InvalidOperationException(string.Join("; ", created.Errors.Select(x => x.Description)));
                 var assigned = await users.AddToRolesAsync(owner, [RoleNames.AppOwner, RoleNames.Administrator]);
@@ -353,11 +380,8 @@ app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery,
     return Results.LocalRedirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
 }).AllowAnonymous();
 
-app.MapPost("/patient/login-submit", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory, HospitalLicenseService licenses) =>
+app.MapPost("/patient/login-submit", async (HttpContext http, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory) =>
 {
-    await antiforgery.ValidateRequestAsync(http);
-    if (!(await licenses.EnabledModulesAsync()).Contains(LicensedModules.PatientPortal))
-        return Results.LocalRedirect("/access-denied");
     var form = await http.Request.ReadFormAsync();
     var patientId = form["PatientID"].ToString().Trim();
     var phone = form["Phone"].ToString().Trim();
@@ -403,14 +427,13 @@ app.MapPost("/patient/login-submit", async (HttpContext http, IAntiforgery antif
     db.AuditLogs.Add(new HPM.Web.Data.Entities.AuditLog { UserID = user.Id, UserName = patientId, Action = "Login", EntityName = "PatientPortal", EntityID = patientId, EventTime = DateTime.UtcNow });
     await db.SaveChangesAsync();
     return Results.LocalRedirect(returnUrl);
-}).AllowAnonymous().RequireRateLimiting("patient-login");
+}).AllowAnonymous().DisableAntiforgery().RequireRateLimiting("patient-login");
 
-app.MapPost("/patient/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager) =>
+app.MapPost("/patient/logout", async (SignInManager<AppUser> signInManager) =>
 {
-    await antiforgery.ValidateRequestAsync(http);
     await signInManager.SignOutAsync();
     return Results.LocalRedirect("/patient/login");
-}).RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = RoleNames.Patient });
+}).DisableAntiforgery().RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = RoleNames.Patient });
 
 app.MapPost("/account/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager) =>
 {
@@ -452,6 +475,38 @@ app.MapPost("/account/change-password-submit", async (HttpContext http, IAntifor
     });
     await db.SaveChangesAsync();
     return Results.LocalRedirect(await userManager.IsInRoleAsync(user, RoleNames.AppOwner) ? "/app-owner" : "/account/change-password?success=1");
+}).RequireAuthorization("PasswordChangeAllowed");
+
+app.MapPost("/account/update-profile-submit", async (HttpContext http, IAntiforgery antiforgery, UserManager<AppUser> userManager, SignInManager<AppUser> signInManager, IDbContextFactory<HpmDbContext> dbFactory) =>
+{
+    await antiforgery.ValidateRequestAsync(http);
+    var form = await http.Request.ReadFormAsync();
+    var displayName = form["DisplayName"].ToString().Trim();
+    if (displayName.Length is < 2 or > 100 || AppUser.IsGenericRoleTitle(displayName))
+        return Results.LocalRedirect("/account/change-password?profileError=invalid");
+
+    var user = await userManager.GetUserAsync(http.User);
+    if (user is null) return Results.LocalRedirect("/login");
+
+    var previousName = user.DisplayName;
+    user.DisplayName = displayName;
+    var updateResult = await userManager.UpdateAsync(user);
+    if (!updateResult.Succeeded) return Results.LocalRedirect("/account/change-password?profileError=invalid");
+
+    await signInManager.RefreshSignInAsync(user);
+    await using var db = await dbFactory.CreateDbContextAsync();
+    db.AuditLogs.Add(new HPM.Web.Data.Entities.AuditLog
+    {
+        UserID = user.Id,
+        UserName = user.UserName ?? "unknown",
+        Action = "Update",
+        EntityName = "AppUser",
+        EntityID = user.Id.ToString(),
+        ChangedFields = $"DisplayName: {previousName} -> {displayName}",
+        EventTime = DateTime.UtcNow
+    });
+    await db.SaveChangesAsync();
+    return Results.LocalRedirect("/account/change-password?profileSaved=1");
 }).RequireAuthorization("PasswordChangeAllowed");
 
 app.MapRazorComponents<App>()

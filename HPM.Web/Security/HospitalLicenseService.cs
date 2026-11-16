@@ -7,27 +7,110 @@ namespace HPM.Web.Security;
 
 public sealed class HospitalLicenseService(IDbContextFactory<HpmDbContext> dbFactory)
 {
+    private static readonly SemaphoreSlim CacheLock = new(1, 1);
+    private static volatile HashSet<string>? _cachedEnabledModules;
+
+    public static event Action? OnLicenseChanged;
+
+    public void InvalidateCache()
+    {
+        _cachedEnabledModules = null;
+        OnLicenseChanged?.Invoke();
+    }
+
     public async Task<HashSet<string>> EnabledModulesAsync(CancellationToken ct = default)
     {
-        await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var license = await db.HospitalLicenses.AsNoTracking().SingleOrDefaultAsync(x => x.ID == 1, ct);
-        if (license is null)
-            return LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase); // existing installations retain access
-        if (!license.IsActivated)
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var enabled = await db.HospitalModuleLicenses.AsNoTracking().Where(x => x.IsEnabled).Select(x => x.ModuleCode).ToListAsync(ct);
-        return LicensedModules.WithDependencies(enabled);
+        if (_cachedEnabledModules is { } cached)
+            return cached;
+
+        await CacheLock.WaitAsync(ct);
+        try
+        {
+            if (_cachedEnabledModules is { } doubleChecked)
+                return doubleChecked;
+
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var license = await db.HospitalLicenses.AsNoTracking().SingleOrDefaultAsync(x => x.ID == 1, ct);
+            HashSet<string> result;
+            if (license is null)
+            {
+                result = LicensedModules.All.Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase); // existing installations retain access
+            }
+            else if (!license.IsActivated)
+            {
+                result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+            else
+            {
+                var enabled = await db.HospitalModuleLicenses.AsNoTracking().Where(x => x.IsEnabled).Select(x => x.ModuleCode).ToListAsync(ct);
+                result = LicensedModules.WithDependencies(enabled);
+            }
+
+            _cachedEnabledModules = result;
+            return result;
+        }
+        finally
+        {
+            CacheLock.Release();
+        }
+    }
+
+    public bool TryCanOpen(ClaimsPrincipal user, Type pageType, out bool allowed)
+    {
+        if (TryResolveStaticPageAccess(user, pageType, out var module, out allowed))
+            return true;
+
+        if (_cachedEnabledModules is { } enabled)
+        {
+            allowed = EvaluateModuleAccess(pageType, module!, enabled);
+            return true;
+        }
+
+        allowed = false;
+        return false;
     }
 
     public async Task<bool> CanOpenAsync(ClaimsPrincipal user, Type pageType, CancellationToken ct = default)
     {
-        if (user.Identity?.IsAuthenticated != true) return true;
-        if (user.IsInRole(RoleNames.AppOwner)) return true;
-        if (pageType.Name is "AppOwnerDashboard" or "AppOwnerInvoice") return false;
-        var module = LicensedModules.ForPage(pageType);
-        if (module is null) return true;
+        if (TryResolveStaticPageAccess(user, pageType, out var module, out var staticAllowed))
+            return staticAllowed;
+
         var enabled = await EnabledModulesAsync(ct);
-        if (pageType.Name == "PharmacyPrescriptions") return enabled.Contains(LicensedModules.Doctor) || enabled.Contains(LicensedModules.Pharmacy);
+        return EvaluateModuleAccess(pageType, module!, enabled);
+    }
+
+    private static bool TryResolveStaticPageAccess(ClaimsPrincipal user, Type pageType, out string? module, out bool allowed)
+    {
+        module = null;
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            allowed = true;
+            return true;
+        }
+        if (user.IsInRole(RoleNames.AppOwner))
+        {
+            allowed = true;
+            return true;
+        }
+        if (pageType.Name is "AppOwnerDashboard" or "AppOwnerInvoice")
+        {
+            allowed = false;
+            return true;
+        }
+        module = LicensedModules.ForPage(pageType);
+        if (module is null)
+        {
+            allowed = true;
+            return true;
+        }
+        allowed = false;
+        return false;
+    }
+
+    private static bool EvaluateModuleAccess(Type pageType, string module, IReadOnlySet<string> enabled)
+    {
+        if (pageType.Name == "PharmacyPrescriptions")
+            return enabled.Contains(LicensedModules.Doctor) || enabled.Contains(LicensedModules.Pharmacy);
         return enabled.Contains(module);
     }
 

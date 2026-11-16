@@ -26,7 +26,7 @@ public static class LicensedModules
     [
         new(Registration, "Patient Registration", [], ["Patients"]),
         new(Appointments, "Doctor Appointments", [Registration], ["Appointments"]),
-        new(Diagnostics, "Diagnostics & Lab", [Registration], ["DiagnosticBilling", "DiagnosticCashMemoReturns", "DiagnosticResults", "DiagnosticWorklist", "DiagnosticSampleCollection", "DiagnosticImagingWorklist", "DiagnosticMasters", "DiagnosticTestMasters", "PublicLabReport"]),
+        new(Diagnostics, "Diagnostics & Lab", [Registration], ["DiagnosticBilling", "DiagnosticCashMemoReturns", "DiagnosticResults", "DiagnosticWorklist", "DiagnosticSampleCollection", "DiagnosticImagingWorklist", "DiagnosticMasters", "DiagnosticTestMasters"]),
         new(Doctor, "Doctor & Prescriptions", [Registration], ["DoctorDesk", "DoctorQueue", "DoctorFollowUps", "DoctorMyEarnings", "PharmacyPrescriptions", "DiagnosticOrders", "PatientDocuments", "MedicalCertificates", "DoctorCommissionMaster"]),
         new(Pharmacy, "Pharmacy", [Registration], ["PharmacyMasters", "PharmacyPos", "PharmacyRequisition", "PharmacyPurchases", "PharmacyStockControl", "PharmacyStock", "PharmacyReturnsPayments", "PharmacySalesReturns"]),
         new(Ipd, "IPD & Hospital", [Registration], ["IpdAdmissions", "IpdBedOccupancy", "IpdBedTurnover", "IpdPatientServices", "IpdMoneyReceipts", "IpdMedicalDischargeOrders", "IpdDischargeBilling", "IpdMasters"]),
@@ -40,7 +40,7 @@ public static class LicensedModules
         new(Store, "Supply Chain & Store", [], ["StoreProductsPage", "StoreChallanPage"]),
         new(Reports, "Operational Reports", [], ["Reports"]),
         new(Mis, "MIS Reports", [Reports], ["MisReports"]),
-        new(PatientPortal, "Patient Portal", [Registration], ["PatientPortal", "PatientPortalLogin", "PatientPortalDocument", "PatientPortalQueries"])
+        new(PatientPortal, "Patient Portal", [Registration], ["PatientPortalQueries"])
     ];
 
     public static readonly IReadOnlyDictionary<string, LicensedModule> ByCode = All.ToDictionary(x => x.Code, StringComparer.OrdinalIgnoreCase);
@@ -52,8 +52,6 @@ public static class LicensedModules
     public static string? ForPath(string? href)
     {
         var path = (href ?? "").Split('?')[0].TrimEnd('/').ToLowerInvariant();
-        if (path.StartsWith("/patient") && !path.StartsWith("/patients")) return PatientPortal;
-        if (path.StartsWith("/portal/report")) return Diagnostics;
         if (path.StartsWith("/diagnostic/")) return Diagnostics;
         if (path.StartsWith("/ipd/") || path == "/masters/ipd") return Ipd;
         if (path.StartsWith("/pharmacy/")) return Pharmacy;

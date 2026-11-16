@@ -1109,6 +1109,7 @@
                     }
                 </div>
             }
+            <PrintDeveloperFooter />
         </div>
     }
     else
@@ -1213,6 +1214,7 @@
     private Dictionary<int, string> serviceCategoryNames = [];
     private List<DoctorsProfile> doctors = [];
     private List<AppUser> authorizers = [];
+    private Dictionary<int, string> userNamesById = [];
     private List<DiagnosticOrder> pendingOrders = [];
     private long? activeOrderId;
     private bool showPendingOnly;
@@ -1303,9 +1305,7 @@
             if (userPrincipal.Identity?.IsAuthenticated == true)
             {
                 var appUser = await UserManager.GetUserAsync(userPrincipal);
-                currentUserDisplayName = !string.IsNullOrWhiteSpace(appUser?.DisplayName)
-                    ? appUser.DisplayName
-                    : (!string.IsNullOrWhiteSpace(userPrincipal.Identity.Name) ? userPrincipal.Identity.Name : "User");
+                currentUserDisplayName = appUser?.GetEffectiveName() ?? AppUser.GetEffectiveName(userPrincipal, "User");
             }
             var hasIpdRole = userPrincipal.IsInRole(RoleNames.Administrator) || userPrincipal.IsInRole(RoleNames.IPDOperator);
             canAccessIpd = QueryHasIpd ?? hasIpdRole;
@@ -1366,10 +1366,12 @@
         catch { }
 
         doctors = await MasterCache.GetDoctorsWithNameAsync();
+        var allUsers = await db.Users.AsNoTracking().ToListAsync();
+        userNamesById = allUsers.ToDictionary(u => u.Id, u => u.GetEffectiveName());
         var roleAuthorizers = await UserManager.GetUsersInRoleAsync(RoleNames.Authorizer);
         authorizers = roleAuthorizers
             .Where(x => x.IsActive && !string.IsNullOrWhiteSpace(x.DisplayName))
-            .OrderBy(x => x.DisplayName)
+            .OrderBy(x => x.GetEffectiveName())
             .ToList();
         (serviceCategoryNames, availableServices) = await MasterCache.GetDiagnosticCatalogAsync();
 
@@ -2878,9 +2880,10 @@
     {
         if (editor.ID > 0 && editor.EnteredBy > 0)
         {
+            if (userNamesById.TryGetValue(editor.EnteredBy, out var enteredName) && !string.IsNullOrWhiteSpace(enteredName))
+                return enteredName;
             var u = authorizers.FirstOrDefault(x => x.Id == editor.EnteredBy);
-            if (u != null && !string.IsNullOrWhiteSpace(u.DisplayName)) return u.DisplayName;
-            if (u != null && !string.IsNullOrWhiteSpace(u.UserName)) return u.UserName;
+            if (u != null) return u.GetEffectiveName();
         }
         return !string.IsNullOrWhiteSpace(currentUserDisplayName) ? currentUserDisplayName : "System User";
     }

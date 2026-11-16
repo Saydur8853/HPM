@@ -947,6 +947,7 @@
                     Page 1 of 1
                 </div>
             </div>
+            <PrintDeveloperFooter />
         </div>
     </div>
 }
@@ -1021,10 +1022,15 @@
         I18n.OnLanguageChanged += HandleLanguageChanged;
         var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
         isAdministrator = principal.IsInRole(RoleNames.Administrator);
-        currentUserDisplayName = principal.Identity?.Name ?? (IsImagingMode ? "Medical Radiographer" : "Lab Technician");
+        currentUserDisplayName = AppUser.GetEffectiveName(principal, IsImagingMode ? "Medical Radiographer" : "Lab Technician");
         if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var mappedDoctorId)) currentDoctorProfileId = mappedDoctorId;
         canVerify = isAdministrator || (principal.IsInRole(RoleNames.Doctor) && currentDoctorProfileId.HasValue);
         await using var db = await DbFactory.CreateDbContextAsync();
+        if (int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var uid))
+        {
+            var currentUser = await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == uid);
+            if (currentUser is not null) currentUserDisplayName = currentUser.GetEffectiveName();
+        }
         doctors = await db.Doctors.AsNoTracking().Where(x => x.Name != null).ToListAsync();
         services = await db.Services.AsNoTracking().ToListAsync();
         categories = await db.ServiceCategories.AsNoTracking().ToDictionaryAsync(x => x.ID);
@@ -1049,8 +1055,14 @@
     {
         if (!initialized || loadedImagingMode == IsImagingMode) return;
         Reset();
-        currentUserDisplayName = (await AuthStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? (IsImagingMode ? "Medical Radiographer" : "Lab Technician");
+        var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        currentUserDisplayName = AppUser.GetEffectiveName(principal, IsImagingMode ? "Medical Radiographer" : "Lab Technician");
         await using var db = await DbFactory.CreateDbContextAsync();
+        if (int.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var uid))
+        {
+            var currentUser = await db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == uid);
+            if (currentUser is not null) currentUserDisplayName = currentUser.GetEffectiveName();
+        }
         await LoadRecentOrdersAsync(db);
         loadedImagingMode = IsImagingMode;
     }

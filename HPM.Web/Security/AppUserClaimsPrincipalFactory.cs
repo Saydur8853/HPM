@@ -15,6 +15,7 @@ public sealed class AppUserClaimsPrincipalFactory(
     public const string MustChangePasswordClaim = "must_change_password";
     public const string DoctorProfileIdClaim = "doctor_profile_id";
     public const string PatientContactFingerprintClaim = "patient_contact_fingerprint";
+    public const string DisplayNameClaim = "display_name";
 
     public static string ContactFingerprint(string contact) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(contact.Trim())));
@@ -22,6 +23,7 @@ public sealed class AppUserClaimsPrincipalFactory(
     protected override async Task<ClaimsIdentity> GenerateClaimsAsync(AppUser user)
     {
         var identity = await base.GenerateClaimsAsync(user);
+        identity.AddClaim(new Claim(DisplayNameClaim, user.GetEffectiveName()));
         if (user.DoctorProfileID.HasValue)
             identity.AddClaim(new Claim(DoctorProfileIdClaim, user.DoctorProfileID.Value.ToString()));
         if (await UserManager.IsInRoleAsync(user, RoleNames.Patient) && !string.IsNullOrWhiteSpace(user.PhoneNumber))

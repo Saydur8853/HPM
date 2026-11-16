@@ -27,11 +27,29 @@ public sealed class HospitalSetupService(
     public string LabHeaderDept { get; private set; } = "Department of Pathology, Diagnostic & Laboratory Medicine";
     public string ReceiptHeaderNote { get; private set; } = "";
     public string ReceiptFooterNote { get; private set; } = "";
+    public const string DefaultDeveloperCompanyName = "AsoftPro";
+    public static string DefaultDeveloperCopyright => $"Copyright © {DateTime.Now.Year} AsoftPro. All rights reserved.";
+    public const string DefaultDeveloperEmail = "info@asoftpro.com";
+    public const string DefaultDeveloperPhone = "+880 1700-000000";
+
+    public string DeveloperCompanyName { get; private set; } = DefaultDeveloperCompanyName;
+    public string DeveloperCopyright { get; private set; } = DefaultDeveloperCopyright;
+    public string DeveloperLogoData { get; private set; } = "";
+    public string DeveloperEmail { get; private set; } = DefaultDeveloperEmail;
+    public string DeveloperPhone { get; private set; } = DefaultDeveloperPhone;
+
+    public string GetDeveloperContactText()
+    {
+        var parts = new[] { DeveloperEmail?.Trim(), DeveloperPhone?.Trim() }
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToArray();
+        return string.Join(", ", parts);
+    }
     public bool IsSetupComplete { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
     public string? UpdatedBy { get; private set; }
 
-    private static bool _schemaEnsured = true;
+    private static bool _schemaEnsured = false;
     private static readonly SemaphoreSlim _schemaLock = new(1, 1);
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
@@ -77,6 +95,26 @@ public sealed class HospitalSetupService(
                     ALTER TABLE [Hospital_Profile] ADD [Updated_At] datetime2 NULL;
                     ALTER TABLE [Hospital_Profile] ADD [Updated_By] nvarchar(100) NULL;
                 END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Company_Name')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Developer_Company_Name] nvarchar(200) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Copyright')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Developer_Copyright] nvarchar(300) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Logo_Data')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Developer_Logo_Data] nvarchar(max) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Email')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Developer_Email] nvarchar(150) NULL;
+                END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Developer_Phone')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Developer_Phone] nvarchar(100) NULL;
+                END
                 """;
             await db.Database.ExecuteSqlRawAsync(sql, ct);
             _schemaEnsured = true;
@@ -107,6 +145,11 @@ public sealed class HospitalSetupService(
         LabHeaderDept = string.IsNullOrWhiteSpace(profile?.LabHeaderDept) ? "Department of Pathology, Diagnostic & Laboratory Medicine" : profile.LabHeaderDept;
         ReceiptHeaderNote = profile?.ReceiptHeaderNote ?? "";
         ReceiptFooterNote = CleanReceiptNote(profile?.ReceiptFooterNote);
+        DeveloperCompanyName = CleanDeveloperText(profile?.DeveloperCompanyName, DefaultDeveloperCompanyName);
+        DeveloperCopyright = CleanDeveloperText(profile?.DeveloperCopyright, DefaultDeveloperCopyright);
+        DeveloperLogoData = profile?.DeveloperLogoData ?? "";
+        DeveloperEmail = string.IsNullOrWhiteSpace(profile?.DeveloperEmail) ? DefaultDeveloperEmail : profile.DeveloperEmail.Trim();
+        DeveloperPhone = string.IsNullOrWhiteSpace(profile?.DeveloperPhone) ? DefaultDeveloperPhone : profile.DeveloperPhone.Trim();
         IsSetupComplete = profile?.IsSetupComplete == true;
         UpdatedAt = profile?.UpdatedAt ?? profile?.SetupCompletedAt;
         UpdatedBy = profile?.UpdatedBy ?? profile?.SetupBy;
@@ -138,6 +181,11 @@ public sealed class HospitalSetupService(
                 LabHeaderDept = LabHeaderDept,
                 ReceiptHeaderNote = ReceiptHeaderNote,
                 ReceiptFooterNote = ReceiptFooterNote,
+                DeveloperCompanyName = DeveloperCompanyName,
+                DeveloperCopyright = DeveloperCopyright,
+                DeveloperLogoData = DeveloperLogoData,
+                DeveloperEmail = DeveloperEmail,
+                DeveloperPhone = DeveloperPhone,
                 IsSetupComplete = IsSetupComplete
             };
         }
@@ -210,6 +258,75 @@ public sealed class HospitalSetupService(
         }
     }
 
+    public async Task<HospitalSetupResult> UpdateDeveloperBrandingAsync(
+        string? companyName,
+        string? copyrightText,
+        string? logoData,
+        string? email,
+        string? phone,
+        string updatedBy,
+        CancellationToken cancellationToken = default)
+    {
+        var cleanCompany = string.IsNullOrWhiteSpace(companyName) ? DefaultDeveloperCompanyName : companyName.Trim();
+        if (cleanCompany.Length > 200)
+            return HospitalSetupResult.Fail("Company name must not exceed 200 characters.");
+
+        var cleanCopyright = string.IsNullOrWhiteSpace(copyrightText) ? DefaultDeveloperCopyright : copyrightText.Trim();
+        if (cleanCopyright.Length > 300)
+            return HospitalSetupResult.Fail("Copyright message must not exceed 300 characters.");
+
+        var cleanEmail = string.IsNullOrWhiteSpace(email) ? DefaultDeveloperEmail : email.Trim();
+        if (cleanEmail.Length > 150)
+            return HospitalSetupResult.Fail("Company email must not exceed 150 characters.");
+
+        var cleanPhone = string.IsNullOrWhiteSpace(phone) ? DefaultDeveloperPhone : phone.Trim();
+        if (cleanPhone.Length > 100)
+            return HospitalSetupResult.Fail("Company phone number must not exceed 100 characters.");
+
+        try
+        {
+            var profile = await ResilientTransaction.ExecuteScopedAsync(
+                scopeFactory,
+                async (_, db) =>
+                {
+                    await EnsureSchemaAsync(db, cancellationToken);
+                    var savedProfile = await db.HospitalProfiles.SingleOrDefaultAsync(x => x.ID == 1, cancellationToken);
+                    if (savedProfile is null)
+                    {
+                        savedProfile = new HospitalProfile
+                        {
+                            ID = 1,
+                            IsSetupComplete = true,
+                            SetupCompletedAt = DateTime.UtcNow,
+                            SetupBy = updatedBy
+                        };
+                        db.HospitalProfiles.Add(savedProfile);
+                    }
+
+                    savedProfile.DeveloperCompanyName = cleanCompany;
+                    savedProfile.DeveloperCopyright = cleanCopyright;
+                    savedProfile.DeveloperLogoData = logoData?.Trim() ?? "";
+                    savedProfile.DeveloperEmail = cleanEmail;
+                    savedProfile.DeveloperPhone = cleanPhone;
+                    savedProfile.UpdatedAt = DateTime.UtcNow;
+                    savedProfile.UpdatedBy = updatedBy;
+
+                    await db.SaveChangesAsync(cancellationToken);
+                    return savedProfile;
+                },
+                cancellationToken: cancellationToken);
+
+            ApplyProfile(profile);
+            OnSettingsChanged?.Invoke();
+
+            return HospitalSetupResult.Ok();
+        }
+        catch (Exception ex)
+        {
+            return HospitalSetupResult.Fail($"Failed to save footer branding: {ex.GetBaseException().Message}");
+        }
+    }
+
     public async Task<HospitalSetupResult> CompleteAsync(
         string hospitalName,
         string userName,
@@ -252,7 +369,7 @@ public sealed class HospitalSetupService(
                     var appOwner = new AppUser
                     {
                         UserName = userName,
-                        DisplayName = "App Owner",
+                        DisplayName = userName,
                         IsActive = true,
                         MustChangePassword = false,
                         CreatedAt = DateTime.UtcNow
@@ -393,6 +510,16 @@ public sealed class HospitalSetupService(
         if (trimmed.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase))
             return "";
         return trimmed;
+    }
+
+    private static string CleanDeveloperText(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        var cleaned = value
+            .Replace(" = A Software Professional", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("= A Software Professional", "", StringComparison.OrdinalIgnoreCase)
+            .Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? fallback : cleaned;
     }
 }
 

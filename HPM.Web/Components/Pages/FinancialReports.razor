@@ -1,6 +1,7 @@
 @page "/reports/financial"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier)]
 @inject IDbContextFactory<HpmDbContext> DbFactory
+@inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
 @implements IDisposable
 @using HPM.Web.Components.Common
@@ -720,7 +721,7 @@
     </table>
 
     <div style="display: flex; justify-content: space-between; margin-top: 48px; font-size: 11px;">
-        <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Prepared By (Cashier)</div>
+        <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Prepared By: <strong>@currentUserName</strong></div>
         <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Accounts Officer</div>
         <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Audited By</div>
         <div style="border-top: 1px solid #94a3b8; width: 140px; text-align: center; padding-top: 4px;">Managing Director</div>
@@ -801,7 +802,7 @@
     </table>
 
     <div style="display: flex; justify-content: space-between; margin-top: 28px; font-size: 9.5px;">
-        <div style="border-top: 1px solid #94a3b8; width: 110px; text-align: center; padding-top: 3px;">Prepared By</div>
+        <div style="border-top: 1px solid #94a3b8; width: 110px; text-align: center; padding-top: 3px;">Prepared By: <strong>@currentUserName</strong></div>
         <div style="border-top: 1px solid #94a3b8; width: 110px; text-align: center; padding-top: 3px;">Accounts Officer</div>
         <div style="border-top: 1px solid #94a3b8; width: 110px; text-align: center; padding-top: 3px;">Authorized By</div>
     </div>
@@ -904,9 +905,16 @@
                                     || x.Reference.Contains(searchQuery, StringComparison.OrdinalIgnoreCase)
                                     || (x.Reason ?? "").Contains(searchQuery, StringComparison.OrdinalIgnoreCase));
 
+    private string currentUserName = "User";
+
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var userId = int.TryParse(auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : 0;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var dbUser = userId > 0 ? await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId) : null;
+        currentUserName = dbUser?.GetEffectiveName() ?? HPM.Web.Security.AppUser.GetEffectiveName(auth.User, "User");
         await LoadAsync();
     }
 
