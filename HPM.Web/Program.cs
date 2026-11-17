@@ -57,6 +57,9 @@ builder.Services.AddScoped<PatientSelectionState>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
 builder.Services.AddRateLimiter(options =>
 {
+    options.AddPolicy("staff-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 12, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     options.AddPolicy("patient-login", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
@@ -78,6 +81,7 @@ builder.Services.AddIdentity<AppUser, IdentityRole<int>>(options =>
         options.Password.RequireNonAlphanumeric = true;
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.Lockout.AllowedForNewUsers = true;
         options.User.RequireUniqueEmail = false;
     })
     .AddEntityFrameworkStores<HpmDbContext>()
@@ -367,10 +371,16 @@ app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery,
     var password = form["Password"].ToString();
     var rememberMe = string.Equals(form["RememberMe"], "true", StringComparison.OrdinalIgnoreCase);
     var returnUrl = SafeReturnUrl(form["ReturnUrl"].ToString());
+    if (!string.IsNullOrWhiteSpace(form["CompanyWebsite"].ToString()))
+        return Results.LocalRedirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
+
     var user = await userManager.FindByNameAsync(userName);
 
     if (user is not null && user.IsActive)
     {
+        if (!user.LockoutEnabled)
+            await userManager.SetLockoutEnabledAsync(user, true);
+
         var result = await signInManager.PasswordSignInAsync(user, password, rememberMe, lockoutOnFailure: true);
         if (result.Succeeded)
             return Results.LocalRedirect(user.MustChangePassword ? "/account/change-password" :
@@ -378,7 +388,7 @@ app.MapPost("/account/login", async (HttpContext http, IAntiforgery antiforgery,
     }
 
     return Results.LocalRedirect($"/login?error=1&returnUrl={Uri.EscapeDataString(returnUrl)}");
-}).AllowAnonymous();
+}).AllowAnonymous().RequireRateLimiting("staff-login");
 
 app.MapPost("/patient/login-submit", async (HttpContext http, SignInManager<AppUser> signInManager, UserManager<AppUser> userManager, IDbContextFactory<HpmDbContext> dbFactory) =>
 {
@@ -388,6 +398,9 @@ app.MapPost("/patient/login-submit", async (HttpContext http, SignInManager<AppU
     var returnUrl = SafeReturnUrl(form["ReturnUrl"].ToString());
     if (!returnUrl.StartsWith("/patient", StringComparison.OrdinalIgnoreCase) && !returnUrl.StartsWith("/portal/report", StringComparison.OrdinalIgnoreCase))
         returnUrl = "/patient";
+
+    if (!string.IsNullOrWhiteSpace(form["CompanyWebsite"].ToString()))
+        return Results.LocalRedirect("/patient/login?error=1");
 
     if (patientId.Length is < 2 or > 11 || phone.Length is < 6 or > 50)
         return Results.LocalRedirect("/patient/login?error=1");

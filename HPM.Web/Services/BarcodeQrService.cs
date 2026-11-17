@@ -15,6 +15,7 @@ public interface IBarcodeQrService
     string GenerateIpdQrPayload(long admissionId, string regNo, string patientName, string bedName);
     string GenerateWristbandQrPayload(long admissionId, string regNo, string patientName, string ageSex, string bloodGroup, string bedName, string docName);
     string GenerateLabQrPayload(long invoiceId, string regNo, string patientName, string sampleId, string? portalBaseUrl = null);
+    string GeneratePatientPortalLoginUrl(string? patientId, string? phone, string? portalBaseUrl = null);
     string GenerateLabTubeQrPayload(string sampleId, long invoiceId, string patientName, string testNames);
     string GeneratePharmacyQrPayload(long memoId, string customerName, decimal totalAmount);
     string GeneratePrescriptionQrPayload(long rxId, string patientName, string doctorName, DateTime date);
@@ -159,6 +160,22 @@ public class BarcodeQrService : IBarcodeQrService
             return $"{portalBaseUrl.TrimEnd('/')}/portal/report/{invoiceId}";
         }
         return $"/portal/report/{invoiceId}";
+    }
+
+    public string GeneratePatientPortalLoginUrl(string? patientId, string? phone, string? portalBaseUrl = null)
+    {
+        var basePrefix = string.IsNullOrWhiteSpace(portalBaseUrl) ? "" : portalBaseUrl.TrimEnd('/');
+        var queryParts = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(patientId))
+        {
+            queryParts.Add($"id={Uri.EscapeDataString(patientId.Trim())}");
+        }
+        if (!string.IsNullOrWhiteSpace(phone))
+        {
+            queryParts.Add($"phone={Uri.EscapeDataString(phone.Trim())}");
+        }
+        var query = queryParts.Count > 0 ? "?" + string.Join("&", queryParts) : "";
+        return $"{basePrefix}/patient/login{query}";
     }
 
     public string GenerateLabTubeQrPayload(string sampleId, long invoiceId, string patientName, string testNames)

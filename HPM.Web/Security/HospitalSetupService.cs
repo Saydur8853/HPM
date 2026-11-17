@@ -29,8 +29,11 @@ public sealed class HospitalSetupService(
     public string ReceiptFooterNote { get; private set; } = "";
     public const string DefaultDeveloperCompanyName = "AsoftPro";
     public static string DefaultDeveloperCopyright => $"Copyright © {DateTime.Now.Year} AsoftPro. All rights reserved.";
-    public const string DefaultDeveloperEmail = "info@asoftpro.com";
-    public const string DefaultDeveloperPhone = "+880 1700-000000";
+    // Contact details are optional. Do not show placeholder vendor details when none were configured.
+    public const string DefaultDeveloperEmail = "";
+    public const string DefaultDeveloperPhone = "";
+    private const string LegacyDefaultDeveloperEmail = "info@asoftpro.com";
+    private const string LegacyDefaultDeveloperPhone = "+880 1700-000000";
 
     public string DeveloperCompanyName { get; private set; } = DefaultDeveloperCompanyName;
     public string DeveloperCopyright { get; private set; } = DefaultDeveloperCopyright;
@@ -148,8 +151,8 @@ public sealed class HospitalSetupService(
         DeveloperCompanyName = CleanDeveloperText(profile?.DeveloperCompanyName, DefaultDeveloperCompanyName);
         DeveloperCopyright = CleanDeveloperText(profile?.DeveloperCopyright, DefaultDeveloperCopyright);
         DeveloperLogoData = profile?.DeveloperLogoData ?? "";
-        DeveloperEmail = string.IsNullOrWhiteSpace(profile?.DeveloperEmail) ? DefaultDeveloperEmail : profile.DeveloperEmail.Trim();
-        DeveloperPhone = string.IsNullOrWhiteSpace(profile?.DeveloperPhone) ? DefaultDeveloperPhone : profile.DeveloperPhone.Trim();
+        DeveloperEmail = CleanOptionalDeveloperContact(profile?.DeveloperEmail, LegacyDefaultDeveloperEmail);
+        DeveloperPhone = CleanOptionalDeveloperContact(profile?.DeveloperPhone, LegacyDefaultDeveloperPhone);
         IsSetupComplete = profile?.IsSetupComplete == true;
         UpdatedAt = profile?.UpdatedAt ?? profile?.SetupCompletedAt;
         UpdatedBy = profile?.UpdatedBy ?? profile?.SetupBy;
@@ -510,6 +513,12 @@ public sealed class HospitalSetupService(
         if (trimmed.Contains("Valid without physical signature", StringComparison.OrdinalIgnoreCase))
             return "";
         return trimmed;
+    }
+
+    private static string CleanOptionalDeveloperContact(string? value, string legacyDefault)
+    {
+        var contact = value?.Trim() ?? "";
+        return string.Equals(contact, legacyDefault, StringComparison.OrdinalIgnoreCase) ? "" : contact;
     }
 
     private static string CleanDeveloperText(string? value, string fallback)

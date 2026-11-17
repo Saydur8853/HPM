@@ -56,10 +56,10 @@ public sealed class HospitalProfile
     public string? DeveloperLogoData { get; set; } = "";
 
     [StringLength(150)]
-    public string? DeveloperEmail { get; set; } = "info@asoftpro.com";
+    public string? DeveloperEmail { get; set; } = "";
 
     [StringLength(100)]
-    public string? DeveloperPhone { get; set; } = "+880 1700-000000";
+    public string? DeveloperPhone { get; set; } = "";
 
     public bool IsSetupComplete { get; set; }
     public DateTime? SetupCompletedAt { get; set; }
