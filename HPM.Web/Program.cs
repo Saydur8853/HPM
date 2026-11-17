@@ -5,6 +5,7 @@ using HPM.Web.Security;
 using HPM.Web.Services;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.RateLimiting;
@@ -12,6 +13,16 @@ using System.Threading.RateLimiting;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+var detailedErrors = builder.Environment.IsDevelopment();
+var dataProtectionKeyPath = builder.Configuration["DataProtection:KeyPath"];
+
+if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
+{
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath))
+        .SetApplicationName("PrimeHPM");
+}
+
 builder.Host.UseSerilog((context, services, logger) => logger
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)
@@ -26,12 +37,12 @@ builder.Services.AddRazorComponents()
         options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(15);
         options.DisconnectedCircuitMaxRetained = 200;
         options.JSInteropDefaultCallTimeout = TimeSpan.FromMinutes(2);
-        options.DetailedErrors = true;
+        options.DetailedErrors = detailedErrors;
     });
 builder.Services.AddSignalR(options =>
 {
     options.MaximumReceiveMessageSize = 32 * 1024 * 1024; // 32 MB for image uploads and camera frames
-    options.EnableDetailedErrors = true;
+    options.EnableDetailedErrors = detailedErrors;
     options.KeepAliveInterval = TimeSpan.FromSeconds(15);
     options.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
     options.HandshakeTimeout = TimeSpan.FromSeconds(30);
@@ -39,11 +50,11 @@ builder.Services.AddSignalR(options =>
 builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions>(options =>
 {
     options.MaximumReceiveMessageSize = 32 * 1024 * 1024; // 32 MB for Blazor ComponentHub
-    options.EnableDetailedErrors = true;
+    options.EnableDetailedErrors = detailedErrors;
 });
 builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(options =>
 {
-    options.DetailedErrors = true;
+    options.DetailedErrors = detailedErrors;
 });
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();

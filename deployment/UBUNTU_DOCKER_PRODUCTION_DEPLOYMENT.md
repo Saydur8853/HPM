@@ -105,6 +105,8 @@ Private repository হলে deploy key বা read-only access token ব্য�
 
 ## 4. Docker files তৈরি করা
 
+বর্তমান repository-তে `Dockerfile`, `.dockerignore`, `compose.production.yml`, `deployment/Caddyfile`, এবং `.env.production.example` আগে থেকেই tracked আছে। এগুলো নতুন করে হাতে তৈরি না করে review করে ব্যবহার করুন। নিচের blocks reference হিসেবে রাখা হয়েছে।
+
 Repository root-এ নিচের `Dockerfile` তৈরি করুন:
 
 ```dockerfile
@@ -316,6 +318,8 @@ export COMPOSE_ENV_FILES=.env.production
 নতুন SSH session-এ এই দুইটি `export` আবার দিতে হবে, অথবা প্রতিটি command-এ `docker compose --env-file .env.production -f compose.production.yml ...` ব্যবহার করতে হবে।
 
 ## 6. SQL Server start এবং application login তৈরি করা
+
+বর্তমান `compose.production.yml`-এর `db-init` service একটি fresh installation-এ `HPM_Web` database এবং `HpmApp` login idempotently তৈরি করে। তাই Section 8/9-এর `docker compose ... up -d` command-এর সময় এটি স্বয়ংক্রিয়ভাবে হবে। Existing database restore করলে বা manual troubleshooting করলে নিচের commands ব্যবহার করুন; existing database overwrite হবে না।
 
 প্রথমে শুধু database container start করুন:
 

@@ -1,5 +1,25 @@
 # PrimeHPM deployment
 
+## Docker production deployment
+
+The repository includes `Dockerfile`, `compose.production.yml`, `deployment/Caddyfile`, and `.env.production.example` for an Ubuntu Docker deployment. The stack is Caddy (automatic HTTPS) → HPM.Web → SQL Server; only ports 80/443 are exposed publicly.
+
+On the server, copy the secret template (never commit the resulting file):
+
+```bash
+cp .env.production.example .env.production
+chmod 600 .env.production
+```
+
+Set a real domain and strong unique passwords in `.env.production` (do not use a single quote in either password), then run:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yml build
+docker compose --env-file .env.production -f compose.production.yml up -d
+```
+
+The `db-init` service safely creates the fresh `HPM_Web` database and its `HpmApp` login once; it does not overwrite an existing database. The full guide covers firewall, database restore, backup, migration, update, and validation procedures.
+
 1. Install the .NET 8 Hosting Bundle and IIS WebSocket feature on the staging server.
 2. Run `Publish-Staging.ps1`, copy the published output to the IIS physical path, and run `Configure-IIS.ps1` as Administrator.
 3. Set `ConnectionStrings__HpmDatabase`, `ASPNETCORE_ENVIRONMENT=Production`, and the initial administrator secret through IIS environment variables or a secret store.
