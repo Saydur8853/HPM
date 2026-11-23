@@ -52,6 +52,15 @@ public static class LicensedModules
     public static string? ForPath(string? href)
     {
         var path = (href ?? "").Split('?')[0].TrimEnd('/').ToLowerInvariant();
+        if (path == "/admin/bulk-upload")
+        {
+            var query = (href ?? "").Contains('?') ? href![(href!.IndexOf('?') + 1)..].ToLowerInvariant() : "";
+            if (query.Contains("type=nurse")) return Hrm;
+            if (query.Contains("type=medicine")) return Pharmacy;
+            if (query.Contains("type=canteen")) return Canteen;
+            if (query.Contains("type=pathology") || query.Contains("type=imaging")) return Diagnostics;
+            return null;
+        }
         if (path.StartsWith("/diagnostic/")) return Diagnostics;
         if (path.StartsWith("/ipd/") || path == "/masters/ipd") return Ipd;
         if (path.StartsWith("/pharmacy/")) return Pharmacy;
