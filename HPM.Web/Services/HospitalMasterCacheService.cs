@@ -134,10 +134,7 @@ public sealed class HospitalMasterCacheService
             var allCats = await db.ServiceCategories.AsNoTracking().ToListAsync();
             var categoryNames = allCats.ToDictionary(c => c.ID, c => c.Name);
             var diagCategoryIds = allCats
-                .Where(c => c.SubID == 8
-                         || c.ID == 66
-                         || c.ID == 91
-                         || (!string.IsNullOrEmpty(c.Name) && (c.Name.Contains("Investigation") || c.Name.Contains("Pathology"))))
+                .Where(DiagnosticTestRouting.IsDiagnosticCategory)
                 .Select(c => c.ID)
                 .ToHashSet();
 

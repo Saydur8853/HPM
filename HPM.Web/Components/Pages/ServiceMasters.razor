@@ -82,7 +82,17 @@
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
     public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
 
-    private async Task LoadAsync(){await using var db=await DbFactory.CreateDbContextAsync();categories=await db.ServiceCategories.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();services=await db.Services.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();}
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var allCats = await db.ServiceCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        var diagIds = allCats.Where(DiagnosticTestRouting.IsDiagnosticCategory).Select(x => x.ID).ToHashSet();
+        categories = allCats.Where(x => x.ID != 3 && !diagIds.Contains(x.ID)).ToList();
+        services = await db.Services.AsNoTracking()
+            .Where(x => x.CategoryID == null || (x.CategoryID != 3 && !diagIds.Contains(x.CategoryID.Value)))
+            .OrderBy(x => x.Name)
+            .ToListAsync();
+    }
     private async Task SaveCategoryAsync(){if(string.IsNullOrWhiteSpace(category.Name)){Fail(I18n.IsBangla ? "ক্যাটাগরির নাম আবশ্যক।" : "Category name is required.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(category.ID==0){category.ID=(await db.ServiceCategories.MaxAsync(x=>(int?)x.ID)??0)+1;db.ServiceCategories.Add(category);}else db.ServiceCategories.Update(category);await db.SaveChangesAsync();Success(I18n.IsBangla ? "সার্ভিস ক্যাটাগরি সংরক্ষিত হয়েছে।" : "Service category saved.");ResetCategory();await LoadAsync();}
     private async Task SaveServiceAsync(){if(string.IsNullOrWhiteSpace(service.Name)||service.CategoryID is null){Fail(I18n.IsBangla ? "সার্ভিসের নাম এবং ক্যাটাগরি আবশ্যক।" : "Service name and category are required.");return;}await using var db=await DbFactory.CreateDbContextAsync();if(service.ID==0)db.Services.Add(service);else db.Services.Update(service);await db.SaveChangesAsync();Success(I18n.IsBangla ? "সার্ভিস সংরক্ষিত হয়েছে।" : "Service saved.");ResetService();await LoadAsync();}
     private void SelectCategory(ServiceCategory c)=>category=new(){ID=c.ID,Name=c.Name,SubID=c.SubID,ModuleID=c.ModuleID,ServiceCharge=c.ServiceCharge,IsPercentage=c.IsPercentage,GroupSubID=c.GroupSubID,InvestigationSLNO=c.InvestigationSLNO};

@@ -1,135 +1,46 @@
 @page "/admin/bulk-upload"
 @attribute [Authorize(Roles = RoleNames.Administrator)]
-@implements IDisposable
 
-<PageTitle>@L("বাল্ক ডেটা আপলোড", "Bulk Data Upload") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("বাল্ক ডেটা আপলোড", "Bulk Data Upload") | @Branding.HospitalName</PageTitle>
 
 <div class="bu-header">
-    <div>
-        <h1>📤 @L("বাল্ক ডেটা আপলোড", "Bulk Data Upload")</h1>
-        <p>@L("Template ডাউনলোড করুন, column অনুযায়ী ডেটা সাজান, তারপর CSV বা Excel (.xlsx) ফাইল আপলোড করুন।",
-               "Download a template, fill the data under each column, then upload it as CSV or Excel (.xlsx).")</p>
-    </div>
+    <h1>@I18n.T("বাল্ক ডেটা আপলোড", "Bulk Data Upload")</h1>
 </div>
 
-@if (selected is null)
-{
-    <section class="panel"><div class="bu-body"><p class="bu-muted">@L("এই মুহূর্তে কোনো licensed bulk upload module নেই।", "No licensed bulk upload module is currently available.")</p></div></section>
-}
-else
-{
-    <section class="panel bu-panel">
-        <div class="panel-heading bu-panel-head">
-            <div class="bu-title-wrap">
-                <span class="bu-title-ico">@selected.Icon</span>
-                <div>
-                    <h2>@L(selected.TitleBn, selected.Title)</h2>
-                    <p>@L(selected.DescriptionBn, selected.Description)</p>
-                </div>
-            </div>
-            <button type="button" class="btn btn-secondary btn-sm bu-tpl-btn" @onclick="DownloadTemplateAsync">
-                ⬇️ @L("Template ও ডেটা ডাউনলোড (.xlsx)", "Download Template & Data (.xlsx)")
-            </button>
-        </div>
+<div class="bu-tabs" role="tablist" aria-label="Bulk upload modules">
+    @foreach (var tab in Tabs)
+    {
+        <button type="button"
+                role="tab"
+                aria-selected="@(activeKey == tab.Key)"
+                class="bu-tab @(activeKey == tab.Key ? "active" : "")"
+                @onclick="() => activeKey = tab.Key">
+            @I18n.T(tab.TitleBn, tab.Title)
+        </button>
+    }
+</div>
 
-        <div class="bu-body">
-            <!-- Upload Zone -->
-            <div class="bu-upload-box">
-                <div class="bu-upload-main">
-                    <div class="bu-upload-info">
-                        <span class="bu-upload-ico">📁</span>
-                        <div>
-                            <div class="bu-upload-title">@L("ফাইল আপলোড করুন (.csv বা .xlsx)", "Upload CSV or Excel (.xlsx) file")</div>
-                            <div class="bu-upload-sub">@L("ডাউনলোড করা ডেটা এডিট করে বা নতুন row যোগ করে আপলোড করুন — একই Key থাকলে পুরোনো ডেটা অটো update হবে", "Edit downloaded data or add new rows — existing records with the same key update automatically")</div>
-                        </div>
-                    </div>
-                    <InputFile @key="inputKey" OnChange="OnFileSelectedAsync" accept=".csv,.xlsx" disabled="@busy" class="bu-file-input" />
-                </div>
-            </div>
+<section class="panel bu-panel">
+    <BulkUploadWidget TypeKey="@activeKey" ShowFullPageGuide="true" />
+</section>
 
-            @if (!string.IsNullOrEmpty(message))
-            {
-                <div class="bu-alert @messageClass">@message</div>
-            }
+@code {
+    [SupplyParameterFromQuery(Name = "type")] public string? QueryType { get; set; }
+    private string activeKey = "doctor";
 
-            @if (rows.Count > 0)
-            {
-                <div class="bu-summary">
-                    <span class="bu-pill new">@L("নতুন", "New"): @rows.Count(r => r.Status == RowStatus.New)</span>
-                    <span class="bu-pill update">@L("Update", "Update"): @rows.Count(r => r.Status == RowStatus.Update)</span>
-                    <span class="bu-pill skip">@L("Skip", "Skip"): @rows.Count(r => r.Status == RowStatus.Skip)</span>
-                    <span class="bu-pill error">@L("ভুল", "Errors"): @rows.Count(r => r.Status == RowStatus.Error)</span>
-                    <div class="bu-summary-actions">
-                        <button type="button" class="btn btn-primary btn-sm" disabled="@(busy || ImportableCount == 0)" @onclick="ImportAsync">
-                            @(busy ? L("আপলোড হচ্ছে...", "Importing...") : L($"{ImportableCount}টি row আপলোড করুন", $"Import {ImportableCount} rows"))
-                        </button>
-                        <button type="button" class="btn btn-secondary btn-sm" disabled="@busy" @onclick="ResetUpload">@L("বাতিল", "Clear")</button>
-                    </div>
-                </div>
+    private static readonly (string Key, string Title, string TitleBn)[] Tabs =
+    [
+        ("doctor", "Doctor", "ডাক্তার"),
+        ("nurse", "Nurse", "নার্স"),
+        ("medicine", "Pharmacy Medicine", "ফার্মেসি ঔষধ"),
+        ("canteen", "Canteen Food", "ক্যান্টিন খাবার"),
+        ("pathology", "Pathology Tests", "প্যাথোলজি টেস্ট"),
+        ("imaging", "Imaging Tests", "ইমেজিং টেস্ট")
+    ];
 
-                <div class="bu-table-wrap bu-preview">
-                    <table class="dash-table bu-compact-table">
-                        <thead><tr><th>#</th><th>@L("Record", "Record")</th><th>@L("অবস্থা", "Status")</th><th>@L("বার্তা", "Message")</th></tr></thead>
-                        <tbody>
-                            @foreach (var r in rows)
-                            {
-                                <tr class="row-@r.Status.ToString().ToLowerInvariant()">
-                                    <td>@r.RowNo</td>
-                                    <td>@r.Label</td>
-                                    <td><span class="bu-pill @r.Status.ToString().ToLowerInvariant()">@StatusText(r.Status)</span></td>
-                                    <td>@string.Join(" • ", r.Messages)</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-
-            <!-- Column Guide -->
-            <div class="bu-guide-section">
-                <div class="bu-guide-head">
-                    <h3 class="bu-subtitle">@L("Column নির্দেশিকা", "Column Guide")</h3>
-                    <span class="bu-col-count">@selected.Columns.Count() @L("টি কলাম", "columns")</span>
-                </div>
-
-                @if (lookupHint is not null)
-                {
-                    <div class="bu-note">ℹ️ @lookupHint</div>
-                }
-
-                <div class="bu-table-wrap bu-guide-wrap">
-                    <table class="dash-table bu-compact-table">
-                        <thead>
-                            <tr>
-                                <th>@L("Column", "Column")</th>
-                                <th class="bu-req-col">@L("আবশ্যক", "Required")</th>
-                                <th>@L("নিয়ম", "Format / Rule")</th>
-                                <th>@L("উদাহরণ", "Example")</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var c in selected.Columns)
-                            {
-                                <tr>
-                                    <td><code>@c.Name</code></td>
-                                    <td class="bu-req-col">
-                                        @if (c.Required)
-                                        {
-                                            <span class="bu-req-badge">@L("হ্যাঁ", "Required")</span>
-                                        }
-                                        else
-                                        {
-                                            <span class="bu-opt-text">—</span>
-                                        }
-                                    </td>
-                                    <td>@c.Hint</td>
-                                    <td class="bu-muted">@c.Example</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </section>
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryType) && Tabs.Any(t => t.Key.Equals(QueryType, StringComparison.OrdinalIgnoreCase)))
+            activeKey = QueryType.ToLowerInvariant();
+    }
 }

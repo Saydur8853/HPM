@@ -9,16 +9,18 @@ using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.JSInterop;
 
-namespace HPM.Web.Components.Pages;
+namespace HPM.Web.Components.Common;
 
-public partial class BulkDataUpload
+public partial class BulkUploadWidget
 {
     [Inject] private IDbContextFactory<HpmDbContext> DbFactory { get; set; } = default!;
     [Inject] private IJSRuntime JS { get; set; } = default!;
     [Inject] private NavigationManager Nav { get; set; } = default!;
     [Inject] private HospitalLicenseService Licenses { get; set; } = default!;
 
-    [SupplyParameterFromQuery(Name = "type")] public string? TypeKey { get; set; }
+    [Parameter, EditorRequired] public string TypeKey { get; set; } = "doctor";
+    [Parameter] public EventCallback OnImported { get; set; }
+    [Parameter] public bool ShowFullPageGuide { get; set; }
 
     private const long MaxFileBytes = 5 * 1024 * 1024;
     private const int MaxRows = 5000;
@@ -32,6 +34,14 @@ public partial class BulkDataUpload
     private string messageClass = "info";
     private string? lookupHint;
     private int inputKey;
+    private ActiveModalKind activeModal = ActiveModalKind.None;
+    private List<DependentInfo> dependentInfos = [];
+    private int currentRecordCount;
+    private bool progressActive;
+    private int progressPercent;
+    private string progressLabel = string.Empty;
+    private bool isDragOver;
+    private string? selectedFileName;
 
     private int ImportableCount => rows.Count(r => r.Status is RowStatus.New or RowStatus.Update);
 
@@ -101,19 +111,23 @@ public partial class BulkDataUpload
                 new("OpeningStock", false, "Number — only used for new items", "0"),
                 new("IsKitchenItem", false, "Yes / No", "Yes"),
             ]),
-        new("pathology", "Pathology Tests", "প্যাথোলজি টেস্ট", "🧪", LicensedModules.Diagnostics,
-            "Pathology test list. Category must already exist in Diagnostic Test Master. Key: TestName + Category.",
-            "প্যাথোলজি টেস্টের তালিকা। Category আগে থেকেই Diagnostic Test Master-এ থাকতে হবে। মিলানো হয় TestName + Category দিয়ে।",
+        new("pathology", "Pathology Investigations", "প্যাথোলজি ইনভেস্টিগেশন", "🔬", LicensedModules.Diagnostics,
+            "Pathology investigation list. Category must already exist in Diagnostic Investigation Master. Key: InvestigationName + Category.",
+            "প্যাথোলজি ইনভেস্টিগেশনের তালিকা। Category আগে থেকেই Diagnostic Investigation Master-এ থাকতে হবে। মিলানো হয় InvestigationName + Category দিয়ে।",
             DiagnosticColumns("CBC", "Haematology")),
-        new("imaging", "Imaging Tests", "ইমেজিং টেস্ট", "🩻", LicensedModules.Diagnostics,
-            "Imaging / radiology test list. Category must already exist in Diagnostic Test Master. Key: TestName + Category.",
-            "ইমেজিং / রেডিওলজি টেস্টের তালিকা। Category আগে থেকেই Diagnostic Test Master-এ থাকতে হবে। মিলানো হয় TestName + Category দিয়ে।",
+        new("imaging", "Imaging Investigations", "ইমেজিং ইনভেস্টিগেশন", "🩻", LicensedModules.Diagnostics,
+            "Imaging / radiology investigation list. Category must already exist in Diagnostic Investigation Master. Key: InvestigationName + Category.",
+            "ইমেজিং / রেডিওলজি ইনভেস্টিগেশনের তালিকা। Category আগে থেকেই Diagnostic Investigation Master-এ থাকতে হবে। মিলানো হয় InvestigationName + Category দিয়ে।",
             DiagnosticColumns("X-Ray Chest PA View", "X-Ray")),
+        new("procedure", "Special Investigations", "স্পেশাল ইনভেস্টিগেশন", "〰️", LicensedModules.Diagnostics,
+            "ECG, Echo, EEG, ETT, Endoscopy & functional investigations. Category must already exist in Diagnostic Investigation Master. Key: InvestigationName + Category.",
+            "ইসিজি, ইকো, ইইজি, ইটিটি ও এন্ডোস্কোপি ইনভেস্টিগেশন। Category আগে থেকেই Diagnostic Investigation Master-এ থাকতে হবে।",
+            DiagnosticColumns("ECG 12 Lead", "ECG")),
     ];
 
     private static ColumnDef[] DiagnosticColumns(string exampleTest, string exampleCategory) =>
     [
-        new("TestName", true, "Test name (max 200)", exampleTest),
+        new("InvestigationName", true, "Investigation name (max 200)", exampleTest),
         new("Category", true, "Existing diagnostic category name", exampleCategory),
         new("Rate", true, "Number", "500"),
         new("DeliveryHours", false, "Report delivery time in hours (1-720)", "24"),
@@ -149,45 +163,119 @@ public partial class BulkDataUpload
     {
         rows = [];
         message = null;
+        selectedFileName = null;
+        isDragOver = false;
         inputKey++;
     }
 
-    /// <summary>Shows which lookup values (departments, categories) are valid for this upload type.</summary>
+    private void OpenModal(ActiveModalKind kind) => activeModal = kind;
+
+    private void CloseModal()
+    {
+        if (busy || progressActive) return;
+        activeModal = ActiveModalKind.None;
+    }
+
+    private async Task SetProgressAsync(int percent, string label)
+    {
+        progressActive = true;
+        progressPercent = Math.Clamp(percent, 0, 100);
+        progressLabel = label;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(120);
+    }
+
+    private void ClearProgress()
+    {
+        progressActive = false;
+        progressPercent = 0;
+        progressLabel = string.Empty;
+    }
+
+    private async Task FixLookupAsync(ImportRow r, string column, string? newValue)
+    {
+        if (string.IsNullOrWhiteSpace(newValue)) return;
+        r.Set(column, newValue);
+        await ValidateAsync();
+    }
+
+    /// <summary>Loads dependent master table counts, setup links, and current record count.</summary>
     private async Task LoadLookupHintAsync()
     {
         lookupHint = null;
+        dependentInfos = [];
+        currentRecordCount = 0;
         if (selected is null) return;
         await using var db = await DbFactory.CreateDbContextAsync();
         switch (selected.Key)
         {
             case "doctor":
                 var depts = await db.Departments.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => x.Name).ToListAsync();
+                currentRecordCount = await db.Doctors.AsNoTracking().CountAsync();
+                dependentInfos.Add(new("Departments", depts.Count, "/masters/departments", L("Department সেটআপ", "Manage Departments")));
                 if (depts.Count > 0) lookupHint = L("সঠিক Department: ", "Valid Department values: ") + string.Join(", ", depts);
                 break;
             case "nurse":
                 var hd = await db.HrmDepartments.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => x.Name).ToListAsync();
                 var hg = await db.HrmDesignations.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).Select(x => x.Name).ToListAsync();
+                currentRecordCount = await db.HrmEmployees.AsNoTracking().CountAsync();
+                dependentInfos.Add(new("HrmDepartments", hd.Count, "/hrm", L("HRM সেটআপ", "Manage HRM")));
+                dependentInfos.Add(new("HrmDesignations", hg.Count, "/hrm", L("HRM সেটআপ", "Manage HRM")));
                 lookupHint = L("Department: ", "Departments: ") + string.Join(", ", hd) + " | " + L("Designation: ", "Designations: ") + string.Join(", ", hg);
+                break;
+            case "medicine":
+                var mt = await db.MedicineTypes.AsNoTracking().CountAsync();
+                var gg = await db.GenericGroups.AsNoTracking().CountAsync();
+                var ps = await db.PharmacySuppliers.AsNoTracking().CountAsync();
+                currentRecordCount = await db.Services.AsNoTracking().CountAsync(x => x.CategoryID == MedicineCategoryId);
+                dependentInfos.Add(new("MedicineTypes", mt, "/pharmacy/masters", L("ফার্মেসি মাস্টার", "Pharmacy Masters")));
+                dependentInfos.Add(new("GenericGroups", gg, "/pharmacy/masters", L("ফার্মেসি মাস্টার", "Pharmacy Masters")));
+                dependentInfos.Add(new("PharmacySuppliers", ps, "/pharmacy/masters", L("ফার্মেসি মাস্টার", "Pharmacy Masters")));
+                break;
+            case "canteen":
+                var cc = await db.CanteenCategories.AsNoTracking().CountAsync();
+                currentRecordCount = await db.CanteenProducts.AsNoTracking().CountAsync();
+                dependentInfos.Add(new("CanteenCategories", cc, "/canteen/products", L("ক্যান্টিন মাস্টার", "Manage Canteen")));
                 break;
             case "pathology":
             case "imaging":
-                var cats = (await db.ServiceCategories.AsNoTracking().ToListAsync())
-                    .Where(DiagnosticTestRouting.IsDiagnosticCategory)
-                    .Where(c => selected.Key == "pathology" ? DiagnosticTestRouting.IsPathologyCategory(c) : !DiagnosticTestRouting.IsPathologyCategory(c))
+            case "procedure":
+                var targetDiagType = selected.Key switch
+                {
+                    "pathology" => DiagnosticTestRouting.Pathology,
+                    "procedure" => DiagnosticTestRouting.Procedure,
+                    _ => DiagnosticTestRouting.Imaging
+                };
+                var allCats = (await db.ServiceCategories.AsNoTracking().ToListAsync()).Where(DiagnosticTestRouting.IsDiagnosticCategory).ToList();
+                var cats = allCats
+                    .Where(c => DiagnosticTestRouting.ResolveCategoryType(c) == targetDiagType)
                     .Select(c => c.Name).OrderBy(x => x).ToList();
                 if (cats.Count == 0)
-                    cats = (await db.ServiceCategories.AsNoTracking().ToListAsync()).Where(DiagnosticTestRouting.IsDiagnosticCategory).Select(c => c.Name).OrderBy(x => x).ToList();
+                    cats = allCats.Select(c => c.Name).OrderBy(x => x).ToList();
+                var catIds = allCats.Select(c => c.ID).ToList();
+                var diagTests = await db.Services.AsNoTracking().Where(x => x.CategoryID != null && catIds.Contains(x.CategoryID.Value)).ToListAsync();
+                var catDict = allCats.ToDictionary(x => x.ID);
+                currentRecordCount = diagTests.Count(t => t.CategoryID.HasValue && catDict.TryGetValue(t.CategoryID.Value, out var c)
+                    && DiagnosticTestRouting.Resolve(t, c) == targetDiagType);
+                dependentInfos.Add(new("ServiceCategories", allCats.Count, "/diagnostic/investigations", L("ইনভেস্টিগেশন মাস্টার", "Investigation Master")));
                 lookupHint = L("সঠিক Category: ", "Valid Category values: ") + (cats.Count > 0 ? string.Join(", ", cats) : L("কোনো category নেই — আগে Diagnostic Test Master-এ তৈরি করুন", "none — create one in Diagnostic Test Master first"));
                 break;
         }
     }
 
-    // ─────────────────────────── Template download ───────────────────────────
+    // ─────────────────────────── Template & Export ───────────────────────────
 
-    private async Task DownloadTemplateAsync()
+    private Task DownloadTemplateAsync() => BuildAndDownloadWorkbookAsync(templateOnly: true);
+
+    private Task ExportDataAsync() => BuildAndDownloadWorkbookAsync(templateOnly: false);
+
+    private async Task BuildAndDownloadWorkbookAsync(bool templateOnly)
     {
-        if (selected is null) return;
-        var headers = selected.Columns.Select(c => c.Name).ToList();
+        if (selected is null || progressActive) return;
+        try
+        {
+            await SetProgressAsync(20, templateOnly ? L("নির্ভরশীল টেবিল লোড হচ্ছে...", "Loading dependent tables...") : L("ডেটাবেস থেকে রেকর্ড আনা হচ্ছে...", "Loading records..."));
+            var headers = selected.Columns.Select(c => c.Name).ToList();
         var dataRows = new List<IReadOnlyList<string>>();
         var lookupSheets = new List<XlsxWorkbookBuilder.SheetSpec>();
         var validations = new List<XlsxWorkbookBuilder.DropdownValidation>();
@@ -197,8 +285,9 @@ public partial class BulkDataUpload
             "nurse" => "Nurses",
             "medicine" => "Medicines",
             "canteen" => "CanteenFood",
-            "pathology" => "PathologyTests",
-            "imaging" => "ImagingTests",
+            "pathology" => "PathologyInvestigations",
+            "imaging" => "ImagingInvestigations",
+            "procedure" => "SpecialInvestigations",
             _ => "Data"
         };
 
@@ -342,10 +431,19 @@ public partial class BulkDataUpload
 
             case "pathology":
             case "imaging":
+            case "procedure":
+                var exportDiagType = selected.Key switch
+                {
+                    "pathology" => DiagnosticTestRouting.Pathology,
+                    "procedure" => DiagnosticTestRouting.Procedure,
+                    _ => DiagnosticTestRouting.Imaging
+                };
                 var diagCats = (await db.ServiceCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync())
                     .Where(DiagnosticTestRouting.IsDiagnosticCategory)
                     .ToDictionary(x => x.ID, x => x);
-                var diagCatRows = diagCats.Values.Where(x => !string.IsNullOrWhiteSpace(x.Name))
+                var filteredDiagCats = diagCats.Values.Where(c => DiagnosticTestRouting.ResolveCategoryType(c) == exportDiagType).ToList();
+                if (filteredDiagCats.Count == 0) filteredDiagCats = diagCats.Values.ToList();
+                var diagCatRows = filteredDiagCats.Where(x => !string.IsNullOrWhiteSpace(x.Name))
                     .Select(x => (IReadOnlyList<string>)[x.Name.Trim(), x.ID.ToString(CultureInfo.InvariantCulture)]).ToList();
                 lookupSheets.Add(new("ServiceCategories", ["CategoryName", "ID"], diagCatRows));
                 validations.Add(new(1, "ServiceCategories", diagCatRows.Count));
@@ -358,8 +456,7 @@ public partial class BulkDataUpload
                 foreach (var t in tests)
                 {
                     if (!t.CategoryID.HasValue || !diagCats.TryGetValue(t.CategoryID.Value, out var cat)) continue;
-                    var isImaging = DiagnosticTestRouting.IsImaging(t, cat);
-                    if (selected.Key == "imaging" != isImaging) continue;
+                    if (DiagnosticTestRouting.Resolve(t, cat) != exportDiagType) continue;
                     dataRows.Add([
                         t.Name ?? "",
                         cat.Name,
@@ -370,27 +467,63 @@ public partial class BulkDataUpload
                 break;
         }
 
+        if (templateOnly)
+        {
+            var sheetByName = lookupSheets.ToDictionary(s => s.Name, s => s, StringComparer.OrdinalIgnoreCase);
+            var valByCol = validations.ToDictionary(v => v.ColumnIndex, v => v);
+            var dummyRow = new string[selected.Columns.Length];
+            for (var c = 0; c < selected.Columns.Length; c++)
+            {
+                if (valByCol.TryGetValue(c, out var v)
+                    && sheetByName.TryGetValue(v.TargetSheetName, out var targetSheet)
+                    && targetSheet.Rows.Count > 0)
+                {
+                    dummyRow[c] = targetSheet.Rows[0][0];
+                }
+                else
+                {
+                    dummyRow[c] = selected.Columns[c].Example;
+                }
+            }
+            dataRows = [dummyRow];
+        }
+
         var sheets = new List<XlsxWorkbookBuilder.SheetSpec>(1 + lookupSheets.Count)
         {
             new(mainSheetName, headers, dataRows, validations)
         };
         sheets.AddRange(lookupSheets);
 
-        var xlsx = XlsxWorkbookBuilder.Build(sheets);
-        await JS.InvokeVoidAsync("hpm.downloadFile",
-            $"{selected.Key}-data-template.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            Convert.ToBase64String(xlsx));
+            await SetProgressAsync(65, L("Excel ফাইল তৈরি হচ্ছে...", "Generating Excel file..."));
+            var xlsx = XlsxWorkbookBuilder.Build(sheets);
+            var downloadName = templateOnly
+                ? $"{selected.Key}-template.xlsx"
+                : $"{selected.Key}-export-{DateTime.Today:yyyyMMdd}.xlsx";
+            await SetProgressAsync(100, L("ডাউনলোড প্রস্তুত", "Download ready"));
+            await JS.InvokeVoidAsync("hpm.downloadFile",
+                downloadName,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                Convert.ToBase64String(xlsx));
+            await Task.Delay(250);
+            activeModal = ActiveModalKind.None;
+            await OnImported.InvokeAsync();
+        }
+        finally
+        {
+            ClearProgress();
+        }
     }
 
     // ─────────────────────────── File parsing ───────────────────────────
 
     private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
     {
+        isDragOver = false;
         if (selected is null) return;
         rows = [];
         message = null;
         var file = e.File;
+        selectedFileName = file.Name;
         if (file.Size > MaxFileBytes)
         {
             Fail(L("ফাইল ৫ MB-এর বেশি হতে পারবে না।", "File must be 5 MB or smaller."));
@@ -400,6 +533,7 @@ public partial class BulkDataUpload
         busy = true;
         try
         {
+            await SetProgressAsync(25, L("ফাইল পড়া হচ্ছে...", "Reading file..."));
             using var ms = new MemoryStream();
             await file.OpenReadStream(MaxFileBytes).CopyToAsync(ms);
             var table = TabularFileReader.Read(file.Name, ms.ToArray());
@@ -430,7 +564,9 @@ public partial class BulkDataUpload
                 return new ImportRow(i + 2, values);
             }).ToList();
 
+            await SetProgressAsync(75, L($"{rows.Count}টি row যাচাই হচ্ছে...", $"Validating {rows.Count} rows..."));
             await ValidateAsync();
+            await SetProgressAsync(100, L("যাচাই সম্পন্ন", "Validation complete"));
         }
         catch (Exception ex)
         {
@@ -438,6 +574,7 @@ public partial class BulkDataUpload
         }
         finally
         {
+            ClearProgress();
             busy = false;
         }
     }
@@ -461,6 +598,9 @@ public partial class BulkDataUpload
         busy = true;
         try
         {
+            await SetProgressAsync(20, L("ডেটা প্রস্তুত হচ্ছে...", "Preparing import..."));
+            var totalToImport = ImportableCount;
+            await SetProgressAsync(60, L($"{totalToImport}টি রেকর্ড সেভ হচ্ছে...", $"Saving {totalToImport} records..."));
             var (added, updated) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
                 await ProcessAsync(db, commit: true);
@@ -468,9 +608,14 @@ public partial class BulkDataUpload
             });
             var skipped = rows.Count(r => r.Status is RowStatus.Skip or RowStatus.Error);
             rows = [];
+            selectedFileName = null;
             inputKey++;
+            await LoadLookupHintAsync();
+            await SetProgressAsync(100, L("আপলোড সম্পন্ন", "Import complete"));
             message = L($"সফল! নতুন {added}টি, update {updated}টি, বাদ {skipped}টি।", $"Done! {added} added, {updated} updated, {skipped} skipped.");
             messageClass = "success";
+            activeModal = ActiveModalKind.None;
+            await OnImported.InvokeAsync();
         }
         catch (Exception ex)
         {
@@ -478,6 +623,7 @@ public partial class BulkDataUpload
         }
         finally
         {
+            ClearProgress();
             busy = false;
         }
     }
@@ -511,8 +657,13 @@ public partial class BulkDataUpload
             case "canteen": await ProcessCanteenAsync(db, commit); break;
             case "pathology": await ProcessDiagnosticAsync(db, commit, DiagnosticTestRouting.Pathology); break;
             case "imaging": await ProcessDiagnosticAsync(db, commit, DiagnosticTestRouting.Imaging); break;
+            case "procedure": await ProcessDiagnosticAsync(db, commit, DiagnosticTestRouting.Procedure); break;
         }
-        if (commit) await db.SaveChangesAsync();
+        if (commit)
+        {
+            await db.SaveChangesAsync();
+            HospitalMasterCacheService.InvalidateGlobalCache();
+        }
     }
 
     /// <summary>Marks a row as New or Update depending on whether the key already exists.</summary>
@@ -550,7 +701,11 @@ public partial class BulkDataUpload
             if (deptName.Length > 0)
             {
                 if (departments.TryGetValue(deptName, out var id)) deptId = id;
-                else r.Error(L($"Department '{deptName}' পাওয়া যায়নি", $"Department '{deptName}' not found"));
+                else
+                {
+                    r.Error(L($"Department '{deptName}' পাওয়া যায়নি", $"Department '{deptName}' not found"));
+                    r.FixableLookups.Add(("Department", deptName, departments.Keys.OrderBy(x => x).ToList()));
+                }
             }
 
             existing.TryGetValue(name, out var doctor);
@@ -603,10 +758,18 @@ public partial class BulkDataUpload
 
             var deptValue = r.Optional("Department") ?? "NURS";
             var dept = FindByNameOrCode(departments, deptValue, x => x.Name, x => x.Code);
-            if (dept is null) r.Error(L($"Department '{deptValue}' পাওয়া যায়নি", $"Department '{deptValue}' not found"));
+            if (dept is null)
+            {
+                r.Error(L($"Department '{deptValue}' পাওয়া যায়নি", $"Department '{deptValue}' not found"));
+                r.FixableLookups.Add(("Department", deptValue, departments.Select(x => x.Name).OrderBy(x => x).ToList()));
+            }
             var desigValue = r.Optional("Designation") ?? "NURSE";
             var desig = FindByNameOrCode(designations, desigValue, x => x.Name, x => x.Code);
-            if (desig is null) r.Error(L($"Designation '{desigValue}' পাওয়া যায়নি", $"Designation '{desigValue}' not found"));
+            if (desig is null)
+            {
+                r.Error(L($"Designation '{desigValue}' পাওয়া যায়নি", $"Designation '{desigValue}' not found"));
+                r.FixableLookups.Add(("Designation", desigValue, designations.Select(x => x.Name).OrderBy(x => x).ToList()));
+            }
 
             if (attendanceNo is not null)
             {
@@ -750,7 +913,10 @@ public partial class BulkDataUpload
 
         foreach (var r in rows)
         {
-            var name = r.Required("TestName", 200);
+            var name = r.Get("InvestigationName");
+            if (name.Length == 0) name = r.Get("TestName");
+            if (name.Length == 0) r.Error("InvestigationName is required");
+            else if (name.Length > 200) r.Error("InvestigationName is longer than 200 characters");
             var categoryName = r.Required("Category", 200);
             r.Label = categoryName.Length > 0 ? $"{name} ({categoryName})" : name;
             var rate = r.Decimal("Rate", required: true);
@@ -759,7 +925,10 @@ public partial class BulkDataUpload
 
             int categoryId = 0;
             if (categoryName.Length > 0 && !categories.TryGetValue(categoryName, out categoryId))
+            {
                 r.Error(L($"Diagnostic Category '{categoryName}' পাওয়া যায়নি", $"Diagnostic category '{categoryName}' not found"));
+                r.FixableLookups.Add(("Category", categoryName, categories.Keys.OrderBy(x => x).ToList()));
+            }
 
             var key = $"{categoryId}|{name}";
             existing.TryGetValue(key, out var test);
@@ -778,6 +947,10 @@ public partial class BulkDataUpload
 
     // ─────────────────────────── Types ───────────────────────────
 
+    private enum ActiveModalKind { None, Template, Export, Import }
+
+    private sealed record DependentInfo(string Name, int Count, string? SetupUrl, string? SetupLabel);
+
     private sealed record ColumnDef(string Name, bool Required, string Hint, string Example);
 
     private sealed record UploadType(string Key, string Title, string TitleBn, string Icon, string? Module,
@@ -791,13 +964,16 @@ public partial class BulkDataUpload
         public string Label { get; set; } = string.Empty;
         public RowStatus Status { get; set; } = RowStatus.New;
         public List<string> Messages { get; } = [];
+        public List<(string Column, string BadValue, IReadOnlyList<string> Options)> FixableLookups { get; } = [];
         public bool HasErrors => Status == RowStatus.Error;
 
-        public void Reset() { Status = RowStatus.New; Messages.Clear(); Label = string.Empty; }
+        public void Reset() { Status = RowStatus.New; Messages.Clear(); FixableLookups.Clear(); Label = string.Empty; }
 
         public void Error(string message) { Status = RowStatus.Error; Messages.Add(message); }
 
         public string Get(string column) => values.TryGetValue(Normalize(column), out var v) ? v.Trim() : string.Empty;
+
+        public void Set(string column, string value) => values[Normalize(column)] = value;
 
         public string? Optional(string column) => Get(column) is { Length: > 0 } v ? v : null;
 
@@ -853,3 +1029,4 @@ public partial class BulkDataUpload
         }
     }
 }
+

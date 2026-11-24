@@ -837,6 +837,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         category.Property(x => x.IsPercentage).HasColumnName("Is_Percentage");
         category.Property(x => x.GroupSubID).HasColumnName("Group_Sub_ID");
         category.Property(x => x.InvestigationSLNO).HasColumnName("Investigation_SLNO");
+        category.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(30);
 
         var service = b.Entity<Service>();
         service.ToTable("Service");
@@ -853,6 +854,10 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.InvestigationModuleID).HasColumnName("Investigation_Module_ID");
         service.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(20);
         service.Property(x => x.DeliveryHours).HasColumnName("Delivery_Hours");
+        service.Property(x => x.DiscountType).HasColumnName("Discount_Type").HasMaxLength(15);
+        service.Property(x => x.DiscountValue).HasColumnName("Discount_Value").HasColumnType("numeric(18,2)");
+        service.Property(x => x.DiscountStart).HasColumnName("Discount_Start");
+        service.Property(x => x.DiscountEnd).HasColumnName("Discount_End");
         service.HasIndex(x => new { x.CategoryID, x.Name });
 
         department.HasData(

@@ -1,0 +1,278 @@
+@implements IDisposable
+
+@if (selected is not null)
+{
+    <div class="bu-widget-bar">
+        <button type="button" class="btn btn-secondary btn-sm bu-act-btn" @onclick="() => OpenModal(ActiveModalKind.Template)">
+            ⬇ @L("টেমপ্লেট ডাউনলোড", "Download Template")
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm bu-act-btn" @onclick="() => OpenModal(ActiveModalKind.Export)">
+            📤 @L("এক্সপোর্ট", "Export Data")
+        </button>
+        <button type="button" class="btn btn-primary btn-sm bu-act-btn" @onclick="() => OpenModal(ActiveModalKind.Import)">
+            📥 @L("ইমপোর্ট", "Import Data")
+        </button>
+    </div>
+
+    @if (!string.IsNullOrEmpty(message) && activeModal == ActiveModalKind.None)
+    {
+        <div class="bu-toast @messageClass" role="status">
+            <span>@message</span>
+            <button type="button" class="bu-toast-close" @onclick="() => message = null" aria-label="Close">×</button>
+        </div>
+    }
+
+    @if (ShowFullPageGuide)
+    {
+        <div class="bu-body">
+            @if (dependentInfos.Count > 0)
+            {
+                <div class="bu-dep-bar">
+                    <span class="bu-dep-label">@L("নির্ভরশীল টেবিল:", "Dependent Tables:")</span>
+                    <div class="bu-dep-chips">
+                        @foreach (var dep in dependentInfos)
+                        {
+                            <div class="bu-dep-chip @(dep.Count == 0 ? "warn" : "")">
+                                <span class="bu-dep-name">@dep.Name</span>
+                                <span class="bu-dep-cnt">@dep.Count</span>
+                                @if (!string.IsNullOrEmpty(dep.SetupUrl))
+                                {
+                                    <a href="@dep.SetupUrl" class="bu-dep-link">@(dep.SetupLabel ?? L("সেটআপ", "Setup"))</a>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (lookupHint is not null)
+            {
+                <div class="bu-note">@lookupHint</div>
+            }
+
+            <div class="bu-table-wrap bu-guide-wrap">
+                <table class="dash-table bu-compact-table">
+                    <thead>
+                        <tr>
+                            <th>@L("Column", "Column")</th>
+                            <th class="bu-req-col">@L("আবশ্যক", "Required")</th>
+                            <th>@L("নিয়ম", "Format / Rule")</th>
+                            <th>@L("উদাহরণ", "Example")</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in selected.Columns)
+                        {
+                            <tr>
+                                <td><code>@c.Name</code></td>
+                                <td class="bu-req-col">
+                                    @if (c.Required)
+                                    {
+                                        <span class="bu-req-badge">@L("হ্যাঁ", "Required")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="bu-opt-text">—</span>
+                                    }
+                                </td>
+                                <td>@c.Hint</td>
+                                <td class="bu-muted">@c.Example</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    }
+
+    @if (activeModal != ActiveModalKind.None)
+    {
+        <div class="bu-modal-backdrop" @onclick="CloseModal">
+            <div class="bu-modal @(activeModal == ActiveModalKind.Import ? "bu-modal-wide" : "")" @onclick:stopPropagation="true">
+                <div class="bu-modal-head">
+                    <h3>
+                        @if (activeModal == ActiveModalKind.Template)
+                        {
+                            <span>@L("Download Template", "Download Template") — @L(selected.TitleBn, selected.Title)</span>
+                        }
+                        else if (activeModal == ActiveModalKind.Export)
+                        {
+                            <span>@L("Export Data", "Export Data") — @L(selected.TitleBn, selected.Title)</span>
+                        }
+                        else
+                        {
+                            <span>@L("Import Data", "Import Data") — @L(selected.TitleBn, selected.Title)</span>
+                        }
+                    </h3>
+                    <button type="button" class="bu-modal-close" disabled="@(busy || progressActive)" @onclick="CloseModal" aria-label="Close">✕</button>
+                </div>
+
+                <div class="bu-modal-body">
+                    @if (progressActive)
+                    {
+                        var dashOffset = 226.2 * (1.0 - progressPercent / 100.0);
+                        <div class="bu-ring-wrap" role="status" aria-live="polite">
+                            <div class="bu-ring-box">
+                                <svg class="bu-ring-svg" viewBox="0 0 84 84">
+                                    <circle class="bu-ring-bg" cx="42" cy="42" r="36" />
+                                    <circle class="bu-ring-fg" cx="42" cy="42" r="36"
+                                            style="stroke-dasharray: 226.2; stroke-dashoffset: @dashOffset.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);" />
+                                </svg>
+                                <span class="bu-ring-pct">@progressPercent%</span>
+                            </div>
+                            <div class="bu-ring-label">@progressLabel</div>
+                        </div>
+                    }
+
+                    @if (activeModal == ActiveModalKind.Template)
+                    {
+                        <div class="bu-guide-callout">
+                            <ul>
+                                <li>@L("Sheet 1-এ কলাম হেডার ও ১টি নমুনা (Dummy) সারি থাকবে।", "Sheet 1 contains column headers and 1 dummy row.")</li>
+                                <li>@L("নির্ভরশীল কলামে Excel Dropdown এবং নমুনা সারিতে সঠিক মান সিলেক্ট করা থাকবে।", "Dependent columns have Excel Dropdowns with a valid pre-selected value.")</li>
+                                <li>@L("Sheet 2+ এ প্রতিটি নির্ভরশীল PK টেবিলের তালিকা থাকবে।", "Sheet 2+ lists each dependent PK table.")</li>
+                            </ul>
+                        </div>
+
+                        @if (dependentInfos.Any(d => d.Count == 0))
+                        {
+                            <div class="bu-alert warn">
+                                @L("কিছু নির্ভরশীল টেবিল খালি আছে — আগে যোগ করুন:", "Some dependent tables are empty — add records first:")
+                                @foreach (var d in dependentInfos.Where(x => x.Count == 0 && !string.IsNullOrEmpty(x.SetupUrl)))
+                                {
+                                    <a href="@d.SetupUrl" class="bu-inline-link">@d.Name (@d.SetupLabel)</a>
+                                }
+                            </div>
+                        }
+
+                        <div class="bu-modal-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" disabled="@progressActive" @onclick="CloseModal">@L("বন্ধ করুন", "Close")</button>
+                            <button type="button" class="btn btn-primary btn-sm" disabled="@progressActive" @onclick="DownloadTemplateAsync">
+                                @L("Download Template (.xlsx)", "Download Template (.xlsx)")
+                            </button>
+                        </div>
+                    }
+                    else if (activeModal == ActiveModalKind.Export)
+                    {
+                        <div class="bu-export-stat">
+                            <span class="bu-export-num">@currentRecordCount</span>
+                            <div>
+                                <div class="bu-export-lbl">@L("বর্তমান রেকর্ড সংখ্যা", "Existing records")</div>
+                                <div class="bu-export-sub">@L("সব রেকর্ড ও নির্ভরশীল টেবিলের Dropdown সহ .xlsx ডাউনলোড হবে।", "Exports all records with dependent lookup sheets and dropdowns.")</div>
+                            </div>
+                        </div>
+
+                        <div class="bu-modal-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" disabled="@progressActive" @onclick="CloseModal">@L("বন্ধ করুন", "Close")</button>
+                            <button type="button" class="btn btn-primary btn-sm" disabled="@progressActive" @onclick="ExportDataAsync">
+                                @L("Export (.xlsx)", "Export (.xlsx)")
+                            </button>
+                        </div>
+                    }
+                    else if (activeModal == ActiveModalKind.Import)
+                    {
+                        <div class="bu-import-step">
+                            <div class="bu-step-badge">@L("ধাপ ১: নির্ভরশীল টেবিল", "Step 1: Dependent Tables")</div>
+                            <div class="bu-dep-chips">
+                                @foreach (var dep in dependentInfos)
+                                {
+                                    <div class="bu-dep-chip @(dep.Count == 0 ? "warn" : "")">
+                                        <span class="bu-dep-name">@dep.Name</span>
+                                        <span class="bu-dep-cnt">@dep.Count</span>
+                                        @if (!string.IsNullOrEmpty(dep.SetupUrl))
+                                        {
+                                            <a href="@dep.SetupUrl" class="bu-dep-link">@(dep.SetupLabel ?? L("সেটআপ", "Setup"))</a>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="bu-import-step">
+                            <div class="bu-step-badge">@L("ধাপ ২: ফাইল দিন (.xlsx / .csv)", "Step 2: Select File (.xlsx / .csv)")</div>
+                            <div class="bu-dropzone @(isDragOver ? "drag-over" : "") @(busy ? "disabled" : "")"
+                                 @ondragenter="() => isDragOver = true"
+                                 @ondragleave="() => isDragOver = false"
+                                 @ondrop="() => isDragOver = false">
+                                <InputFile @key="inputKey" OnChange="OnFileSelectedAsync" accept=".csv,.xlsx" disabled="@busy" class="bu-drop-input" />
+                                <div class="bu-drop-content">
+                                    <div class="bu-drop-title">
+                                        @if (!string.IsNullOrEmpty(selectedFileName))
+                                        {
+                                            <span>@selectedFileName</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@L("এখানে ফাইল ড্রপ করুন অথবা ক্লিক করে বাছাই করুন", "Drop .xlsx or .csv file here, or click to choose")</span>
+                                        }
+                                    </div>
+                                    <div class="bu-drop-sub">@L("সর্বোচ্চ ৫ MB (.xlsx বা .csv)", "Supports .xlsx and .csv up to 5 MB")</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(message))
+                        {
+                            <div class="bu-alert @messageClass">@message</div>
+                        }
+
+                        @if (rows.Count > 0)
+                        {
+                            <div class="bu-import-step">
+                                <div class="bu-step-badge">@L("ধাপ ৩: যাচাই ও আপলোড", "Step 3: Review & Import")</div>
+                                <div class="bu-summary">
+                                    <span class="bu-pill new">@L("নতুন", "New"): @rows.Count(r => r.Status == RowStatus.New)</span>
+                                    <span class="bu-pill update">@L("Update", "Update"): @rows.Count(r => r.Status == RowStatus.Update)</span>
+                                    <span class="bu-pill skip">@L("Skip", "Skip"): @rows.Count(r => r.Status == RowStatus.Skip)</span>
+                                    <span class="bu-pill error">@L("ভুল", "Errors"): @rows.Count(r => r.Status == RowStatus.Error)</span>
+                                    <div class="bu-summary-actions">
+                                        <button type="button" class="btn btn-primary btn-sm" disabled="@(busy || ImportableCount == 0)" @onclick="ImportAsync">
+                                            @(busy ? L("আপলোড হচ্ছে...", "Importing...") : L($"{ImportableCount}টি row আপলোড করুন", $"Import {ImportableCount} rows"))
+                                        </button>
+                                        <button type="button" class="btn btn-secondary btn-sm" disabled="@busy" @onclick="ResetUpload">@L("বাতিল", "Clear")</button>
+                                    </div>
+                                </div>
+
+                                <div class="bu-table-wrap bu-preview">
+                                    <table class="dash-table bu-compact-table">
+                                        <thead><tr><th>#</th><th>@L("Record", "Record")</th><th>@L("অবস্থা", "Status")</th><th>@L("বার্তা / ঠিক করুন", "Message / Quick Fix")</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var r in rows)
+                                            {
+                                                <tr class="row-@r.Status.ToString().ToLowerInvariant()">
+                                                    <td>@r.RowNo</td>
+                                                    <td>@r.Label</td>
+                                                    <td><span class="bu-pill @r.Status.ToString().ToLowerInvariant()">@StatusText(r.Status)</span></td>
+                                                    <td>
+                                                        <div>@string.Join(" • ", r.Messages)</div>
+                                                        @foreach (var fix in r.FixableLookups)
+                                                        {
+                                                            <div class="bu-fix-row">
+                                                                <span>@fix.Column:</span>
+                                                                <select class="bu-fix-select" @onchange="e => FixLookupAsync(r, fix.Column, e.Value?.ToString())">
+                                                                    <option value="">@L($"-- সঠিক {fix.Column} --", $"-- Select {fix.Column} --")</option>
+                                                                    @foreach (var opt in fix.Options)
+                                                                    {
+                                                                        <option value="@opt">@opt</option>
+                                                                    }
+                                                                </select>
+                                                            </div>
+                                                        }
+                                                    </td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        }
+
+                        <div class="bu-modal-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" disabled="@(busy || progressActive)" @onclick="CloseModal">@L("বন্ধ করুন", "Close")</button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+}

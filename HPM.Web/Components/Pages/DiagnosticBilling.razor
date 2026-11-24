@@ -303,7 +303,20 @@
                                                                     <span class="diag-test-cat-badge">@catName</span>
                                                                 }
                                                             </div>
-                                                            <span class="diag-test-rate">@I18n.FormatCurrency(s.SaleRate ?? 0)</span>
+                                                            @{
+                                                                var discInfo = DiagnosticTestRouting.EvaluateDiscount(s);
+                                                            }
+                                                            <span class="diag-test-rate">
+                                                                @if (discInfo.IsActive)
+                                                                {
+                                                                    <del style="color:#94a3b8; font-weight:500; margin-right:4px;">@I18n.FormatCurrency(discInfo.OriginalRate)</del>
+                                                                    <span style="color:#059669; font-weight:800;">@I18n.FormatCurrency(discInfo.EffectiveRate)</span>
+                                                                }
+                                                                else
+                                                                {
+                                                                    @I18n.FormatCurrency(discInfo.OriginalRate)
+                                                                }
+                                                            </span>
                                                         </div>
                                                     }
                                                 }
@@ -383,16 +396,35 @@
                                             var idx = i;
                                             var item = editor.Items[idx];
                                             var service = availableServices.FirstOrDefault(s => s.ID == item.TestID);
+                                            var itemDisc = service != null ? DiagnosticTestRouting.EvaluateDiscount(service) : default;
                                             <div class="diag-preview-table-row">
                                                 <span class="pcol-sl">@(idx + 1)</span>
                                                 <div class="pcol-name">
                                                     <span class="pcol-test-title">@ServiceName(item.TestID)</span>
-                                                    @if (service?.CategoryID is int catId && serviceCategoryNames.TryGetValue(catId, out var catName) && !string.IsNullOrWhiteSpace(catName))
-                                                    {
-                                                        <span class="diag-test-cat-pill">@catName</span>
-                                                    }
+                                                    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px;">
+                                                        @if (service?.CategoryID is int catId && serviceCategoryNames.TryGetValue(catId, out var catName) && !string.IsNullOrWhiteSpace(catName))
+                                                        {
+                                                            <span class="diag-test-cat-pill">@catName</span>
+                                                        }
+                                                        @if (service != null && itemDisc.IsActive)
+                                                        {
+                                                            <span class="pill" style="background:#dcfce7; color:#166534; font-size:10px; font-weight:700; padding:1px 6px;">
+                                                                -@(service.DiscountType == "Percent" ? $"{service.DiscountValue:0.##}%" : I18n.FormatCurrency(service.DiscountValue ?? 0))
+                                                            </span>
+                                                        }
+                                                    </div>
                                                 </div>
-                                                <span class="pcol-rate">@I18n.FormatCurrency(item.Rate)</span>
+                                                <span class="pcol-rate">
+                                                    @if (service != null && itemDisc.IsActive && item.Rate == itemDisc.EffectiveRate)
+                                                    {
+                                                        <del style="color:#94a3b8; font-size:10.5px; margin-right:4px;">@I18n.FormatCurrency(itemDisc.OriginalRate)</del>
+                                                        <span style="color:#059669; font-weight:700;">@I18n.FormatCurrency(item.Rate)</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        @I18n.FormatCurrency(item.Rate)
+                                                    }
+                                                </span>
                                                 <span class="pcol-qty">@item.Quantity</span>
                                                 <strong class="pcol-amount">@I18n.FormatCurrency(item.Rate * item.Quantity)</strong>
                                                 <span class="pcol-del">
@@ -2222,7 +2254,7 @@
     {
         selectedTestId = s.ID;
         testSearchQuery = s.Name ?? string.Empty;
-        itemRate = s.SaleRate ?? 0;
+        itemRate = DiagnosticTestRouting.GetEffectiveSaleRate(s);
         itemQty = 1;
         showTestSuggestions = false;
         highlightedTestIndex = 0;
@@ -2299,7 +2331,7 @@
         if (selectedTestId > 0)
         {
             var s = availableServices.FirstOrDefault(x => x.ID == selectedTestId);
-            itemRate = s?.SaleRate ?? 0;
+            itemRate = s is null ? 0 : DiagnosticTestRouting.GetEffectiveSaleRate(s);
             itemQty = 1;
         }
     }
@@ -2313,7 +2345,7 @@
             if (match != null)
             {
                 selectedTestId = match.ID;
-                if (itemRate <= 0) itemRate = match.SaleRate ?? 0;
+                if (itemRate <= 0) itemRate = DiagnosticTestRouting.GetEffectiveSaleRate(match);
             }
         }
 

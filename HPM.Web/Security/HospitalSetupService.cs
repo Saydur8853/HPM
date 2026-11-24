@@ -118,6 +118,19 @@ public sealed class HospitalSetupService(
                 BEGIN
                     ALTER TABLE [Hospital_Profile] ADD [Developer_Phone] nvarchar(100) NULL;
                 END
+                IF OBJECT_ID(N'[Service_Category]', N'U') IS NOT NULL
+                   AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service_Category]') AND name = 'Diagnostic_Type')
+                BEGIN
+                    ALTER TABLE [Service_Category] ADD [Diagnostic_Type] nvarchar(30) NULL;
+                END
+                IF OBJECT_ID(N'[Service]', N'U') IS NOT NULL
+                   AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'Discount_Type')
+                BEGIN
+                    ALTER TABLE [Service] ADD [Discount_Type] nvarchar(15) NULL;
+                    ALTER TABLE [Service] ADD [Discount_Value] numeric(18,2) NULL;
+                    ALTER TABLE [Service] ADD [Discount_Start] datetime2 NULL;
+                    ALTER TABLE [Service] ADD [Discount_End] datetime2 NULL;
+                END
                 """;
             await db.Database.ExecuteSqlRawAsync(sql, ct);
             _schemaEnsured = true;

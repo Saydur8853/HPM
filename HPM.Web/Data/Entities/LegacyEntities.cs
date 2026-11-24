@@ -188,6 +188,7 @@ public sealed class ServiceCategory
     public bool? IsPercentage { get; set; }
     public int? GroupSubID { get; set; }
     public int? InvestigationSLNO { get; set; }
+    public string? DiagnosticType { get; set; }
 }
 
 public sealed class Service
@@ -205,4 +206,8 @@ public sealed class Service
     public int? InvestigationModuleID { get; set; }
     public string? DiagnosticType { get; set; }
     public int? DeliveryHours { get; set; }
+    public string? DiscountType { get; set; }
+    public decimal? DiscountValue { get; set; }
+    public DateTime? DiscountStart { get; set; }
+    public DateTime? DiscountEnd { get; set; }
 }
