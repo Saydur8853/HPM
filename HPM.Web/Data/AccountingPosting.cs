@@ -142,7 +142,8 @@ public static class AccountingPosting
         AccountVoucher original,
         string reason,
         int userId,
-        DateTime reversedAt)
+        DateTime reversedAt,
+        DateTime? reversalVoucherDate = null)
     {
         if (!original.IsPosted || original.Status is "Pending" or "Rejected")
             throw new InvalidOperationException("Only an approved voucher can be reversed.");
@@ -163,7 +164,8 @@ public static class AccountingPosting
         {
             VoucherNo = $"R{DateTime.UtcNow:yyMMddHHmmssfff}{Guid.NewGuid():N}"[..20],
             VoucherType = "Reversal",
-            VoucherDate = reversedAt.Date,
+            // Month-end entries are reversed inside their own month, so that month nets to zero.
+            VoucherDate = (reversalVoucherDate ?? reversedAt).Date,
             Narration = $"Reversal of {original.VoucherNo}: {reason.Trim()}",
             Reference = $"REV:{original.ID}",
             IsPosted = true,

@@ -179,9 +179,20 @@
         </p>
     </div>
 
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert danger" style="padding: 7px 14px; font-size: 12px; font-weight: 600; margin-bottom: 12px; border-radius: 6px;">
+            ⚠ @message
+            <button type="button" class="btn btn-ghost" style="font-size: 11.5px; height: 26px; margin-left: 8px;" disabled="@isLoading" @onclick="LoadPulseAsync">
+                ↻ @I18n.T("Refresh", "রিফ্রেশ")
+            </button>
+        </div>
+    }
+
     <!-- 3 Big Dedicated Portal Cards -->
     <div class="rep-portals-grid">
-        <!-- 1. Financial Reports -->
+        <!-- 1. Financial Reports (same roles as FinancialReports.razor [Authorize]) -->
+        <AuthorizeView Roles="@FinancialReportRoles" Context="financialAuth">
         <a href="/reports/financial" class="rep-portal-card" style="border-top: 4px solid #0284c7;">
             <div class="portal-top">
                 <div class="portal-icon-wrap" style="background: #e0f2fe; color: #0284c7;">
@@ -197,6 +208,7 @@
                 <span>→</span>
             </div>
         </a>
+        </AuthorizeView>
 
         <!-- 2. MIS Reports -->
         <a href="/reports/mis" class="rep-portal-card" style="border-top: 4px solid #10b981;">
@@ -286,6 +298,11 @@
     private int totalBeds;
     private int occupiedBeds;
     private double occupancyRate;
+    private string message = "";
+    private bool isLoading;
+
+    // Must match the [Authorize(Roles = ...)] attribute on FinancialReports.razor.
+    private const string FinancialReportRoles = RoleNames.Administrator + "," + RoleNames.Reception + "," + RoleNames.Cashier;
 
     protected override async Task OnInitializedAsync()
     {
@@ -318,37 +335,65 @@
 
     private async Task LoadPulseAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var today = DateTime.Today;
-        var tomorrow = today.AddDays(1);
+        message = "";
+        isLoading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var today = DateTime.Today;
+            var tomorrow = today.AddDays(1);
 
-        // 1. Collections today
-        var opdToday = await db.OPDTickets.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
-        var emgToday = await db.EmergencyMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
-        var otToday = await db.OTCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
-        var ipdRcptToday = await db.IpdMoneyReceipts.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
-        var pharmToday = await db.PharmacyCashMemos.AsNoTracking().Where(x => x.TransDate >= today && x.TransDate < tomorrow).ToListAsync();
+            // 1. Collections today (only the amount columns are read)
+            var opdToday = await db.OPDTickets.AsNoTracking()
+                .Where(x => x.TransDate >= today && x.TransDate < tomorrow)
+                .Select(x => x.Total)
+                .ToListAsync();
+            var emgToday = await db.EmergencyMemos.AsNoTracking()
+                .Where(x => x.TransDate >= today && x.TransDate < tomorrow)
+                .Select(x => x.Paid)
+                .ToListAsync();
+            var otToday = await db.OTCashMemos.AsNoTracking()
+                .Where(x => x.TransDate >= today && x.TransDate < tomorrow)
+                .Select(x => x.Total - x.Discount)
+                .ToListAsync();
+            // Doctor-fee receipts are paid out to doctors and are not hospital money.
+            var ipdRcptToday = await db.IpdMoneyReceipts.AsNoTracking()
+                .Where(x => x.TransDate >= today && x.TransDate < tomorrow && x.Against != "DoctorPayment")
+                .Select(x => x.Amount)
+                .ToListAsync();
+            // Credit pharmacy memos are receivable, not cash collected.
+            var pharmToday = await db.PharmacyCashMemos.AsNoTracking()
+                .Where(x => x.TransDate >= today && x.TransDate < tomorrow)
+                .Select(x => x.IsCredit == true ? 0m : (x.Total ?? 0) - (x.Discount ?? 0))
+                .ToListAsync();
 
-        todayTotalCollection = opdToday.Sum(x => x.Total)
-            + emgToday.Sum(x => x.Paid)
-            + otToday.Sum(x => x.Total - x.Discount)
-            + ipdRcptToday.Sum(x => x.Amount)
-            + pharmToday.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0));
+            // 2. OPD & Appts
+            var apptsToday = await db.DoctorAppointments.AsNoTracking().CountAsync(x => x.ApptDate >= today && x.ApptDate < tomorrow);
 
-        todayMemosCount = opdToday.Count + emgToday.Count + otToday.Count + ipdRcptToday.Count + pharmToday.Count;
+            // 3. IPD & Beds
+            var activeInpatients = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.ReleaseDate == null);
+            var admissionsToday = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.AdmissionDate >= today && x.AdmissionDate < tomorrow);
 
-        // 2. OPD & Appts
-        todayOpdCount = opdToday.Count;
-        todayApptsCount = await db.DoctorAppointments.AsNoTracking().CountAsync(x => x.ApptDate >= today && x.ApptDate < tomorrow);
+            var bedStatuses = await db.BedCabins.AsNoTracking().Select(x => x.Status).ToListAsync();
 
-        // 3. IPD & Beds
-        activeInpatientsCount = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.ReleaseDate == null);
-        todayAdmissionsCount = await db.PatientAdmissions.AsNoTracking().CountAsync(x => x.AdmissionDate >= today && x.AdmissionDate < tomorrow);
-
-        var beds = await db.BedCabins.AsNoTracking().ToListAsync();
-        totalBeds = beds.Count;
-        occupiedBeds = beds.Count(x => x.Status == "Occupied");
-        occupancyRate = totalBeds > 0 ? (occupiedBeds * 100.0 / totalBeds) : 0;
+            todayTotalCollection = opdToday.Sum() + emgToday.Sum() + otToday.Sum() + ipdRcptToday.Sum() + pharmToday.Sum();
+            todayMemosCount = opdToday.Count + emgToday.Count + otToday.Count + ipdRcptToday.Count + pharmToday.Count;
+            todayOpdCount = opdToday.Count;
+            todayApptsCount = apptsToday;
+            activeInpatientsCount = activeInpatients;
+            todayAdmissionsCount = admissionsToday;
+            totalBeds = bedStatuses.Count;
+            occupiedBeds = bedStatuses.Count(x => x == "Occupied");
+            occupancyRate = totalBeds > 0 ? (occupiedBeds * 100.0 / totalBeds) : 0;
+        }
+        catch (Exception)
+        {
+            message = I18n.T("The database did not answer in time (it may be busy). Press Refresh to try again.", "ডাটাবেস সময়মতো উত্তর দেয়নি (ব্যস্ত থাকতে পারে)। আবার চেষ্টা করতে রিফ্রেশ চাপুন।");
+        }
+        finally
+        {
+            isLoading = false;
+        }
     }
 
     public void Dispose()

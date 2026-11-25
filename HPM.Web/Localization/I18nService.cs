@@ -91,6 +91,13 @@ namespace HPM.Web.Localization
         public string T(string? key, string? defaultEnglish = null)
         {
             if (string.IsNullOrEmpty(key)) return defaultEnglish ?? string.Empty;
+            // Most pages call T("English", "বাংলা"). When the English key has no dictionary entry,
+            // show the Bangla text the page supplied instead of falling back to English.
+            if (IsBangla && !string.IsNullOrEmpty(defaultEnglish) && ContainsBangla(defaultEnglish)
+                && !TranslationDictionary.TryGetBangla(key, out _))
+            {
+                return defaultEnglish;
+            }
             var text = TranslationDictionary.GetTranslation(key, _currentLanguage);
             if (string.IsNullOrEmpty(text) && defaultEnglish != null)
             {
@@ -100,6 +107,15 @@ namespace HPM.Web.Localization
         }
 
         public string this[string? key] => T(key);
+
+        private static bool ContainsBangla(string text)
+        {
+            foreach (var ch in text)
+            {
+                if (ch >= 'ঀ' && ch <= '৿') return true;
+            }
+            return false;
+        }
 
         /// <summary>
         /// Formats currency with appropriate symbol (e.g. ৳ or Tk / $)

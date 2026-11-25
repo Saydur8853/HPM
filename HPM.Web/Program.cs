@@ -80,8 +80,11 @@ builder.Services.AddRateLimiter(options =>
 var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")
     ?? throw new InvalidOperationException("Connection string 'HpmDatabase' was not found.");
 
+// Default 30 seconds; a slow local PC can raise it with "Database:CommandTimeoutSeconds" in its own appsettings.
+var commandTimeoutSeconds = Math.Clamp(builder.Configuration.GetValue("Database:CommandTimeoutSeconds", 30), 30, 300);
+
 builder.Services.AddDbContextFactory<HpmDbContext>(options =>
-    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(30).EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
+    options.UseSqlServer(connectionString, sql => sql.CommandTimeout(commandTimeoutSeconds).EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
 
 builder.Services.AddIdentity<AppUser, IdentityRole<int>>(options =>
     {

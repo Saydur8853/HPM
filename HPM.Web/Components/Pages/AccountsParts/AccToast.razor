@@ -1,0 +1,93 @@
+@* Accounts pages: one message at a time as a popup at the top of the screen.
+   Success hides itself after 4 seconds, an error after 10; ✕ closes it at once. *@
+@implements IDisposable
+
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <div class="acc-toast @(IsError ? "error" : "ok")" role="@(IsError ? "alert" : "status")">
+        <span class="acc-toast-icon">@(IsError ? "⚠️" : "✅")</span>
+        <span class="acc-toast-text">@Message</span>
+        <button type="button" class="acc-toast-close" title="@I18n.T("Close", "বন্ধ")" @onclick="CloseAsync">✕</button>
+    </div>
+}
+
+<style>
+    .acc-toast {
+        position: fixed;
+        top: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 3000;
+        width: min(560px, calc(100vw - 32px));
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 12.5px;
+        font-weight: 700;
+        line-height: 1.45;
+        box-shadow: 0 14px 38px rgba(15, 23, 42, 0.22);
+        animation: acc-toast-in 0.18s ease-out;
+    }
+    .acc-toast.ok { background: #ecfdf5; color: #065f46; border: 1px solid #6ee7b7; }
+    .acc-toast.error { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+    .acc-toast-icon { font-size: 15px; line-height: 1.2; }
+    .acc-toast-text { flex: 1; }
+    .acc-toast-close {
+        border: none;
+        background: none;
+        color: inherit;
+        cursor: pointer;
+        font-weight: 800;
+        font-size: 13px;
+        padding: 0 2px;
+        opacity: 0.75;
+    }
+    .acc-toast-close:hover { opacity: 1; }
+    @@keyframes acc-toast-in {
+        from { opacity: 0; transform: translate(-50%, -10px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+    }
+    @@media print { .acc-toast { display: none !important; } }
+</style>
+
+@code {
+    [Parameter] public string? Message { get; set; }
+    /// <summary>"success" or "danger" (the Accounts pages' messageClass values).</summary>
+    [Parameter] public string Kind { get; set; } = "success";
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool IsError => Kind is "danger" or "error" or "warning";
+    private CancellationTokenSource? timer;
+    private string? shown;
+
+    protected override void OnParametersSet()
+    {
+        if (Message == shown) return;
+        shown = Message;
+        timer?.Cancel();
+        if (string.IsNullOrWhiteSpace(Message)) return;
+        timer = new CancellationTokenSource();
+        _ = HideLaterAsync(timer.Token, IsError ? 10000 : 4000);
+    }
+
+    private async Task HideLaterAsync(CancellationToken token, int milliseconds)
+    {
+        try
+        {
+            await Task.Delay(milliseconds, token);
+            await InvokeAsync(() => OnClose.InvokeAsync());
+        }
+        catch (TaskCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private Task CloseAsync()
+    {
+        timer?.Cancel();
+        return OnClose.InvokeAsync();
+    }
+
+    public void Dispose() => timer?.Cancel();
+}
