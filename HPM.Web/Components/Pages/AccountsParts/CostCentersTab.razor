@@ -20,7 +20,7 @@
                     @foreach (var t in new[] { "Revenue", "Service", "Admin" })
                     {
                         <button type="button" class="acc-preset-btn @(editor.CenterType == t ? "active" : "")" style="padding:5px 2px; text-align:center;"
-                                disabled="@editor.IsSystem" @onclick='() => editor.CenterType = t'>@GroupIcon(t) @GroupLabel(t)</button>
+                                disabled="@(editor.IsSystem || !IsAdministrator)" @onclick='() => editor.CenterType = t'>@GroupIcon(t) @GroupLabel(t)</button>
                     }
                 </div>
                 <div style="font-size:10.5px; color:#64748b; margin-top:4px;">
@@ -31,25 +31,25 @@
             <div style="display:grid; grid-template-columns:120px 1fr; gap:10px; margin-bottom:10px;">
                 <div>
                     <span class="acc-field-label">@I18n.T("Code *", "কোড *")</span>
-                    <input class="classic-input" style="height:30px !important; font-weight:800;" @bind="editor.Code" disabled="@editor.IsSystem" placeholder="CC-113" />
+                    <input class="classic-input" style="height:30px !important; font-weight:800;" @bind="editor.Code" maxlength="20" disabled="@(editor.IsSystem || !IsAdministrator)" placeholder="CC-113" />
                 </div>
                 <div>
                     <span class="acc-field-label">@I18n.T("Department Name *", "বিভাগের নাম *")</span>
-                    <input class="classic-input" style="height:30px !important;" @bind="editor.Name" placeholder="e.g. Dialysis Unit" />
+                    <input class="classic-input" style="height:30px !important;" @bind="editor.Name" maxlength="100" disabled="@(!IsAdministrator)" placeholder="@I18n.T("e.g. Dialysis Unit", "যেমন: ডায়ালাইসিস ইউনিট")" />
                 </div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 140px; gap:10px; margin-bottom:10px;">
                 <div>
                     <span class="acc-field-label">@I18n.T("In-charge", "ইনচার্জ")</span>
-                    <input class="classic-input" style="height:30px !important;" @bind="editor.Incharge" placeholder="@I18n.T("Responsible person", "দায়িত্বপ্রাপ্ত ব্যক্তি")" />
+                    <input class="classic-input" style="height:30px !important;" @bind="editor.Incharge" maxlength="100" disabled="@(!IsAdministrator)" placeholder="@I18n.T("Responsible person", "দায়িত্বপ্রাপ্ত ব্যক্তি")" />
                 </div>
                 <div>
                     <span class="acc-field-label">@I18n.T("Area (sq ft)", "জায়গা (বর্গফুট)")</span>
-                    <InputNumber class="classic-input" style="height:30px !important;" @bind-Value="editor.AreaSqFt" />
+                    <InputNumber class="classic-input" style="height:30px !important;" min="0" max="10000000" @bind-Value="editor.AreaSqFt" disabled="@(!IsAdministrator)" />
                 </div>
             </div>
             <div style="margin-bottom:14px; display:flex; align-items:center; gap:8px;">
-                <InputCheckbox id="cc-active-chk" @bind-Value="editor.IsActive" />
+                <InputCheckbox id="cc-active-chk" @bind-Value="editor.IsActive" disabled="@(editor.IsSystem || !IsAdministrator)" />
                 <label for="cc-active-chk" style="font-size:12px; font-weight:700; color:#334155; cursor:pointer;">@I18n.T("Active", "সক্রিয়")</label>
                 @if (editor.IsSystem)
                 {
@@ -237,7 +237,8 @@
                                                         <option value="@cc.ID">@cc.Code · @cc.Name</option>
                                                     }
                                                 </select>
-                                                <InputNumber class="classic-input" style="height:26px !important; width:70px;" @bind-Value="fixedWeight" />
+                                                <InputNumber class="classic-input" style="height:26px !important; width:70px;" min="0.01" max="100" step="0.01" @bind-Value="fixedWeight" />
+                                                <span style="font-size:11px; font-weight:750; color:#64748b;">%</span>
                                                 <button type="button" class="acc-chip-btn" disabled="@busy" @onclick="() => AddFixedTargetAsync(src.ID)">+ %</button>
                                             </div>
                                         }
@@ -349,7 +350,14 @@
             editor.Code = (editor.Code ?? "").Trim().ToUpperInvariant();
             editor.Name = (editor.Name ?? "").Trim();
             if (string.IsNullOrWhiteSpace(editor.Code) || string.IsNullOrWhiteSpace(editor.Name)) { Fail(I18n.T("Code and name are required.", "কোড ও নাম আবশ্যক।")); return; }
+            editor.Incharge = editor.Incharge?.Trim();
+            if (editor.Code.Length > 20 || editor.Name.Length > 100 || (editor.Incharge?.Length ?? 0) > 100)
+            {
+                Fail(I18n.T("Keep the code within 20, the name within 100 and the in-charge within 100 characters.", "কোড ২০, নাম ১০০ ও ইনচার্জ ১০০ অক্ষরের মধ্যে লিখুন।"));
+                return;
+            }
             if (editor.AreaSqFt < 0) { Fail(I18n.T("Area cannot be negative.", "জায়গা ঋণাত্মক হতে পারে না।")); return; }
+            if (editor.AreaSqFt > 10_000_000) { Fail(I18n.T("Area cannot exceed 10,000,000 sq ft.", "জায়গা ১,০০,০০,০০০ বর্গফুটের বেশি হতে পারে না।")); return; }
             await using var db = await DbFactory.CreateDbContextAsync();
             if (await db.CostCenters.AnyAsync(x => x.Code == editor.Code && x.ID != editor.ID)) { Fail(I18n.T("This code already exists.", "এই কোড আগে থেকেই আছে।")); return; }
             if (editor.ID == 0)
@@ -361,7 +369,8 @@
                 var x = await db.CostCenters.FindAsync(editor.ID);
                 if (x is null) return;
                 if (!x.IsSystem) { x.Code = editor.Code; x.CenterType = editor.CenterType; }
-                x.Name = editor.Name; x.Incharge = editor.Incharge?.Trim(); x.AreaSqFt = editor.AreaSqFt; x.IsActive = editor.IsActive;
+                // A standard (system) department always stays active.
+                x.Name = editor.Name; x.Incharge = editor.Incharge?.Trim(); x.AreaSqFt = editor.AreaSqFt; x.IsActive = x.IsSystem || editor.IsActive;
             }
             await db.SaveChangesAsync();
             AccountMap.Invalidate();
@@ -427,7 +436,17 @@
         await RunAsync(async () =>
         {
             if (fixedTarget <= 0 || fixedWeight <= 0) { Fail(I18n.T("Choose a receiving department and a percentage above zero.", "বিভাগ ও শতাংশ (শূন্যের বেশি) দিন।")); return; }
+            if (fixedWeight > 100) { Fail(I18n.T("A percentage cannot exceed 100.", "শতাংশ ১০০ এর বেশি হতে পারে না।")); return; }
             await using var db = await DbFactory.CreateDbContextAsync();
+            var otherTotal = await db.AllocationRules
+                .Where(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.IsActive && x.TargetCostCenterID != null && x.TargetCostCenterID != fixedTarget)
+                .SumAsync(x => x.Weight ?? 0);
+            if (otherTotal + fixedWeight > 100)
+            {
+                Fail(I18n.T($"The total would be {otherTotal + fixedWeight:0.##}%. The percentages of one department cannot exceed 100% (at most {100 - otherTotal:0.##}% left).",
+                    $"মোট {otherTotal + fixedWeight:0.##}% হয়ে যাবে। এক বিভাগের শতাংশের যোগফল ১০০% এর বেশি হতে পারে না (সর্বোচ্চ {100 - otherTotal:0.##}% বাকি)।"));
+                return;
+            }
             var placeholder = await db.AllocationRules.Where(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.TargetCostCenterID == null).ToListAsync();
             db.AllocationRules.RemoveRange(placeholder);
             var same = await db.AllocationRules.FirstOrDefaultAsync(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.TargetCostCenterID == fixedTarget);

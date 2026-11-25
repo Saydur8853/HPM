@@ -454,12 +454,12 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
             if (await FinancialPeriodLocks.AsNoTracking().AnyAsync(
                 x => x.IsActive && x.FromDate <= posting.Date && x.ToDate >= posting.Date,
                 cancellationToken))
-                throw new InvalidOperationException($"Financial period for {posting.Date:dd MMM yyyy} is locked.");
+                throw new InvalidOperationException($"Financial period for {posting.Date:dd MMM yyyy} is locked. / {posting.Date:dd MMM yyyy} তারিখের আর্থিক সময় লক করা।");
 
             if (await CashierHandovers.AsNoTracking().AnyAsync(
                 x => x.CashierID == posting.EnteredBy && x.BusinessDate == posting.Date && x.IsLocked,
                 cancellationToken))
-                throw new InvalidOperationException($"Cashier day for {posting.Date:dd MMM yyyy} is already closed.");
+                throw new InvalidOperationException($"Cashier day for {posting.Date:dd MMM yyyy} is already closed. / {posting.Date:dd MMM yyyy} তারিখের ক্যাশিয়ার দিন আগেই বন্ধ।");
         }
     }
 

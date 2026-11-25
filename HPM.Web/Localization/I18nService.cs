@@ -26,11 +26,16 @@ namespace HPM.Web.Localization
             try
             {
                 var storedLang = await js.InvokeAsync<string>("localStorage.getItem", "hpm_language");
+                var changed = false;
                 if (!string.IsNullOrWhiteSpace(storedLang) && (storedLang == BanglaCode || storedLang == EnglishCode))
                 {
+                    changed = _currentLanguage != storedLang;
                     _currentLanguage = storedLang;
                 }
                 _isInitialized = true;
+                // Pages rendered before the saved language was read must redraw in it (otherwise a Bangla
+                // user sees English after every reload until something else re-renders the page).
+                if (changed) OnLanguageChanged?.Invoke();
             }
             catch
             {

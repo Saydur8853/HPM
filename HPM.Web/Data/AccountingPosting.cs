@@ -146,19 +146,19 @@ public static class AccountingPosting
         DateTime? reversalVoucherDate = null)
     {
         if (!original.IsPosted || original.Status is "Pending" or "Rejected")
-            throw new InvalidOperationException("Only an approved voucher can be reversed.");
+            throw new InvalidOperationException("Only an approved voucher can be reversed. / শুধু অনুমোদিত ভাউচার রিভার্স করা যায়।");
         if (original.Status == "Cancelled")
-            throw new InvalidOperationException("This voucher is already cancelled.");
+            throw new InvalidOperationException("This voucher is already cancelled. / এই ভাউচার ইতিমধ্যে বাতিল করা হয়েছে।");
         if (string.IsNullOrWhiteSpace(reason))
-            throw new InvalidOperationException("A cancellation reason is required.");
+            throw new InvalidOperationException("A cancellation reason is required. / বাতিলের কারণ লিখতে হবে।");
         if (await db.AccountVouchers.AnyAsync(x => x.ReversalOfVoucherID == original.ID))
-            throw new InvalidOperationException("A reversal voucher already exists.");
+            throw new InvalidOperationException("A reversal voucher already exists. / এই ভাউচারের রিভার্সাল ভাউচার ইতিমধ্যে আছে।");
 
         var lines = await db.AccountVoucherLines.AsNoTracking()
             .Where(x => x.VoucherID == original.ID)
             .ToListAsync();
         if (lines.Count < 2)
-            throw new InvalidOperationException("The original voucher has no balanced journal lines.");
+            throw new InvalidOperationException("The original voucher has no balanced journal lines. / মূল ভাউচারে ব্যালান্সড জার্নাল লাইন নেই।");
 
         var reversal = new AccountVoucher
         {
