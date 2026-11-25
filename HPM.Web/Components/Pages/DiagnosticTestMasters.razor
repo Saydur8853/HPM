@@ -1,8 +1,11 @@
 @page "/diagnostic/investigations"
 @attribute [Authorize(Roles = RoleNames.Administrator)]
 @implements IDisposable
+@using Microsoft.AspNetCore.Identity
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserManager<AppUser> UserManager
 
 <PageTitle>@I18n.T("Investigations Setup") | @Branding.HospitalName</PageTitle>
 
@@ -17,9 +20,6 @@
             }
         </div>
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
-            <button type="button" class="btn btn-secondary btn-sm" @onclick="OpenReportPreview" title="@I18n.T("Preview Sample Diagnostic Report")">
-                👁️ @I18n.T("Report Preview", "রিপোর্ট প্রিভিউ")
-            </button>
             <button type="button" class="btn btn-secondary btn-sm" @onclick="OpenCategoryModal">
                 📂 @I18n.T("Manage Categories", "ক্যাটাগরি ম্যানেজ")
             </button>
@@ -50,7 +50,7 @@
         <section class="dtm-form-card">
             <div class="dtm-card-header">
                 <h2>@(editor.ID == 0 ? I18n.T("Add New Investigation") : I18n.T("Edit Investigation"))</h2>
-                @if (editor.ID > 0) { <span class="diagnostic-badge">ID #@editor.ID</span> }
+                @if (editor.ID > 0) { <span class="diagnostic-badge">@DiagnosticTestRouting.FormatCode(editor, CategoryById(editor.CategoryID))</span> }
             </div>
 
             <div class="dtm-form-body">
@@ -131,32 +131,34 @@
                         <span class="pill" style="margin-left:6px; font-size:10.5px;">@editorParams.Count</span>
                     </div>
 
-                    <!-- 2-Row Clean Add Form -->
+                    <!-- Spacious Add Parameter Form -->
                     <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px;">
-                        <div style="display:grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap:6px;">
-                            <input class="classic-input" style="width:100%; min-width:0; height:30px; font-size:11.5px;" @bind="newParamName" placeholder="@I18n.T("Parameter Name")" />
-                            <input class="classic-input" style="width:100%; min-width:0; height:30px; font-size:11.5px;" @bind="newParamUnit" placeholder="@I18n.T("Unit")" />
+                        <input class="classic-input" style="width:100%; min-width:0; height:30px; font-size:11.5px; font-weight:600;" @bind="newParamName" placeholder="@I18n.T("Parameter Name")" />
+                        <div style="display:grid; grid-template-columns: minmax(0, 1fr) 62px; gap:6px;">
+                            <input class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11.5px;" @bind="newParamUnit" placeholder="@I18n.T("Unit (e.g. g/dL)")" />
+                            <input type="number" class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11.5px; text-align:center;" @bind="newParamOrder" title="@I18n.T("Display Order")" placeholder="#" />
                         </div>
-                        <div style="display:grid; grid-template-columns: minmax(0, 1fr) 54px auto; gap:6px; align-items:center;">
-                            <input class="classic-input" style="width:100%; min-width:0; height:30px; font-size:11.5px;" @bind="newParamRange" placeholder="@I18n.T("Reference Normal Range")" />
-                            <input type="number" class="classic-input" style="width:100%; min-width:0; height:30px; font-size:11.5px; text-align:center;" @bind="newParamOrder" title="@I18n.T("Display Order")" placeholder="#" />
-                            <button type="button" class="btn btn-secondary btn-sm" style="height:30px; padding:0 12px; font-size:11.5px; white-space:nowrap;" @onclick="AddParamToEditor">+ @I18n.T("Add")</button>
+                        <div style="display:grid; grid-template-columns: minmax(0, 1fr) auto; gap:6px; align-items:center;">
+                            <input class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11.5px;" @bind="newParamRange" placeholder="@I18n.T("Normal Range")" />
+                            <button type="button" class="btn btn-secondary btn-sm" style="height:28px; padding:0 12px; font-size:11.5px; white-space:nowrap;" @onclick="AddParamToEditor">+ @I18n.T("Add")</button>
                         </div>
                     </div>
 
                     @if (editorParams.Count > 0)
                     {
-                        <div style="max-height:210px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; background:#fff; display:flex; flex-direction:column;">
+                        <div style="max-height:240px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; background:#fff; display:flex; flex-direction:column;">
                             @foreach (var p in editorParams.OrderBy(x => x.SortOrder))
                             {
-                                <div style="padding:8px 10px; border-bottom:1px solid #f1f5f9; display:flex; flex-direction:column; gap:5px;">
-                                    <div style="display:grid; grid-template-columns: minmax(0, 1fr) 72px 46px 26px; gap:5px; align-items:center;">
-                                        <input class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11.5px; font-weight:600; padding:2px 8px;" @bind="p.ParameterName" placeholder="@I18n.T("Parameter Name")" />
-                                        <input class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11px; padding:2px 6px;" @bind="p.Unit" placeholder="@I18n.T("Unit")" />
-                                        <input type="number" class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11px; padding:2px 4px; text-align:center;" @bind="p.SortOrder" title="@I18n.T("Order")" />
+                                <div style="padding:8px 10px; border-bottom:1px solid #e2e8f0; display:flex; flex-direction:column; gap:5px;">
+                                    <div style="display:grid; grid-template-columns: minmax(0, 1fr) 26px; gap:5px; align-items:center;">
+                                        <input class="classic-input" style="width:100%; min-width:0; height:28px; font-size:11.5px; font-weight:700; padding:2px 8px;" @bind="p.ParameterName" placeholder="@I18n.T("Parameter Name")" />
                                         <button type="button" class="btn btn-ghost" style="padding:2px 4px; color:#dc2626; font-size:12px;" @onclick="() => RemoveParamFromEditor(p)" title="@I18n.T("Remove")">✕</button>
                                     </div>
-                                    <input class="classic-input" style="width:100%; min-width:0; height:26px; font-size:11px; padding:2px 8px; color:#475569;" @bind="p.ReferenceRange" placeholder="@I18n.T("Reference Normal Range")" />
+                                    <div style="display:grid; grid-template-columns: minmax(0, 1fr) 56px; gap:5px; align-items:center;">
+                                        <input class="classic-input" style="width:100%; min-width:0; height:26px; font-size:11px; padding:2px 8px;" @bind="p.Unit" placeholder="@I18n.T("Unit")" />
+                                        <input type="number" class="classic-input" style="width:100%; min-width:0; height:26px; font-size:11px; padding:2px 4px; text-align:center;" @bind="p.SortOrder" title="@I18n.T("Order")" />
+                                    </div>
+                                    <input class="classic-input" style="width:100%; min-width:0; height:26px; font-size:11px; padding:2px 8px; color:#475569;" @bind="p.ReferenceRange" placeholder="@I18n.T("Normal Range")" />
                                 </div>
                             }
                         </div>
@@ -177,18 +179,49 @@
                 <div class="dtm-search-wrap"><span>⌕</span><input class="classic-input" type="search" @bind="searchQuery" @bind:event="oninput" placeholder="@I18n.T("Search name, ID, category or parameter...")" /></div>
             </div>
 
+            @if (selectedServiceIds.Count > 0)
+            {
+                <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:8px 14px; background:#fef2f2; border-bottom:1px solid #fecaca;">
+                    <span style="font-size:12px; font-weight:700; color:#991b1b;">
+                        ☑ @selectedServiceIds.Count @I18n.T("investigation(s) selected", "টি ইনভেস্টিগেশন সিলেক্ট করা হয়েছে")
+                    </span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button" class="btn btn-ghost btn-sm" @onclick="ClearSelection">@I18n.T("Clear Selection")</button>
+                        <button type="button" class="btn btn-danger btn-sm" @onclick="OpenBulkDeleteModal">
+                            🗑️ @I18n.T("Delete Selected") (@selectedServiceIds.Count)
+                        </button>
+                    </div>
+                </div>
+            }
+
             <div class="dtm-table-wrap">
                 <table class="classic-table dtm-table">
-                    <thead><tr><th style="width:65px;">@I18n.T("Code")</th><th>@I18n.T("Investigation Name")</th><th>@I18n.T("Category")</th><th class="num">@I18n.T("Rate")</th><th style="width:75px; text-align:center;">@I18n.T("Delivery")</th><th style="width:72px;"></th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th style="width:36px; text-align:center; padding-left:10px; padding-right:4px;">
+                                <input type="checkbox" style="width:15px !important; height:15px !important; min-height:0 !important; margin:0; padding:0; cursor:pointer; accent-color:#0284c7; vertical-align:middle;" checked="@AllFilteredSelected" @onchange="ToggleSelectAllFiltered" title="@I18n.T("Select all visible")" />
+                            </th>
+                            <th style="width:92px;">@I18n.T("Code")</th>
+                            <th>@I18n.T("Investigation Name")</th>
+                            <th>@I18n.T("Category")</th>
+                            <th class="num">@I18n.T("Rate")</th>
+                            <th style="width:75px; text-align:center;">@I18n.T("Delivery")</th>
+                            <th style="width:72px;"></th>
+                        </tr>
+                    </thead>
                     <tbody>
-                        @if (!FilteredServices.Any()) { <tr><td colspan="6" class="dtm-empty">@I18n.T("No investigations found in this list.")</td></tr> }
+                        @if (!FilteredServices.Any()) { <tr><td colspan="7" class="dtm-empty">@I18n.T("No investigations found in this list.")</td></tr> }
                         @foreach (var service in FilteredServices)
                         {
                             var disc = DiagnosticTestRouting.EvaluateDiscount(service);
                             var svcParams = allParameters.Where(p => p.ServiceID == service.ID).OrderBy(p => p.SortOrder).ToList();
                             var isExpanded = expandedParamServiceIds.Contains(service.ID);
+                            var isChecked = selectedServiceIds.Contains(service.ID);
                             <tr class="@(editor.ID == service.ID ? "selected" : "")">
-                                <td><span class="pill">#@service.ID</span></td>
+                                <td style="width:36px; text-align:center; padding-left:10px; padding-right:4px;">
+                                    <input type="checkbox" style="width:15px !important; height:15px !important; min-height:0 !important; margin:0; padding:0; cursor:pointer; accent-color:#0284c7; vertical-align:middle;" checked="@isChecked" @onchange="e => ToggleSelectService(service.ID, e.Value is bool b && b)" />
+                                </td>
+                                <td><span class="pill">@DiagnosticTestRouting.FormatCode(service, CategoryById(service.CategoryID))</span></td>
                                 <td>
                                     <div style="display:flex; flex-wrap:wrap; align-items:center; gap:5px;">
                                         <strong>@service.Name</strong>
@@ -238,13 +271,10 @@
                             @if (isExpanded && svcParams.Count > 0)
                             {
                                 <tr style="background:#f8fafc;">
-                                    <td colspan="6" style="padding:8px 14px 12px 44px; border-bottom:1px solid #cbd5e1;">
+                                    <td colspan="7" style="padding:8px 14px 12px 44px; border-bottom:1px solid #cbd5e1;">
                                         <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;">
                                             <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; font-size:11px; font-weight:700; color:#334155;">
                                                 <span>📋 @service.Name — @I18n.T("Configured Parameters") (@svcParams.Count)</span>
-                                                <button type="button" class="btn btn-ghost btn-sm" style="padding:1px 8px; font-size:10.5px; color:#0369a1;" @onclick="() => OpenReportPreviewFor(service.ID)">
-                                                    👁️ @I18n.T("Report Preview")
-                                                </button>
                                             </div>
                                             <table style="width:100%; border-collapse:collapse; font-size:11px;">
                                                 <thead>
@@ -353,134 +383,55 @@
         </div>
     }
 
-    @if (showReportPreview)
+    @if (showBulkDeleteModal)
     {
-        var isEditingCurrent = previewServiceId == 0 || (editor.ID > 0 && previewServiceId == editor.ID);
-        var previewService = isEditingCurrent
-            ? editor
-            : services.FirstOrDefault(x => x.ID == previewServiceId);
-        var previewCat = previewService?.CategoryID.HasValue == true ? CategoryById(previewService.CategoryID) : null;
-        var previewType = previewService != null ? DiagnosticTestRouting.Resolve(previewService, previewCat) : GroupToType(activeGroup);
-        var previewParams = isEditingCurrent
-            ? editorParams.OrderBy(p => p.SortOrder).ToList()
-            : allParameters.Where(p => p.ServiceID == previewServiceId).OrderBy(p => p.SortOrder).ToList();
+        var selectedItems = services.Where(s => selectedServiceIds.Contains(s.ID)).OrderBy(s => s.Name).ToList();
+        <div style="position:fixed; inset:0; background:rgba(15,23,42,0.6); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1250;" @onclick="CloseBulkDeleteModal">
+            <div style="width:100%; max-width:500px; background:#fff; border-radius:14px; box-shadow:0 24px 48px rgba(15,23,42,0.28); overflow:hidden; display:flex; flex-direction:column;" @onclick:stopPropagation="true">
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:14px 18px; background:#fef2f2; border-bottom:1px solid #fecaca;">
+                    <h3 style="margin:0; font-size:15px; font-weight:800; color:#991b1b;">⚠️ @I18n.T("Confirm Bulk Delete", "একাধিক ইনভেস্টিগেশন ডিলিট নিশ্চিত করুন")</h3>
+                    <button type="button" style="border:none; background:transparent; font-size:16px; font-weight:700; cursor:pointer; color:#991b1b;" @onclick="CloseBulkDeleteModal">✕</button>
+                </div>
 
-        <div style="position:fixed; inset:0; background:rgba(15,23,42,0.58); display:flex; align-items:center; justify-content:center; padding:16px; z-index:1250;" @onclick="CloseReportPreview">
-            <div style="background:#f1f5f9; border-radius:14px; width:min(840px, 96vw); max-height:92vh; display:flex; flex-direction:column; box-shadow:0 24px 60px rgba(15,23,42,0.35); overflow:hidden;" @onclick:stopPropagation="true">
-                <div style="background:#fff; padding:12px 18px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-size:18px;">📄</span>
-                        <div>
-                            <div style="font-size:14px; font-weight:800; color:#0f172a;">@I18n.T("Sample Diagnostic Report Preview", "নমুনা ডায়াগনস্টিক রিপোর্ট প্রিভিউ")</div>
-                            <div style="font-size:11px; color:#64748b;">@I18n.T("Live preview of how this Investigation & its Parameters will look on a printed report")</div>
+                <div style="padding:16px 18px; display:flex; flex-direction:column; gap:12px;">
+                    <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:10px 12px; font-size:12px; color:#9a3412; line-height:1.45;">
+                        <strong>@I18n.T("Warning:")</strong> @I18n.T($"You are about to permanently delete {selectedItems.Count} selected investigation(s) and their report parameters. This action cannot be undone and will be recorded in the audit log.")
+                        <div style="margin-top:4px; font-size:11px; color:#c2410c;">
+                            @I18n.T("Note: Any investigation that already has billing, order, sample, or result records will be skipped automatically.")
                         </div>
                     </div>
-                    <button type="button" class="btn btn-ghost" style="padding:4px 10px; font-size:14px;" @onclick="CloseReportPreview">✕</button>
-                </div>
 
-                <div style="background:#f8fafc; padding:10px 18px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:12px;">
-                    <label style="margin:0; flex:1;">
-                        <span style="font-size:11px; font-weight:700; color:#334155;">@I18n.T("Preview Investigation")</span>
-                        <select class="classic-input tickets-select" @bind="previewServiceId" style="height:30px; font-size:12px; font-weight:600;">
-                            @if (editor.ID == 0 && !string.IsNullOrWhiteSpace(editor.Name))
-                            {
-                                <option value="0">@editor.Name (Current Draft — @editorParams.Count params)</option>
-                            }
-                            @foreach (var s in services)
-                            {
-                                var cnt = (editor.ID == s.ID ? editorParams.Count : allParameters.Count(p => p.ServiceID == s.ID));
-                                <option value="@s.ID">@s.Name (@CategoryName(s.CategoryID)) @(cnt > 0 ? $"— {cnt} params" : "")</option>
-                            }
-                        </select>
+                    <div style="max-height:120px; overflow-y:auto; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; font-size:11.5px;">
+                        @foreach (var item in selectedItems.Take(8))
+                        {
+                            <div>• <strong>#@item.ID</strong> @item.Name</div>
+                        }
+                        @if (selectedItems.Count > 8)
+                        {
+                            <div style="color:#64748b; margin-top:2px;">...and @(selectedItems.Count - 8) more</div>
+                        }
+                    </div>
+
+                    <div style="display:flex; align-items:center; justify-content:space-between; font-size:12px; background:#f1f5f9; padding:7px 10px; border-radius:8px;">
+                        <span style="color:#475569;">@I18n.T("Performing User:")</span>
+                        <strong style="color:#0f172a;">@currentPerformerName</strong>
+                    </div>
+
+                    <label style="margin:0;">
+                        <span style="font-size:12px; font-weight:700; color:#334155; display:block; margin-bottom:4px;">@I18n.T("Enter Your Login Password to Confirm", "নিশ্চিত করতে আপনার লগইন পাসওয়ার্ড দিন") *</span>
+                        <input type="password" class="classic-input" @bind="bulkDeletePassword" placeholder="@I18n.T("Enter your password")" autocomplete="current-password" />
                     </label>
-                </div>
 
-                <div style="overflow-y:auto; padding:18px; flex:1;">
-                    <div style="background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:24px 28px; box-shadow:0 4px 16px rgba(15,23,42,0.06); color:#0f172a;">
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #0284c7; padding-bottom:12px; margin-bottom:14px;">
-                            <div>
-                                <div style="font-size:18px; font-weight:800; color:#0c4a6e;">@Branding.HospitalName</div>
-                                @if (!string.IsNullOrWhiteSpace(Branding.Address))
-                                {
-                                    <div style="font-size:11.5px; color:#475569;">@Branding.Address</div>
-                                }
-                                @if (!string.IsNullOrWhiteSpace(Branding.Phone))
-                                {
-                                    <div style="font-size:11.5px; color:#475569;">Phone: @Branding.Phone</div>
-                                }
-                            </div>
-                            <div style="text-align:right;">
-                                <div style="display:inline-block; background:#e0f2fe; color:#0369a1; font-size:11px; font-weight:800; padding:4px 10px; border-radius:6px; letter-spacing:0.5px;">
-                                    @(previewType == "Imaging" ? "IMAGING / RADIOLOGY REPORT" : previewType == "Procedure" ? "SPECIAL INVESTIGATION REPORT" : "PATHOLOGY / LAB REPORT")
-                                </div>
-                                <div style="font-size:10.5px; color:#64748b; margin-top:4px;">SAMPLE PREVIEW</div>
-                            </div>
-                        </div>
+                    @if (!string.IsNullOrWhiteSpace(bulkDeleteError))
+                    {
+                        <div class="alert alert-danger" style="padding:8px 10px; border-radius:8px; font-size:12px; margin:0;">⚠️ @bulkDeleteError</div>
+                    }
 
-                        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; font-size:11.5px; margin-bottom:16px;">
-                            <div><span style="color:#64748b;">Patient Name:</span> <b>Md. Rahim Uddin</b></div>
-                            <div><span style="color:#64748b;">Age / Sex:</span> <b>34 Y / Male</b></div>
-                            <div><span style="color:#64748b;">Patient ID:</span> <b>PID-10482</b></div>
-                            <div><span style="color:#64748b;">Memo / Bill No:</span> <b>INV-2026-0814</b></div>
-                            <div><span style="color:#64748b;">Report Date:</span> <b>@DateTime.Now.ToString("dd MMM yyyy, hh:mm tt")</b></div>
-                            <div><span style="color:#64748b;">Ref. By:</span> <b>Dr. Kamrul Hasan</b></div>
-                        </div>
-
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-                            <div style="font-size:14px; font-weight:800; color:#0f172a;">
-                                Investigation: @(string.IsNullOrWhiteSpace(previewService?.Name) ? "—" : previewService.Name)
-                            </div>
-                            <span class="pill" style="font-size:11px; background:#f1f5f9; color:#334155;">
-                                @CategoryName(previewService?.CategoryID)
-                            </span>
-                        </div>
-
-                        <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:28px;">
-                            <thead>
-                                <tr style="background:#f1f5f9; border-top:1px solid #cbd5e1; border-bottom:1px solid #cbd5e1;">
-                                    <th style="text-align:left; padding:8px 10px; font-weight:700;">@I18n.T(previewType == "Imaging" ? "Section / Heading" : "Parameter Name")</th>
-                                    <th style="text-align:left; padding:8px 10px; font-weight:700;">@I18n.T(previewType == "Imaging" ? "Findings (Example)" : "Result (Example)")</th>
-                                    <th style="text-align:center; padding:8px 10px; font-weight:700; width:90px;">@I18n.T("Unit")</th>
-                                    <th style="text-align:left; padding:8px 10px; font-weight:700;">@I18n.T("Reference Normal Range")</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @if (previewParams.Count == 0)
-                                {
-                                    <tr>
-                                        <td colspan="4" style="padding:18px 10px; text-align:center; color:#64748b; border-bottom:1px solid #e2e8f0;">
-                                            @I18n.T("No parameters configured for this investigation yet. Add parameters in the Report Parameters box to see them here.")
-                                        </td>
-                                    </tr>
-                                }
-                                else
-                                {
-                                    @foreach (var p in previewParams)
-                                    {
-                                        <tr style="border-bottom:1px solid #e2e8f0;">
-                                            <td style="padding:8px 10px; font-weight:600;">@p.ParameterName</td>
-                                            <td style="padding:8px 10px; font-weight:700; color:#0369a1;">@SampleResultForPreview(p)</td>
-                                            <td style="padding:8px 10px; text-align:center; color:#475569;">@(string.IsNullOrWhiteSpace(p.Unit) ? "—" : p.Unit)</td>
-                                            <td style="padding:8px 10px; color:#475569;">@(string.IsNullOrWhiteSpace(p.ReferenceRange) ? "—" : p.ReferenceRange)</td>
-                                        </tr>
-                                    }
-                                }
-                            </tbody>
-                        </table>
-
-                        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:32px; padding-top:12px;">
-                            <div style="text-align:left; min-width:180px;">
-                                <div style="border-top:1px solid #94a3b8; width:160px; margin-bottom:5px;"></div>
-                                <div style="font-size:11.5px; font-weight:700; color:#334155;">Medical Technologist</div>
-                                <div style="font-size:10.5px; color:#64748b;">Prepared / Checked By</div>
-                            </div>
-
-                            <div style="text-align:right; min-width:220px;">
-                                <div style="border-top:1px solid #94a3b8; width:210px; margin-left:auto; margin-bottom:5px;"></div>
-                                <div style="font-size:12px; font-weight:800; color:#0f172a;">Reporting Consultant</div>
-                                <div style="font-size:10.5px; color:#64748b;">(Assigned during report publication)</div>
-                            </div>
-                        </div>
+                    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+                        <button type="button" class="btn btn-ghost" @onclick="CloseBulkDeleteModal" disabled="@bulkDeleteBusy">@I18n.T("Cancel")</button>
+                        <button type="button" class="btn btn-danger" @onclick="ConfirmBulkDeleteAsync" disabled="@bulkDeleteBusy">
+                            @(bulkDeleteBusy ? I18n.T("Deleting...") : $"🗑️ {I18n.T("Verify & Delete")} ({selectedItems.Count})")
+                        </button>
                     </div>
                 </div>
             </div>
@@ -502,9 +453,13 @@
     private string newParamUnit = string.Empty;
     private string newParamRange = string.Empty;
     private int newParamOrder = 1;
-    private bool showReportPreview;
-    private int previewServiceId;
     private HashSet<int> expandedParamServiceIds = [];
+    private HashSet<int> selectedServiceIds = [];
+    private bool showBulkDeleteModal;
+    private string bulkDeletePassword = string.Empty;
+    private string bulkDeleteError = string.Empty;
+    private bool bulkDeleteBusy;
+    private string currentPerformerName = string.Empty;
     private bool showCategoryModal;
     private ServiceCategory catEditor = new() { DiagnosticType = DiagnosticTestRouting.Pathology, SubID = 8 };
     private string catMessage = string.Empty;
@@ -557,6 +512,7 @@
                 var term = searchQuery.Trim();
                 result = result.Where(s => (s.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                     || s.ID.ToString().Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || DiagnosticTestRouting.FormatCode(s, CategoryById(s.CategoryID)).Contains(term, StringComparison.OrdinalIgnoreCase)
                     || CategoryName(s.CategoryID).Contains(term, StringComparison.OrdinalIgnoreCase)
                     || allParameters.Any(p => p.ServiceID == s.ID && p.ParameterName.Contains(term, StringComparison.OrdinalIgnoreCase)));
             }
@@ -762,60 +718,143 @@
 
     private void RemoveParamFromEditor(LabTestParameter p) => editorParams.Remove(p);
 
-    private void OpenReportPreview()
-    {
-        if (editor.ID > 0)
-            previewServiceId = editor.ID;
-        else if (!string.IsNullOrWhiteSpace(editor.Name))
-            previewServiceId = 0;
-        else
-            previewServiceId = allParameters.Select(p => p.ServiceID).FirstOrDefault(id => services.Any(s => s.ID == id));
-
-        if (previewServiceId == 0 && string.IsNullOrWhiteSpace(editor.Name) && services.Count > 0)
-            previewServiceId = services[0].ID;
-
-        showReportPreview = true;
-    }
-
-    private void CloseReportPreview() => showReportPreview = false;
-
     private void ToggleParamExpand(int serviceId)
     {
         if (!expandedParamServiceIds.Add(serviceId))
             expandedParamServiceIds.Remove(serviceId);
     }
 
-    private void OpenReportPreviewFor(int serviceId)
+    private bool AllFilteredSelected
     {
-        previewServiceId = serviceId;
-        showReportPreview = true;
+        get
+        {
+            var visible = FilteredServices.Select(s => s.ID).ToList();
+            return visible.Count > 0 && visible.All(id => selectedServiceIds.Contains(id));
+        }
     }
 
-    private static string SampleResultForPreview(LabTestParameter p)
+    private void ToggleSelectService(int serviceId, bool selected)
     {
-        var range = p.ReferenceRange?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(range)) return "Normal";
+        if (selected) selectedServiceIds.Add(serviceId);
+        else selectedServiceIds.Remove(serviceId);
+    }
 
-        var match = System.Text.RegularExpressions.Regex.Match(range, @"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)");
-        if (match.Success
-            && double.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var min)
-            && double.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var max))
+    private void ToggleSelectAllFiltered(ChangeEventArgs e)
+    {
+        var check = e.Value is bool b && b;
+        foreach (var s in FilteredServices)
         {
-            var mid = (min + max) / 2.0;
-            return mid % 1 == 0 ? mid.ToString("0", System.Globalization.CultureInfo.InvariantCulture) : mid.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+            if (check) selectedServiceIds.Add(s.ID);
+            else selectedServiceIds.Remove(s.ID);
+        }
+    }
+
+    private void ClearSelection() => selectedServiceIds.Clear();
+
+    private async Task OpenBulkDeleteModal()
+    {
+        if (selectedServiceIds.Count == 0) return;
+        bulkDeletePassword = string.Empty;
+        bulkDeleteError = string.Empty;
+        var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+        var appUser = await UserManager.GetUserAsync(auth.User);
+        currentPerformerName = appUser?.GetEffectiveName() ?? auth.User.Identity?.Name ?? "Administrator";
+        showBulkDeleteModal = true;
+    }
+
+    private void CloseBulkDeleteModal()
+    {
+        if (bulkDeleteBusy) return;
+        showBulkDeleteModal = false;
+        bulkDeletePassword = string.Empty;
+        bulkDeleteError = string.Empty;
+    }
+
+    private async Task ConfirmBulkDeleteAsync()
+    {
+        if (bulkDeleteBusy) return;
+        if (string.IsNullOrWhiteSpace(bulkDeletePassword))
+        {
+            bulkDeleteError = I18n.T("Please enter your login password to continue.");
+            return;
         }
 
-        if (range.StartsWith("<", StringComparison.Ordinal))
+        bulkDeleteBusy = true;
+        bulkDeleteError = string.Empty;
+        try
         {
-            var numMatch = System.Text.RegularExpressions.Regex.Match(range, @"\d+(?:\.\d+)?");
-            if (numMatch.Success && double.TryParse(numMatch.Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var upper))
+            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+            var appUser = await UserManager.GetUserAsync(auth.User);
+            if (appUser is null)
             {
-                var sample = Math.Max(0.1, upper * 0.65);
-                return sample % 1 == 0 ? sample.ToString("0", System.Globalization.CultureInfo.InvariantCulture) : sample.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+                bulkDeleteError = I18n.T("Unable to identify logged-in user.");
+                return;
             }
-        }
 
-        return "Normal";
+            var passwordOk = await UserManager.CheckPasswordAsync(appUser, bulkDeletePassword);
+            if (!passwordOk)
+            {
+                bulkDeleteError = I18n.T("Incorrect password. Bulk delete cancelled.");
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var targetIds = selectedServiceIds.ToList();
+            var usedIds = new HashSet<int>();
+
+            foreach (var id in await db.EmergencyMemoItems.Where(x => targetIds.Contains(x.TestID)).Select(x => x.TestID).Distinct().ToListAsync()) usedIds.Add(id);
+            foreach (var id in await db.DiagnosticOrderItems.Where(x => targetIds.Contains(x.ServiceID)).Select(x => x.ServiceID).Distinct().ToListAsync()) usedIds.Add(id);
+            foreach (var id in await db.DiagnosticCashMemoReturnItems.Where(x => targetIds.Contains(x.ServiceID)).Select(x => x.ServiceID).Distinct().ToListAsync()) usedIds.Add(id);
+            foreach (var id in await db.LabSampleCollections.Where(x => targetIds.Contains(x.ServiceID)).Select(x => x.ServiceID).Distinct().ToListAsync()) usedIds.Add(id);
+            foreach (var id in await db.LabTestResults.Where(x => targetIds.Contains(x.ServiceID)).Select(x => x.ServiceID).Distinct().ToListAsync()) usedIds.Add(id);
+
+            var deletableIds = targetIds.Where(id => !usedIds.Contains(id)).ToList();
+            var skippedCount = targetIds.Count - deletableIds.Count;
+
+            if (deletableIds.Count > 0)
+            {
+                var orphanParams = await db.LabTestParameters.Where(p => deletableIds.Contains(p.ServiceID)).ToListAsync();
+                if (orphanParams.Count > 0) db.LabTestParameters.RemoveRange(orphanParams);
+
+                var entities = await db.Services.Where(s => deletableIds.Contains(s.ID)).ToListAsync();
+                var deletedNames = string.Join(", ", entities.Take(10).Select(e => $"#{e.ID} {e.Name}"));
+                if (entities.Count > 10) deletedNames += $" (+{entities.Count - 10} more)";
+
+                db.Services.RemoveRange(entities);
+
+                db.AuditLogs.Add(new AuditLog
+                {
+                    UserID = appUser.Id,
+                    UserName = appUser.GetEffectiveName(),
+                    Action = "BulkDelete",
+                    EntityName = "Service",
+                    EntityID = string.Join(",", deletableIds.Take(20)),
+                    ChangedFields = $"Bulk deleted {entities.Count} investigation(s): {deletedNames}. Skipped {skippedCount} with billing/report history.",
+                    EventTime = DateTime.UtcNow
+                });
+
+                await db.SaveChangesAsync();
+                HospitalMasterCacheService.InvalidateGlobalCache();
+            }
+
+            showBulkDeleteModal = false;
+            selectedServiceIds.Clear();
+            bulkDeletePassword = string.Empty;
+
+            if (deletableIds.Count > 0 && skippedCount > 0)
+                Success(I18n.T($"Deleted {deletableIds.Count} investigation(s). Skipped {skippedCount} with billing/report history."));
+            else if (deletableIds.Count > 0)
+                Success(I18n.T($"Deleted {deletableIds.Count} investigation(s) successfully."));
+            else
+                Fail(I18n.T($"All {skippedCount} selected investigation(s) have billing or report records and cannot be deleted."));
+
+            await LoadAsync();
+            ResetEditor(clearMessage: false);
+        }
+        finally
+        {
+            bulkDeleteBusy = false;
+        }
     }
 
     private void OpenCategoryModal()

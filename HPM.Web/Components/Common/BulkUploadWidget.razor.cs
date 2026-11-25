@@ -115,7 +115,7 @@ public partial class BulkUploadWidget
             "Pathology investigation list. Category must already exist in Diagnostic Investigation Master. Key: InvestigationName + Category.",
             "প্যাথোলজি ইনভেস্টিগেশনের তালিকা। Category আগে থেকেই Diagnostic Investigation Master-এ থাকতে হবে। মিলানো হয় InvestigationName + Category দিয়ে।",
             DiagnosticColumns("CBC", "Haematology")),
-        new("imaging", "Imaging Investigations", "ইমেজিং ইনভেস্টিগেশন", "🩻", LicensedModules.Diagnostics,
+        new("imaging", "Imaging Investigations", "ইমেজিং ইনভেস্টিগেশন", "IMG", LicensedModules.Diagnostics,
             "Imaging / radiology investigation list. Category must already exist in Diagnostic Investigation Master. Key: InvestigationName + Category.",
             "ইমেজিং / রেডিওলজি ইনভেস্টিগেশনের তালিকা। Category আগে থেকেই Diagnostic Investigation Master-এ থাকতে হবে। মিলানো হয় InvestigationName + Category দিয়ে।",
             DiagnosticColumns("X-Ray Chest PA View", "X-Ray")),
@@ -127,10 +127,15 @@ public partial class BulkUploadWidget
 
     private static ColumnDef[] DiagnosticColumns(string exampleTest, string exampleCategory) =>
     [
+        new("Code", false, "Investigation ID (blank for new; repeat same Code for multiple parameters)", ""),
         new("InvestigationName", true, "Investigation name (max 200)", exampleTest),
         new("Category", true, "Existing diagnostic category name", exampleCategory),
         new("Rate", true, "Number", "500"),
         new("DeliveryHours", false, "Report delivery time in hours (1-720)", "24"),
+        new("ParameterName", false, "Optional report parameter name (one per row)", ""),
+        new("Unit", false, "Parameter unit (e.g. g/dL, mg/dL)", ""),
+        new("ReferenceRange", false, "Normal reference range", ""),
+        new("SortOrder", false, "Parameter display order (1, 2, 3...)", "1"),
     ];
 
     // ─────────────────────────── Lifecycle ───────────────────────────
@@ -446,23 +451,60 @@ public partial class BulkUploadWidget
                 var diagCatRows = filteredDiagCats.Where(x => !string.IsNullOrWhiteSpace(x.Name))
                     .Select(x => (IReadOnlyList<string>)[x.Name.Trim(), x.ID.ToString(CultureInfo.InvariantCulture)]).ToList();
                 lookupSheets.Add(new("ServiceCategories", ["CategoryName", "ID"], diagCatRows));
-                validations.Add(new(1, "ServiceCategories", diagCatRows.Count));
+                validations.Add(new(2, "ServiceCategories", diagCatRows.Count));
 
                 var catIds = diagCats.Keys.ToList();
                 var tests = await db.Services.AsNoTracking()
                     .Where(x => x.CategoryID != null && catIds.Contains(x.CategoryID.Value))
                     .OrderBy(x => x.Name)
                     .ToListAsync();
+                var testIds = tests.Select(t => t.ID).ToHashSet();
+                var paramsByService = (await db.LabTestParameters.AsNoTracking()
+                    .Where(p => testIds.Contains(p.ServiceID))
+                    .OrderBy(p => p.ServiceID)
+                    .ThenBy(p => p.SortOrder)
+                    .ToListAsync())
+                    .GroupBy(p => p.ServiceID)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
                 foreach (var t in tests)
                 {
                     if (!t.CategoryID.HasValue || !diagCats.TryGetValue(t.CategoryID.Value, out var cat)) continue;
                     if (DiagnosticTestRouting.Resolve(t, cat) != exportDiagType) continue;
-                    dataRows.Add([
-                        t.Name ?? "",
-                        cat.Name,
-                        Dec(t.SaleRate),
-                        IntStr(t.DeliveryHours)
-                    ]);
+
+                    if (paramsByService.TryGetValue(t.ID, out var svcParams) && svcParams.Count > 0)
+                    {
+                        for (var idx = 0; idx < svcParams.Count; idx++)
+                        {
+                            var p = svcParams[idx];
+                            var isFirst = idx == 0;
+                            dataRows.Add([
+                                DiagnosticTestRouting.FormatCode(t, cat),
+                                isFirst ? (t.Name ?? "") : "",
+                                isFirst ? cat.Name : "",
+                                isFirst ? Dec(t.SaleRate) : "",
+                                isFirst ? IntStr(t.DeliveryHours) : "",
+                                p.ParameterName,
+                                p.Unit ?? "",
+                                p.ReferenceRange ?? "",
+                                p.SortOrder.ToString(CultureInfo.InvariantCulture)
+                            ]);
+                        }
+                    }
+                    else
+                    {
+                        dataRows.Add([
+                            DiagnosticTestRouting.FormatCode(t, cat),
+                            t.Name ?? "",
+                            cat.Name,
+                            Dec(t.SaleRate),
+                            IntStr(t.DeliveryHours),
+                            "",
+                            "",
+                            "",
+                            ""
+                        ]);
+                    }
                 }
                 break;
         }
@@ -902,46 +944,162 @@ public partial class BulkUploadWidget
 
     private async Task ProcessDiagnosticAsync(HpmDbContext db, bool commit, string diagnosticType)
     {
-        var categories = (await db.ServiceCategories.AsNoTracking().ToListAsync())
+        var allDiagCats = (await db.ServiceCategories.AsNoTracking().ToListAsync())
             .Where(DiagnosticTestRouting.IsDiagnosticCategory)
-            .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First().ID, StringComparer.OrdinalIgnoreCase);
+            .ToList();
+        var categories = allDiagCats
+            .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().ID, StringComparer.OrdinalIgnoreCase);
+        var categoryNamesById = allDiagCats.ToDictionary(x => x.ID, x => x.Name);
         var categoryIds = categories.Values.ToList();
-        var existing = (await db.Services.Where(x => x.CategoryID != null && categoryIds.Contains(x.CategoryID.Value)).ToListAsync())
+        var existingServices = await db.Services.Where(x => x.CategoryID != null && categoryIds.Contains(x.CategoryID.Value)).ToListAsync();
+        var existingById = existingServices.ToDictionary(x => x.ID);
+        var existingByName = existingServices
             .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-            .GroupBy(x => $"{x.CategoryID}|{x.Name!.Trim()}", StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            .GroupBy(x => $"{x.CategoryID}|{x.Name!.Trim()}", StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var seenHeaderByCode = new Dictionary<int, (string Name, string CatName, int CatId)>();
+        var groupedTargets = new Dictionary<string, Service>(StringComparer.OrdinalIgnoreCase);
+        var pendingParams = new List<(string Key, string ParamName, string? Unit, string? Range, int SortOrder)>();
 
         foreach (var r in rows)
         {
+            var rawCode = r.Get("Code").Trim();
+            int? code = null;
+            if (rawCode.Length > 0)
+            {
+                if (DiagnosticTestRouting.TryParseCode(rawCode, out var parsedCode))
+                    code = parsedCode;
+                else
+                    r.Error(L("Code অবশ্যই সঠিক ফরম্যাটে হতে হবে (যেমন PAT-10001 বা 10001)", "Code must be a valid ID or prefixed code (e.g. PAT-10001)"));
+            }
+
+            Service? dbMatchByCode = code.HasValue && existingById.TryGetValue(code.Value, out var foundByCode) ? foundByCode : null;
+            (string Name, string CatName, int CatId) seenInfo = default;
+            var hasSeenCodeInFile = code.HasValue && seenHeaderByCode.TryGetValue(code.Value, out seenInfo);
+            var isContinuationRow = hasSeenCodeInFile || dbMatchByCode is not null;
+
             var name = r.Get("InvestigationName");
             if (name.Length == 0) name = r.Get("TestName");
+            if (name.Length == 0 && hasSeenCodeInFile) name = seenInfo.Name;
+            if (name.Length == 0 && dbMatchByCode is not null) name = dbMatchByCode.Name ?? string.Empty;
             if (name.Length == 0) r.Error("InvestigationName is required");
             else if (name.Length > 200) r.Error("InvestigationName is longer than 200 characters");
-            var categoryName = r.Required("Category", 200);
-            r.Label = categoryName.Length > 0 ? $"{name} ({categoryName})" : name;
-            var rate = r.Decimal("Rate", required: true);
-            var hours = r.Int("DeliveryHours");
-            if (hours is < 1 or > 720) r.Error(L("DeliveryHours ১ থেকে ৭২০ এর মধ্যে হতে হবে", "DeliveryHours must be between 1 and 720"));
 
+            var categoryName = r.Get("Category");
             int categoryId = 0;
-            if (categoryName.Length > 0 && !categories.TryGetValue(categoryName, out categoryId))
+            if (categoryName.Length == 0 && hasSeenCodeInFile)
+            {
+                categoryName = seenInfo.CatName;
+                categoryId = seenInfo.CatId;
+            }
+            else if (categoryName.Length == 0 && dbMatchByCode?.CategoryID is int dbCatId && categoryNamesById.TryGetValue(dbCatId, out var dbCatName))
+            {
+                categoryName = dbCatName;
+                categoryId = dbCatId;
+            }
+            else if (categoryName.Length == 0)
+            {
+                r.Error("Category is required");
+            }
+            else if (categoryName.Length > 200)
+            {
+                r.Error("Category is longer than 200 characters");
+            }
+            else if (!categories.TryGetValue(categoryName, out categoryId))
             {
                 r.Error(L($"Diagnostic Category '{categoryName}' পাওয়া যায়নি", $"Diagnostic category '{categoryName}' not found"));
                 r.FixableLookups.Add(("Category", categoryName, categories.Keys.OrderBy(x => x).ToList()));
             }
 
-            var key = $"{categoryId}|{name}";
-            existing.TryGetValue(key, out var test);
-            if (!ResolveExisting(r, test is not null, seen, key) || !commit) continue;
+            var paramName = r.Get("ParameterName");
+            if (paramName.Length > 200) r.Error("ParameterName is longer than 200 characters");
 
-            if (test is null)
+            r.Label = categoryName.Length > 0
+                ? (paramName.Length > 0 ? $"{name} ({categoryName}) → {paramName}" : $"{name} ({categoryName})")
+                : name;
+
+            decimal? rate = null;
+            var rawRate = r.Get("Rate");
+            if (rawRate.Length > 0)
+                rate = r.Decimal("Rate", required: true);
+            else if (!isContinuationRow)
+                rate = r.Decimal("Rate", required: true);
+
+            var hours = r.Int("DeliveryHours");
+            if (hours is < 1 or > 720) r.Error(L("DeliveryHours ১ থেকে ৭২০ এর মধ্যে হতে হবে", "DeliveryHours must be between 1 and 720"));
+            var sortOrder = r.Int("SortOrder") ?? 1;
+
+            if (code.HasValue && !hasSeenCodeInFile && name.Length > 0 && categoryId > 0)
+                seenHeaderByCode[code.Value] = (name, categoryName, categoryId);
+
+            Service? test = dbMatchByCode;
+            test ??= existingByName.TryGetValue($"{categoryId}|{name}", out var byName) ? byName : null;
+
+            if (!r.HasErrors)
+                r.Status = test is not null ? RowStatus.Update : RowStatus.New;
+
+            if (!commit || r.HasErrors) continue;
+
+            var groupKey = code.HasValue ? $"ID:{code.Value}" : $"NAME:{categoryId}|{name}";
+            if (!groupedTargets.TryGetValue(groupKey, out var target))
             {
-                test = new Service { Name = name, CategoryID = categoryId };
-                db.Services.Add(test);
+                if (test is null)
+                {
+                    target = new Service { Name = name, CategoryID = categoryId };
+                    db.Services.Add(target);
+                }
+                else
+                {
+                    target = test;
+                    target.Name = name;
+                    target.CategoryID = categoryId;
+                }
+                target.SaleRate = rate ?? target.SaleRate;
+                target.DiagnosticType = diagnosticType;
+                target.DeliveryHours = hours ?? target.DeliveryHours;
+                groupedTargets[groupKey] = target;
             }
-            test.SaleRate = rate ?? test.SaleRate;
-            test.DiagnosticType = diagnosticType;
-            test.DeliveryHours = hours ?? test.DeliveryHours;
+
+            if (paramName.Length > 0)
+            {
+                var unit = r.Optional("Unit");
+                var range = r.Optional("ReferenceRange");
+                pendingParams.Add((groupKey, paramName, unit, range, sortOrder));
+            }
+        }
+
+        if (!commit || pendingParams.Count == 0) return;
+
+        await db.SaveChangesAsync();
+        var serviceIds = groupedTargets.Values.Select(s => s.ID).Where(id => id > 0).ToHashSet();
+        var existingParams = await db.LabTestParameters.Where(p => serviceIds.Contains(p.ServiceID)).ToListAsync();
+
+        foreach (var (key, paramName, unit, range, sortOrder) in pendingParams)
+        {
+            if (!groupedTargets.TryGetValue(key, out var svc) || svc.ID <= 0) continue;
+            var existingParam = existingParams.FirstOrDefault(p =>
+                p.ServiceID == svc.ID && string.Equals(p.ParameterName.Trim(), paramName, StringComparison.OrdinalIgnoreCase));
+            if (existingParam is null)
+            {
+                var added = new LabTestParameter
+                {
+                    ServiceID = svc.ID,
+                    ParameterName = paramName,
+                    Unit = unit,
+                    ReferenceRange = range,
+                    SortOrder = sortOrder
+                };
+                db.LabTestParameters.Add(added);
+                existingParams.Add(added);
+            }
+            else
+            {
+                existingParam.Unit = unit;
+                existingParam.ReferenceRange = range;
+                existingParam.SortOrder = sortOrder;
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 @page "/diagnostic/imaging-worklist"
+@page "/diagnostic/special-worklist"
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.LabTechnician + "," + RoleNames.Doctor)]
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
@@ -12,15 +13,23 @@
 @using HPM.Web.Data.Entities
 @using HPM.Web.Services
 
-<PageTitle>@I18n.T("Imaging Worklist") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T(IsSpecialMode ? "Special Investigations Worklist" : "Imaging Worklist") | @Branding.HospitalName</PageTitle>
 
 <div class="worklist-classic-fit">
     <!-- Topbar -->
     <div class="worklist-classic-topbar">
         <div class="tickets-top-left">
             <h1 class="tickets-page-title">
-                <span style="color:#1e3a8a; display:inline-flex; align-items:center;"><RadiologyIcon Size="20" /></span>
-                <span>@I18n.T("Imaging & Radiology Worklist")</span>
+                @if (IsSpecialMode)
+                {
+                    <span>〰️</span>
+                    <span>@I18n.T("Special Investigations Worklist")</span>
+                }
+                else
+                {
+                    <span style="color:#1e3a8a; display:inline-flex; align-items:center;"><RadiologyIcon Size="20" /></span>
+                    <span>@I18n.T("Imaging & Radiology Worklist")</span>
+                }
             </h1>
             <span class="tickets-count-pill">@filteredItems.Count @I18n.T("Studies")</span>
             @if (!string.IsNullOrWhiteSpace(message))
@@ -99,7 +108,7 @@
                         {
                             <tr>
                                 <td colspan="6" class="dtm-empty" style="padding: 32px 16px; text-align: center;">
-                                    <div style="font-size: 28px; margin-bottom: 6px;">🩻</div>
+                                    <div style="margin-bottom: 6px; color:#1e3a8a;"><RadiologyIcon Size="28" /></div>
                                     <div style="font-weight: 600; color: #475569;">@I18n.T("No imaging studies found.")</div>
                                     @if (!string.IsNullOrWhiteSpace(search))
                                     {
@@ -195,7 +204,7 @@
                                         }
                                         else
                                         {
-                                            <NavLink class="btn btn-secondary tickets-btn" href="@($"diagnostic/imaging-results?memoId={item.MemoID}")" title="@I18n.T("Enter Radiology Report")">
+                                            <NavLink class="btn btn-secondary tickets-btn" href="@($"{(IsSpecialMode ? "diagnostic/special-results" : "diagnostic/imaging-results")}?memoId={item.MemoID}")" title="@I18n.T("Enter Report")">
                                                 📝 @I18n.T("Enter Report")
                                             </NavLink>
                                         }
@@ -232,7 +241,7 @@
                 <!-- Printable Radiology Study Tag -->
                 <div id="imaging-tag-print" class="imaging-study-tag">
                     <div class="imaging-tag-header">
-                        <span>🩻 @Branding.HospitalName</span>
+                        <span style="display:inline-flex; align-items:center; gap:5px;"><span style="color:#1e3a8a; display:inline-flex;"><RadiologyIcon Size="14" /></span> @Branding.HospitalName</span>
                         <span>RADIOLOGY</span>
                     </div>
                     <div class="imaging-tag-patient">
@@ -262,7 +271,7 @@
             </div>
 
             <div class="diag-modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-top: 1px solid #e2e8f0; background: #f8fafc;">
-                <span style="font-size: 11px; color: #64748b;">🩻 Standard Cassette/Film Tag: 50mm &times; 25mm</span>
+                <span style="font-size: 11px; color: #64748b; display:inline-flex; align-items:center; gap:4px;"><RadiologyIcon Size="13" /> Standard Cassette/Film Tag: 50mm &times; 25mm</span>
                 <div style="display: flex; gap: 8px;">
                     <button type="button" class="btn btn-secondary tickets-btn" @onclick="CloseTagModal">
                         @I18n.T("Close")
@@ -567,6 +576,31 @@
 }
 
 @code {
+    private bool IsSpecialMode => NavigationManager.ToBaseRelativePath(NavigationManager.Uri).Split('?')[0].Equals("diagnostic/special-worklist", StringComparison.OrdinalIgnoreCase);
+    private string loadedWorklistMode = "";
+
+    protected override async Task OnParametersSetAsync() => await SyncWorklistRouteAsync();
+
+    private void HandleLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) => _ = InvokeAsync(SyncWorklistRouteAsync);
+
+    private async Task SyncWorklistRouteAsync()
+    {
+        var cur = IsSpecialMode ? "special" : "imaging";
+        if (loadedWorklistMode != "" && loadedWorklistMode != cur)
+        {
+            loadedWorklistMode = cur;
+            search = "";
+            statusFilter = "all";
+            message = "";
+            await LoadAsync();
+            StateHasChanged();
+        }
+        else
+        {
+            loadedWorklistMode = cur;
+        }
+    }
+
     private List<ImagingItem> items = [];
     private List<ImagingItem> filteredItems = [];
     private Dictionary<int, Service> cachedServices = [];
@@ -590,6 +624,7 @@
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += LanguageChanged;
+        NavigationManager.LocationChanged += HandleLocationChanged;
         var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
         currentUserName = AppUser.GetEffectiveName(principal);
         if (int.TryParse(principal.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier), out var uid))
@@ -635,7 +670,9 @@
     private void BuildImagingItems(List<CashMemoDInvestigation> memos, Dictionary<(long MemoID, int ServiceID), LabSampleCollection> tracking)
     {
         items = memos.SelectMany(m => m.Items.GroupBy(x => x.TestID).Select(g => (Memo: m, ServiceID: g.Key)))
-            .Where(x => cachedServices.TryGetValue(x.ServiceID, out var s) && DiagnosticTestRouting.IsImaging(s, s.CategoryID.HasValue ? cachedCategories.GetValueOrDefault(s.CategoryID.Value) : null))
+            .Where(x => cachedServices.TryGetValue(x.ServiceID, out var s) && (IsSpecialMode
+                ? DiagnosticTestRouting.IsProcedure(s, s.CategoryID.HasValue ? cachedCategories.GetValueOrDefault(s.CategoryID.Value) : null)
+                : DiagnosticTestRouting.IsImaging(s, s.CategoryID.HasValue ? cachedCategories.GetValueOrDefault(s.CategoryID.Value) : null)))
             .Select(x =>
             {
                 tracking.TryGetValue((x.Memo.ID, x.ServiceID), out var t);
@@ -913,7 +950,11 @@
     private void Success(string text) { messageClass = "success"; message = text; }
     private void Fail(string text) { messageClass = "danger"; message = text; }
     private void LanguageChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => I18n.OnLanguageChanged -= LanguageChanged;
+    public void Dispose()
+    {
+        I18n.OnLanguageChanged -= LanguageChanged;
+        NavigationManager.LocationChanged -= HandleLocationChanged;
+    }
 
     private sealed class ImagingItem
     {

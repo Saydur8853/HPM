@@ -158,7 +158,7 @@ public static class HrmDemoDataSeeder
             DateTime joiningDate, decimal basic, decimal houseRent, decimal medical, decimal transport, decimal other, decimal overtimeRate) => new()
         {
             EmployeeNo = $"{DemoEmployeePrefix}{number}", AttendanceNo = $"D{number}", Name = name, Gender = gender,
-            Phone = phone, Email = $"{name.Replace("Dr. ", string.Empty).Replace("Md. ", string.Empty).Replace(" ", ".").ToLowerInvariant()}@primehpm.demo",
+            Phone = phone, Email = $"{name.Replace("Dr. ", string.Empty).Replace("Md. ", string.Empty).Replace(" ", ".").ToLowerInvariant()}@asoftprohpm.demo",
             Address = "Dhaka, Bangladesh", EmergencyContact = $"Family · {phone}", DepartmentID = departments[department].ID,
             DesignationID = designations[designation].ID, JoiningDate = joiningDate, EmploymentType = "Permanent", Status = "Active",
             BankAccount = $"DEMO-{number}-BANK", BasicSalary = basic, HouseRentAllowance = houseRent,

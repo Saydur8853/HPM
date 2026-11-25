@@ -1545,3 +1545,28 @@ window.hpm = {
         }
     }, true);
 })();
+
+(function () {
+    function syncFullscreenIcon() {
+        var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        var enterIcon = document.getElementById('hpm-fs-enter');
+        var exitIcon = document.getElementById('hpm-fs-exit');
+        if (enterIcon) enterIcon.style.display = isFs ? 'none' : 'block';
+        if (exitIcon) exitIcon.style.display = isFs ? 'block' : 'none';
+    }
+
+    window.hpmToggleFullscreen = function () {
+        var doc = document;
+        var el = doc.documentElement;
+        if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+            if (doc.exitFullscreen) doc.exitFullscreen();
+            else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+        } else {
+            if (el.requestFullscreen) el.requestFullscreen();
+            else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        }
+    };
+
+    document.addEventListener('fullscreenchange', syncFullscreenIcon);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenIcon);
+})();

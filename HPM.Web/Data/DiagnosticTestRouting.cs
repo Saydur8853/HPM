@@ -78,4 +78,25 @@ public static class DiagnosticTestRouting
 
     public static decimal GetEffectiveSaleRate(Service service, DateTime? now = null) =>
         EvaluateDiscount(service, now).EffectiveRate;
+
+    public static string CodePrefix(Service service, ServiceCategory? category = null) => Resolve(service, category) switch
+    {
+        Pathology => "PAT",
+        Procedure => "SPL",
+        _ => "IMG"
+    };
+
+    public static string FormatCode(Service service, ServiceCategory? category = null) =>
+        $"{CodePrefix(service, category)}-{service.ID}";
+
+    public static bool TryParseCode(string? raw, out int id)
+    {
+        id = 0;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var clean = raw.Trim().TrimStart('#');
+        var dash = clean.LastIndexOf('-');
+        if (dash >= 0 && dash < clean.Length - 1)
+            clean = clean[(dash + 1)..];
+        return int.TryParse(clean, out id) && id > 0;
+    }
 }

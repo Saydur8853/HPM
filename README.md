@@ -1,6 +1,6 @@
-# PrimeHPM — Hospital Patient Management
+# AsoftPro HPM — Hospital Patient Management
 
-PrimeHPM is a web-based hospital management system built with ASP.NET Core Blazor, Entity Framework Core, and SQL Server. It covers patient registration, appointments, OPD and emergency services, IPD, diagnostics, pharmacy, accounts, reporting, user management, and audit logging.
+AsoftPro HPM is a web-based hospital management system built with ASP.NET Core Blazor, Entity Framework Core, and SQL Server. It covers patient registration, appointments, OPD and emergency services, IPD, diagnostics, pharmacy, accounts, reporting, user management, and audit logging.
 
 ## Technology stack
 

@@ -1,6 +1,6 @@
-# PrimeHPM Web — OPD & Emergency
+# AsoftPro HPM Web — OPD & Emergency
 
-This is the first web release of the recovered PrimeHPM desktop system. It is a separate .NET 8 Blazor Web App and does not modify or replace the legacy WinForms application.
+This is the first web release of the AsoftPro HPM system. It is a separate .NET 8 Blazor Web App and does not modify or replace the legacy WinForms application.
 
 ## Included modules
 

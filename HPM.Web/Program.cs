@@ -20,7 +20,7 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeyPath))
 {
     builder.Services.AddDataProtection()
         .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath))
-        .SetApplicationName("PrimeHPM");
+        .SetApplicationName("AsoftProHPM");
 }
 
 builder.Host.UseSerilog((context, services, logger) => logger
@@ -28,7 +28,7 @@ builder.Host.UseSerilog((context, services, logger) => logger
     .ReadFrom.Services(services)
     .Enrich.FromLogContext()
     .WriteTo.Console()
-    .WriteTo.File("logs/primehpm-.log", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30));
+    .WriteTo.File("logs/asoftpro-hpm-.log", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 30));
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
@@ -75,6 +75,32 @@ builder.Services.AddRateLimiter(options =>
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(5), QueueLimit = 0 }));
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        var path = context.HttpContext.Request.Path;
+        var isStaffLogin = path.Equals("/account/login", StringComparison.OrdinalIgnoreCase);
+        var isPatientLogin = path.Equals("/patient/login-submit", StringComparison.OrdinalIgnoreCase);
+        var fallback = isPatientLogin ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(1);
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var metadataRetryAfter)
+            ? metadataRetryAfter
+            : fallback;
+        var retryAfterSeconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+
+        context.HttpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        if (HttpMethods.IsPost(context.HttpContext.Request.Method) && (isStaffLogin || isPatientLogin))
+        {
+            var loginPath = isPatientLogin ? "/patient/login" : "/login";
+            context.HttpContext.Response.StatusCode = StatusCodes.Status303SeeOther;
+            context.HttpContext.Response.Headers.Location = $"{loginPath}?error=rate-limit&retryAfter={retryAfterSeconds}";
+            return;
+        }
+
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "too_many_requests", retryAfterSeconds },
+            cancellationToken);
+    };
 });
 
 var connectionString = builder.Configuration.GetConnectionString("HpmDatabase")
