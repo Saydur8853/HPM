@@ -342,6 +342,14 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         profile.Property(x => x.Phone).HasColumnName("Phone").HasMaxLength(100);
         profile.Property(x => x.Hotline).HasColumnName("Hotline").HasMaxLength(100);
         profile.Property(x => x.EmergencyContact).HasColumnName("Emergency_Contact").HasMaxLength(100);
+        profile.Property(x => x.AmbulanceTitle).HasColumnName("Ambulance_Title").HasMaxLength(100);
+        profile.Property(x => x.AmbulancePhone).HasColumnName("Ambulance_Phone").HasMaxLength(100);
+        profile.Property(x => x.FireServicePhone).HasColumnName("Fire_Service_Phone").HasMaxLength(100);
+        profile.Property(x => x.EmergencyHotline).HasColumnName("Emergency_Hotline").HasMaxLength(100);
+        profile.Property(x => x.BloodBankPhone).HasColumnName("Blood_Bank_Phone").HasMaxLength(100);
+        profile.Property(x => x.PoliceStationName).HasColumnName("Police_Station_Name").HasMaxLength(150);
+        profile.Property(x => x.PoliceStationPhone).HasColumnName("Police_Station_Phone").HasMaxLength(100);
+        profile.Property(x => x.HospitalBranchesInfo).HasColumnName("Hospital_Branches_Info").HasMaxLength(2000);
         profile.Property(x => x.Email).HasColumnName("Email").HasMaxLength(100);
         profile.Property(x => x.Website).HasColumnName("Website").HasMaxLength(150);
         profile.Property(x => x.LicenseNo).HasColumnName("License_No").HasMaxLength(100);

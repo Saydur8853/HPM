@@ -2351,10 +2351,49 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("nvarchar(255)")
                         .HasColumnName("Address");
 
+                    b.Property<string>("AmbulancePhone")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Ambulance_Phone");
+
+                    b.Property<string>("AmbulanceTitle")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Ambulance_Title");
+
+                    b.Property<string>("BloodBankPhone")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Blood_Bank_Phone");
+
                     b.Property<string>("CityDistrict")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
                         .HasColumnName("City_District");
+
+                    b.Property<string>("DeveloperCompanyName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)")
+                        .HasColumnName("Developer_Company_Name");
+
+                    b.Property<string>("DeveloperCopyright")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)")
+                        .HasColumnName("Developer_Copyright");
+
+                    b.Property<string>("DeveloperEmail")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)")
+                        .HasColumnName("Developer_Email");
+
+                    b.Property<string>("DeveloperLogoData")
+                        .HasColumnType("nvarchar(max)")
+                        .HasColumnName("Developer_Logo_Data");
+
+                    b.Property<string>("DeveloperPhone")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Developer_Phone");
 
                     b.Property<string>("Email")
                         .HasMaxLength(100)
@@ -2365,6 +2404,21 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
                         .HasColumnName("Emergency_Contact");
+
+                    b.Property<string>("EmergencyHotline")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Emergency_Hotline");
+
+                    b.Property<string>("FireServicePhone")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Fire_Service_Phone");
+
+                    b.Property<string>("HospitalBranchesInfo")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)")
+                        .HasColumnName("Hospital_Branches_Info");
 
                     b.Property<string>("HospitalName")
                         .IsRequired()
@@ -2399,6 +2453,16 @@ namespace HPM.Web.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)")
                         .HasColumnName("Phone");
+
+                    b.Property<string>("PoliceStationName")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)")
+                        .HasColumnName("Police_Station_Name");
+
+                    b.Property<string>("PoliceStationPhone")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)")
+                        .HasColumnName("Police_Station_Phone");
 
                     b.Property<string>("ReceiptFooterNote")
                         .HasMaxLength(500)
@@ -6150,6 +6214,23 @@ namespace HPM.Web.Data.Migrations
                         .HasColumnType("nvarchar(20)")
                         .HasColumnName("Diagnostic_Type");
 
+                    b.Property<DateTime?>("DiscountEnd")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Discount_End");
+
+                    b.Property<DateTime?>("DiscountStart")
+                        .HasColumnType("datetime2")
+                        .HasColumnName("Discount_Start");
+
+                    b.Property<string>("DiscountType")
+                        .HasMaxLength(15)
+                        .HasColumnType("nvarchar(15)")
+                        .HasColumnName("Discount_Type");
+
+                    b.Property<decimal?>("DiscountValue")
+                        .HasColumnType("numeric(18,2)")
+                        .HasColumnName("Discount_Value");
+
                     b.Property<int?>("GenericID")
                         .HasColumnType("int")
                         .HasColumnName("Generic_ID");
@@ -6223,6 +6304,11 @@ namespace HPM.Web.Data.Migrations
                 {
                     b.Property<int>("ID")
                         .HasColumnType("int");
+
+                    b.Property<string>("DiagnosticType")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasColumnName("Diagnostic_Type");
 
                     b.Property<int?>("GroupSubID")
                         .HasColumnType("int")

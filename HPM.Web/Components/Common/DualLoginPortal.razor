@@ -1,4 +1,5 @@
 @using HPM.Web.Security
+@inject IDbContextFactory<HpmDbContext> DbFactory
 
 <div class="login-dual-layout">
     <div class="login-ambient-orbs" aria-hidden="true">
@@ -199,6 +200,87 @@
         </section>
     </div>
 
+    <section class="login-emergency-hub" aria-label="Emergency contacts and blood availability">
+        <div class="login-emergency-head">
+            <div>
+                <span class="login-emergency-kicker">@I18n.T("Emergency Information")</span>
+                <h2>@I18n.T("Quick help & live blood availability")</h2>
+            </div>
+            <span class="login-live-status"><i></i>@I18n.T("Live Blood Bank Stock")</span>
+        </div>
+
+        <div class="login-emergency-content">
+            <div class="login-emergency-contacts">
+                @if (!string.IsNullOrWhiteSpace(Branding.AmbulancePhone))
+                {
+                    <a class="login-emergency-contact ambulance" href="tel:@Branding.AmbulancePhone">
+                        <span class="login-emergency-icon">AMB</span>
+                        <span><small>@Branding.AmbulanceTitle</small><strong>@Branding.AmbulancePhone</strong></span>
+                    </a>
+                }
+                @if (!string.IsNullOrWhiteSpace(Branding.FireServicePhone))
+                {
+                    <a class="login-emergency-contact fire" href="tel:@Branding.FireServicePhone">
+                        <span class="login-emergency-icon">FIRE</span>
+                        <span><small>@I18n.T("Fire Service")</small><strong>@Branding.FireServicePhone</strong></span>
+                    </a>
+                }
+                @if (!string.IsNullOrWhiteSpace(Branding.EmergencyHotline))
+                {
+                    <a class="login-emergency-contact hotline" href="tel:@Branding.EmergencyHotline">
+                        <span class="login-emergency-icon">SOS</span>
+                        <span><small>@I18n.T("Emergency Hotline")</small><strong>@Branding.EmergencyHotline</strong></span>
+                    </a>
+                }
+                @if (!string.IsNullOrWhiteSpace(Branding.BloodBankPhone))
+                {
+                    <a class="login-emergency-contact blood" href="tel:@Branding.BloodBankPhone">
+                        <span class="login-emergency-icon">BB</span>
+                        <span><small>@I18n.T("Blood Bank")</small><strong>@Branding.BloodBankPhone</strong></span>
+                    </a>
+                }
+                @if (!string.IsNullOrWhiteSpace(Branding.PoliceStationPhone))
+                {
+                    <a class="login-emergency-contact police" href="tel:@Branding.PoliceStationPhone">
+                        <span class="login-emergency-icon">PS</span>
+                        <span><small>@(string.IsNullOrWhiteSpace(Branding.PoliceStationName) ? I18n.T("Police Station") : Branding.PoliceStationName)</small><strong>@Branding.PoliceStationPhone</strong></span>
+                    </a>
+                }
+            </div>
+
+            <div class="login-blood-stock">
+                @foreach (var group in BloodGroups)
+                {
+                    var count = bloodStock.GetValueOrDefault(group);
+                    <div class="login-blood-unit @(count > 0 ? "available" : "empty")">
+                        <strong>@group</strong>
+                        @if (count > 0)
+                        {
+                            <span><b>@count.ToString("00")</b> @I18n.T(count == 1 ? "Bag Available" : "Bags Available")</span>
+                        }
+                        else
+                        {
+                            <span class="not-available">@I18n.T("Not available")</span>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(Branding.HospitalBranchesInfo))
+        {
+            <div class="login-branch-list">
+                <strong>@I18n.T("Hospital Branches")</strong>
+                <div>
+                    @foreach (var branch in BranchLines)
+                    {
+                        <span>@branch</span>
+                    }
+                </div>
+            </div>
+        }
+    </section>
+
     <div class="login-security-note">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
         <span>@I18n.T("Use only your assigned credentials. Your session is securely monitored.", "শুধু আপনার নির্ধারিত পরিচয়পত্র ব্যবহার করুন।")</span>
@@ -276,7 +358,29 @@
     private bool IsPatientRateLimited => PatientError == "rate-limit" && PatientRetryAfter > 0;
     private int SafeStaffRetryAfter => Math.Clamp(StaffRetryAfter ?? 60, 1, 3600);
     private int SafePatientRetryAfter => Math.Clamp(PatientRetryAfter ?? 300, 1, 3600);
+    private static readonly string[] BloodGroups = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    private Dictionary<string, int> bloodStock = new(StringComparer.OrdinalIgnoreCase);
+    private IEnumerable<string> BranchLines => (Branding.HospitalBranchesInfo ?? "")
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private string SafeStaffReturnUrl => string.IsNullOrWhiteSpace(StaffReturnUrl) || !StaffReturnUrl.StartsWith('/') || StaffReturnUrl.StartsWith("//") ? "/" : StaffReturnUrl;
     private string SafePatientReturnUrl => string.IsNullOrWhiteSpace(PatientReturnUrl) || !PatientReturnUrl.StartsWith('/') || PatientReturnUrl.StartsWith("//") ? "/patient" : PatientReturnUrl;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var now = DateTime.Now;
+            bloodStock = await db.BloodComponents.AsNoTracking()
+                .Where(x => x.Status == "Available" && x.ExpiresAt > now)
+                .GroupBy(x => x.BloodGroup)
+                .Select(x => new { BloodGroup = x.Key, Count = x.Count() })
+                .ToDictionaryAsync(x => x.BloodGroup, x => x.Count, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            bloodStock = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
 }

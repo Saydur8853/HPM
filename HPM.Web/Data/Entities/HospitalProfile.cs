@@ -28,6 +28,30 @@ public sealed class HospitalProfile
     public string? EmergencyContact { get; set; } = "10678";
 
     [StringLength(100)]
+    public string? AmbulanceTitle { get; set; } = "Ambulance";
+
+    [StringLength(100)]
+    public string? AmbulancePhone { get; set; } = "";
+
+    [StringLength(100)]
+    public string? FireServicePhone { get; set; } = "";
+
+    [StringLength(100)]
+    public string? EmergencyHotline { get; set; } = "";
+
+    [StringLength(100)]
+    public string? BloodBankPhone { get; set; } = "";
+
+    [StringLength(150)]
+    public string? PoliceStationName { get; set; } = "";
+
+    [StringLength(100)]
+    public string? PoliceStationPhone { get; set; } = "";
+
+    [StringLength(2000)]
+    public string? HospitalBranchesInfo { get; set; } = "";
+
+    [StringLength(100)]
     public string? Email { get; set; } = "info@hospital.com";
 
     [StringLength(150)]

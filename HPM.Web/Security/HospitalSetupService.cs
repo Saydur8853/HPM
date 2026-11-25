@@ -20,6 +20,14 @@ public sealed class HospitalSetupService(
     public string Phone { get; private set; } = "01700-000000";
     public string Hotline { get; private set; } = "01700-000000";
     public string EmergencyContact { get; private set; } = "10678";
+    public string AmbulanceTitle { get; private set; } = "Ambulance";
+    public string AmbulancePhone { get; private set; } = "";
+    public string FireServicePhone { get; private set; } = "";
+    public string EmergencyHotline { get; private set; } = "";
+    public string BloodBankPhone { get; private set; } = "";
+    public string PoliceStationName { get; private set; } = "";
+    public string PoliceStationPhone { get; private set; } = "";
+    public string HospitalBranchesInfo { get; private set; } = "";
     public string Email { get; private set; } = "info@hospital.com";
     public string Website { get; private set; } = "";
     public string LicenseNo { get; private set; } = "";
@@ -118,6 +126,17 @@ public sealed class HospitalSetupService(
                 BEGIN
                     ALTER TABLE [Hospital_Profile] ADD [Developer_Phone] nvarchar(100) NULL;
                 END
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Hospital_Profile]') AND name = 'Ambulance_Title')
+                BEGIN
+                    ALTER TABLE [Hospital_Profile] ADD [Ambulance_Title] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Ambulance_Phone] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Fire_Service_Phone] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Emergency_Hotline] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Blood_Bank_Phone] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Police_Station_Name] nvarchar(150) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Police_Station_Phone] nvarchar(100) NULL;
+                    ALTER TABLE [Hospital_Profile] ADD [Hospital_Branches_Info] nvarchar(2000) NULL;
+                END
                 IF OBJECT_ID(N'[Service_Category]', N'U') IS NOT NULL
                    AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service_Category]') AND name = 'Diagnostic_Type')
                 BEGIN
@@ -154,6 +173,14 @@ public sealed class HospitalSetupService(
         Phone = string.IsNullOrWhiteSpace(profile?.Phone) ? "01700-000000" : profile.Phone;
         Hotline = string.IsNullOrWhiteSpace(profile?.Hotline) ? "01700-000000" : profile.Hotline;
         EmergencyContact = string.IsNullOrWhiteSpace(profile?.EmergencyContact) ? "10678" : profile.EmergencyContact;
+        AmbulanceTitle = string.IsNullOrWhiteSpace(profile?.AmbulanceTitle) ? "Ambulance" : profile.AmbulanceTitle;
+        AmbulancePhone = profile?.AmbulancePhone ?? "";
+        FireServicePhone = profile?.FireServicePhone ?? "";
+        EmergencyHotline = profile?.EmergencyHotline ?? "";
+        BloodBankPhone = profile?.BloodBankPhone ?? "";
+        PoliceStationName = profile?.PoliceStationName ?? "";
+        PoliceStationPhone = profile?.PoliceStationPhone ?? "";
+        HospitalBranchesInfo = profile?.HospitalBranchesInfo ?? "";
         Email = string.IsNullOrWhiteSpace(profile?.Email) ? "info@hospital.com" : profile.Email;
         Website = profile?.Website ?? "";
         LicenseNo = profile?.LicenseNo ?? "";
@@ -190,6 +217,14 @@ public sealed class HospitalSetupService(
                 Phone = Phone,
                 Hotline = Hotline,
                 EmergencyContact = EmergencyContact,
+                AmbulanceTitle = AmbulanceTitle,
+                AmbulancePhone = AmbulancePhone,
+                FireServicePhone = FireServicePhone,
+                EmergencyHotline = EmergencyHotline,
+                BloodBankPhone = BloodBankPhone,
+                PoliceStationName = PoliceStationName,
+                PoliceStationPhone = PoliceStationPhone,
+                HospitalBranchesInfo = HospitalBranchesInfo,
                 Email = Email,
                 Website = Website,
                 LicenseNo = LicenseNo,
@@ -248,6 +283,14 @@ public sealed class HospitalSetupService(
                     savedProfile.Phone = input.Phone?.Trim() ?? "";
                     savedProfile.Hotline = input.Hotline?.Trim() ?? "";
                     savedProfile.EmergencyContact = input.EmergencyContact?.Trim() ?? "";
+                    savedProfile.AmbulanceTitle = input.AmbulanceTitle?.Trim() ?? "Ambulance";
+                    savedProfile.AmbulancePhone = input.AmbulancePhone?.Trim() ?? "";
+                    savedProfile.FireServicePhone = input.FireServicePhone?.Trim() ?? "";
+                    savedProfile.EmergencyHotline = input.EmergencyHotline?.Trim() ?? "";
+                    savedProfile.BloodBankPhone = input.BloodBankPhone?.Trim() ?? "";
+                    savedProfile.PoliceStationName = input.PoliceStationName?.Trim() ?? "";
+                    savedProfile.PoliceStationPhone = input.PoliceStationPhone?.Trim() ?? "";
+                    savedProfile.HospitalBranchesInfo = input.HospitalBranchesInfo?.Trim() ?? "";
                     savedProfile.Email = input.Email?.Trim() ?? "";
                     savedProfile.Website = input.Website?.Trim() ?? "";
                     savedProfile.LicenseNo = input.LicenseNo?.Trim() ?? "";
