@@ -1027,6 +1027,7 @@ window.hpm = {
         const isTubeLabel = elementId === 'sample-sticker-print' || elementId === 'tube-label-print' || elementId === 'imaging-tag-print' || (source && (source.classList.contains('specimen-tube-label') || source.classList.contains('tube-labels-container') || source.classList.contains('sample-sticker-label') || source.classList.contains('imaging-study-tag')));
         const isThermal = !isTubeLabel && (elementId === 'pharmacy-thermal-print' || (source && (source.classList.contains('pos-receipt-80mm') || !!source.querySelector('.pos-receipt-80mm, .pos-thermal-receipt'))));
         const isA5 = !isTubeLabel && ((source && (source.classList.contains('a5-memo-sheet') || source.classList.contains('print-a5-sheet'))) || (elementId === 'diagnostic-print' && source && !source.classList.contains('print-a4-sheet')));
+        const isLabReport = elementId === 'lab-report-print';
         const needsDevFooter = !isTubeLabel && !source.querySelector('.print-dev-brand-footer');
         const devFooterHtml = needsDevFooter ? this.getDeveloperFooterHtml(isThermal) : '';
         printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title>
@@ -1161,6 +1162,22 @@ window.hpm = {
                 page-break-inside: avoid !important;
                 padding-top: 24px !important;
             }
+            ${isLabReport ? `
+            @page {
+                size: A4 portrait;
+                margin: 8mm 10mm 14mm 10mm;
+                @bottom-right {
+                    content: "Page " counter(page) " of " counter(pages);
+                    color: #64748b;
+                    font-family: Arial, sans-serif;
+                    font-size: 8pt;
+                }
+            }
+            .delta-paged-report > thead { display: table-header-group !important; }
+            .delta-paged-report > tbody { display: table-row-group !important; }
+            .delta-paged-report > tfoot { display: table-footer-group !important; }
+            .delta-report-sheet { page-break-inside: auto !important; }
+            ` : ''}
             button, .btn, .no-print { display: none !important; }
         </style></head><body>${source.outerHTML}</body></html>`);
         printWindow.document.close();

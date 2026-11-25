@@ -29,9 +29,15 @@ if "%SQL_CHECK%"=="2" (
     powershell -NoProfile -Command "Start-Service -Name '%HPM_SQL_SERVICE%' -ErrorAction SilentlyContinue; (Get-Service -Name '%HPM_SQL_SERVICE%').WaitForStatus('Running',[TimeSpan]::FromSeconds(15))" >nul 2>&1
 )
 
-rem 3. Run database migrations to make sure schema is up to date
-echo [3/4] Running database migrations...
-dotnet ef database update --project "HPM.Web\HPM.Web.csproj"
+rem 3. Build once cleanly & run database migrations
+echo [3/4] Building latest code ^& checking database migrations...
+dotnet build "HPM.Web\HPM.Web.csproj" -m:1 -p:UseSharedCompilation=false -p:RunAnalyzers=false -p:BuildInParallel=false
+if errorlevel 1 (
+    echo ERROR: Build failed. Review compiler messages above.
+    pause
+    exit /b 1
+)
+dotnet ef database update --no-build --project "HPM.Web\HPM.Web.csproj"
 if errorlevel 1 (
     echo WARNING: EF command-line update returned an error code. Application will attempt startup migration check.
 )
@@ -47,8 +53,7 @@ echo ======================================================================
 echo.
 
 set "ASPNETCORE_ENVIRONMENT=Development"
-start /b cmd /c "timeout /t 4 /nobreak >nul & start %HPM_URL%"
-dotnet run --project "HPM.Web\HPM.Web.csproj" --launch-profile http
+dotnet run --no-build --project "HPM.Web\HPM.Web.csproj" --launch-profile http
 
 if errorlevel 1 (
     echo.

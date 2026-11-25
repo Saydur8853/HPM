@@ -125,7 +125,7 @@ public sealed class HospitalMasterCacheService
         return list?.ToList() ?? [];
     }
 
-    public async Task<(Dictionary<int, string> CategoryNames, List<Service> Services)> GetDiagnosticCatalogAsync()
+    public async Task<(Dictionary<int, string> CategoryNames, Dictionary<int, ServiceCategory> Categories, List<Service> Services)> GetDiagnosticCatalogAsync()
     {
         var cached = await _cache.GetOrCreateAsync(Key("catalog:diagnostic"), async entry =>
         {
@@ -133,6 +133,7 @@ public sealed class HospitalMasterCacheService
             await using var db = await _dbFactory.CreateDbContextAsync();
             var allCats = await db.ServiceCategories.AsNoTracking().ToListAsync();
             var categoryNames = allCats.ToDictionary(c => c.ID, c => c.Name);
+            var categories = allCats.ToDictionary(c => c.ID);
             var diagCategoryIds = allCats
                 .Where(DiagnosticTestRouting.IsDiagnosticCategory)
                 .Select(c => c.ID)
@@ -150,10 +151,13 @@ public sealed class HospitalMasterCacheService
                          && (s.SupplierID == null || s.SupplierID == 0))
                 .OrderBy(x => x.Name)
                 .ToListAsync();
-            return (CategoryNames: categoryNames, Services: services);
+            return (CategoryNames: categoryNames, Categories: categories, Services: services);
         });
 
-        return (new Dictionary<int, string>(cached.CategoryNames), cached.Services.ToList());
+        return (
+            new Dictionary<int, string>(cached.CategoryNames),
+            new Dictionary<int, ServiceCategory>(cached.Categories),
+            cached.Services.ToList());
     }
 
     public async Task<(List<ServiceCategory> Categories, List<Service> Services)> GetOtCatalogAsync()
