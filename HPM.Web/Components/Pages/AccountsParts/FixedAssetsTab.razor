@@ -1,0 +1,412 @@
+@* Accounts tab 5: fixed asset register. Each asset belongs to one cost center; its purchase,
+   monthly depreciation (Month-End tab) and disposal are posted to the general ledger. *@
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" style="padding:8px 14px; font-size:12px; font-weight:700; margin-bottom:12px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+        <span>@message</span>
+        <button type="button" style="background:none; border:none; cursor:pointer; font-weight:800; color:inherit;" @onclick='() => message = ""'>✕</button>
+    </div>
+}
+
+<div class="acc-grid-2col" style="grid-template-columns: minmax(340px, 420px) 1fr;">
+    <!-- Left: asset form -->
+    <div class="acc-card">
+        <div class="acc-card-header">
+            <h2 class="acc-card-title"><span>🏗️ @(editor.ID == 0 ? I18n.T("Register Fixed Asset", "নতুন স্থায়ী সম্পদ") : I18n.T("Edit Fixed Asset", "স্থায়ী সম্পদ সম্পাদনা"))</span></h2>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;" @onclick="ResetEditor">+ @I18n.T("New", "নতুন")</button>
+        </div>
+        <div class="acc-card-body">
+            <div style="display:grid; grid-template-columns:130px 1fr; gap:8px; margin-bottom:8px;">
+                <div><span class="acc-field-label">@I18n.T("Asset Tag *", "ট্যাগ *")</span><input class="classic-input" style="height:30px !important; font-weight:800;" @bind="editor.AssetCode" /></div>
+                <div><span class="acc-field-label">@I18n.T("Name & Model *", "নাম ও মডেল *")</span><input class="classic-input" style="height:30px !important;" @bind="editor.Name" placeholder="Digital X-ray XR-500" /></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                <div>
+                    <span class="acc-field-label">@I18n.T("Asset Head *", "সম্পদের খাত *")</span>
+                    <select class="classic-input" style="height:30px !important;" @bind="editor.AssetAccountID" disabled="@financialLocked">
+                        <option value="0">@I18n.T("Select...")</option>
+                        @foreach (var a in assetHeads) { <option value="@a.ID">@a.Code · @a.Name</option> }
+                    </select>
+                </div>
+                <div>
+                    <span class="acc-field-label">@I18n.T("Department *", "বিভাগ *")</span>
+                    <select class="classic-input" style="height:30px !important;" @bind="editor.CostCenterID" disabled="@(editor.ID != 0)">
+                        <option value="0">@I18n.T("Select...")</option>
+                        @foreach (var c in centers.Where(x => x.IsActive)) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                    </select>
+                </div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                <div><span class="acc-field-label">@I18n.T("Serial No.", "সিরিয়াল নং")</span><input class="classic-input" style="height:30px !important;" @bind="editor.SerialNo" /></div>
+                <div><span class="acc-field-label">@I18n.T("Location", "অবস্থান")</span><input class="classic-input" style="height:30px !important;" @bind="editor.Location" placeholder="Ground floor, Room 102" /></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                <div><span class="acc-field-label">@I18n.T("Supplier", "সাপ্লায়ার")</span><input class="classic-input" style="height:30px !important;" @bind="editor.Supplier" /></div>
+                <div><span class="acc-field-label">@I18n.T("Invoice No.", "ইনভয়েস নং")</span><input class="classic-input" style="height:30px !important;" @bind="editor.InvoiceNo" /></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                <div><span class="acc-field-label">@I18n.T("Purchase Date *", "কেনার তারিখ *")</span><InputDate class="classic-input" style="height:30px !important;" @bind-Value="editor.PurchaseDate" disabled="@financialLocked" /></div>
+                <div><span class="acc-field-label">@I18n.T("In Service From *", "চালুর তারিখ *")</span><InputDate class="classic-input" style="height:30px !important;" @bind-Value="editor.InServiceDate" disabled="@financialLocked" /></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 90px; gap:8px; margin-bottom:8px;">
+                <div><span class="acc-field-label">@I18n.T("Cost (৳) *", "কেনা দাম *")</span><InputNumber class="classic-input" style="height:30px !important;" @bind-Value="editor.Cost" disabled="@financialLocked" /></div>
+                <div><span class="acc-field-label">@I18n.T("Salvage (৳)", "শেষ মূল্য")</span><InputNumber class="classic-input" style="height:30px !important;" @bind-Value="editor.SalvageValue" disabled="@financialLocked" /></div>
+                <div><span class="acc-field-label">@I18n.T("Life (yrs) *", "আয়ু *")</span><InputNumber class="classic-input" style="height:30px !important;" @bind-Value="editor.UsefulLifeYears" disabled="@financialLocked" /></div>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+                <div>
+                    <span class="acc-field-label">@I18n.T("Depreciation already charged (৳)", "আগে জমা অবচয় (৳)")</span>
+                    <InputNumber class="classic-input" style="height:30px !important;" @bind-Value="editor.OpeningAccumulatedDepreciation" disabled="@financialLocked" />
+                </div>
+                <div><span class="acc-field-label">@I18n.T("Warranty / AMC End", "ওয়ারেন্টি শেষ")</span><InputDate class="classic-input" style="height:30px !important;" @bind-Value="editor.WarrantyEnd" /></div>
+            </div>
+            @if (editor.ID == 0)
+            {
+                <div style="margin-bottom:10px;">
+                    <span class="acc-field-label">@I18n.T("How was it paid? (posts the purchase voucher)", "কীভাবে কেনা? (কেনার ভাউচার পোস্ট হবে)")</span>
+                    <select class="classic-input" style="height:30px !important;" @bind="fundingCode">
+                        <option value="2000">@I18n.T("On credit — Supplier Payable", "বাকিতে — সাপ্লায়ার পাওনা")</option>
+                        <option value="1000">@I18n.T("Paid in cash", "নগদে")</option>
+                        <option value="1020">@I18n.T("Paid from bank", "ব্যাংক থেকে")</option>
+                        <option value="3000">@I18n.T("Existing asset (opening balance — Owner's Capital)", "আগের সম্পদ (ওপেনিং — মালিকের মূলধন)")</option>
+                        <option value="">@I18n.T("Do not post (register only)", "পোস্ট হবে না (শুধু রেজিস্টার)")</option>
+                    </select>
+                </div>
+            }
+            @if (editor.Cost > 0 && editor.UsefulLifeYears > 0)
+            {
+                <div style="padding:8px 10px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:6px; font-size:11.5px; margin-bottom:10px;">
+                    📐 @I18n.T("Monthly depreciation", "মাসিক অবচয়"): <b>@I18n.FormatCurrency(MonthlyCharge(editor))</b>
+                    = (@I18n.FormatCurrency(editor.Cost) − @I18n.FormatCurrency(editor.SalvageValue)) ÷ (@editor.UsefulLifeYears × 12)
+                </div>
+            }
+            @if (IsAdministrator)
+            {
+                <button type="button" class="btn btn-primary" style="width:100%; height:34px; font-weight:800;" @onclick="SaveAsync">
+                    💾 @(editor.ID == 0 ? I18n.T("Save Asset", "সম্পদ সংরক্ষণ") : I18n.T("Update Asset", "সম্পদ আপডেট"))
+                </button>
+            }
+            else
+            {
+                <div style="padding:10px; background:#fef3c7; color:#b45309; border-radius:6px; font-size:11.5px; font-weight:700;">🔒 @I18n.T("Administrator permission is required.")</div>
+            }
+        </div>
+    </div>
+
+    <!-- Right: register -->
+    <div class="acc-card" id="fixed-asset-register">
+        <div class="acc-card-header">
+            <div>
+                <h2 class="acc-card-title"><span>📦 @I18n.T("Fixed Asset Register", "স্থায়ী সম্পদ রেজিস্টার")</span></h2>
+                <div style="font-size:11px; color:#64748b;">@I18n.T("Book value = cost − depreciation charged so far", "বর্তমান মূল্য = কেনা দাম − এ পর্যন্ত অবচয়")</div>
+            </div>
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                <select class="classic-input" style="height:28px !important; font-size:11.5px !important; width:200px;" @bind="ccFilter">
+                    <option value="0">@I18n.T("All departments", "সব বিভাগ")</option>
+                    @foreach (var c in centers) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                </select>
+                <button type="button" class="acc-print-btn primary" @onclick='() => JS.InvokeVoidAsync("hpm.printElement", "fixed-asset-register", "Fixed Asset Register")'>🖨️ @I18n.T("Print")</button>
+            </div>
+        </div>
+        <div class="acc-table-wrap" style="max-height:560px; overflow-y:auto;">
+            <table class="acc-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Tag / Asset", "ট্যাগ / সম্পদ")</th>
+                        <th>@I18n.T("Department", "বিভাগ")</th>
+                        <th class="num">@I18n.T("Cost", "কেনা দাম")</th>
+                        <th class="num">@I18n.T("Depreciation", "অবচয়")</th>
+                        <th class="num">@I18n.T("Book Value", "বর্তমান মূল্য")</th>
+                        <th class="num">@I18n.T("Per Month", "মাসিক")</th>
+                        <th>@I18n.T("Status", "অবস্থা")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var shown = assets.Where(a => ccFilter == 0 || a.CostCenterID == ccFilter).ToList(); }
+                    @if (shown.Count == 0)
+                    {
+                        <tr><td colspan="8" style="text-align:center; padding:24px; color:#64748b;">@I18n.T("No fixed assets registered yet.", "এখনো কোনো স্থায়ী সম্পদ নেই।")</td></tr>
+                    }
+                    @foreach (var a in shown)
+                    {
+                        var acc = Accumulated(a);
+                        <tr style="@(a.Status == "Disposed" ? "opacity:0.55;" : "")">
+                            <td>
+                                <strong style="color:#0284c7;">@a.AssetCode</strong> · <strong>@a.Name</strong>
+                                <div style="font-size:10.5px; color:#64748b;">@HeadName(a.AssetAccountID)@(string.IsNullOrWhiteSpace(a.Location) ? "" : " · " + a.Location)</div>
+                            </td>
+                            <td style="font-size:11.5px;">@CenterName(a.CostCenterID)</td>
+                            <td class="num">@I18n.FormatCurrency(a.Cost)</td>
+                            <td class="num">@I18n.FormatCurrency(acc)</td>
+                            <td class="num" style="font-weight:800;">@I18n.FormatCurrency(a.Cost - acc)</td>
+                            <td class="num">@(a.Status == "Active" ? I18n.FormatCurrency(MonthlyCharge(a)) : "—")</td>
+                            <td><span class="pill" style="font-size:10px; background:@(a.Status == "Active" ? "#d1fae5" : "#f1f5f9"); color:@(a.Status == "Active" ? "#047857" : "#64748b");">@a.Status</span></td>
+                            <td style="text-align:right; white-space:nowrap;">
+                                <button type="button" class="acc-chip-btn" @onclick="() => Select(a)">✎</button>
+                                @if (IsAdministrator && a.Status == "Active")
+                                {
+                                    <button type="button" class="acc-chip-btn" style="margin-left:3px;" @onclick="() => OpenAction(a, transfer: true)">⇄ @I18n.T("Move")</button>
+                                    <button type="button" class="acc-chip-btn" style="margin-left:3px; color:#b45309;" @onclick="() => OpenAction(a, transfer: false)">🗑 @I18n.T("Dispose")</button>
+                                }
+                            </td>
+                        </tr>
+                        @if (actionAsset?.ID == a.ID)
+                        {
+                            <tr>
+                                <td colspan="8" style="background:#f8fafc;">
+                                    @if (actionIsTransfer)
+                                    {
+                                        <div style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
+                                            <div><span class="acc-field-label">@I18n.T("Move to department", "নতুন বিভাগ")</span>
+                                                <select class="classic-input" style="height:28px !important; width:220px;" @bind="transferTo">
+                                                    <option value="0">@I18n.T("Select...")</option>
+                                                    @foreach (var c in centers.Where(x => x.IsActive && x.ID != a.CostCenterID)) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                                                </select></div>
+                                            <div style="flex:1; min-width:180px;"><span class="acc-field-label">@I18n.T("Reason", "কারণ")</span><input class="classic-input" style="height:28px !important;" @bind="actionReason" /></div>
+                                            <button type="button" class="btn btn-primary btn-sm" @onclick="TransferAsync">⇄ @I18n.T("Move", "স্থানান্তর")</button>
+                                            <button type="button" class="btn btn-ghost btn-sm" @onclick="() => actionAsset = null">✕</button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
+                                            <div><span class="acc-field-label">@I18n.T("Disposal date", "বাতিলের তারিখ")</span><InputDate class="classic-input" style="height:28px !important;" @bind-Value="disposeDate" /></div>
+                                            <div><span class="acc-field-label">@I18n.T("Sold for (৳)", "বিক্রয়মূল্য (৳)")</span><InputNumber class="classic-input" style="height:28px !important; width:120px;" @bind-Value="disposeAmount" /></div>
+                                            <div><span class="acc-field-label">@I18n.T("Received in", "টাকা এলো")</span>
+                                                <select class="classic-input" style="height:28px !important;" @bind="disposeIn">
+                                                    <option value="1000">@I18n.T("Cash", "নগদ")</option>
+                                                    <option value="1020">@I18n.T("Bank", "ব্যাংক")</option>
+                                                </select></div>
+                                            <div style="flex:1; min-width:160px;"><span class="acc-field-label">@I18n.T("Reason", "কারণ")</span><input class="classic-input" style="height:28px !important;" @bind="actionReason" /></div>
+                                            <button type="button" class="btn btn-primary btn-sm" style="background:#b45309; border-color:#b45309;" @onclick="DisposeAsync">🗑 @I18n.T("Dispose", "বাতিল করুন")</button>
+                                            <button type="button" class="btn btn-ghost btn-sm" @onclick="() => actionAsset = null">✕</button>
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                    @if (shown.Count > 0)
+                    {
+                        var activeShown = shown.Where(x => x.Status != "Disposed").ToList();
+                        <tr class="total-row">
+                            <td colspan="2" style="text-align:right;">@I18n.T("In-use assets total", "চালু সম্পদের মোট"):</td>
+                            <td class="num">@I18n.FormatCurrency(activeShown.Sum(x => x.Cost))</td>
+                            <td class="num">@I18n.FormatCurrency(activeShown.Sum(Accumulated))</td>
+                            <td class="num">@I18n.FormatCurrency(activeShown.Sum(x => x.Cost - Accumulated(x)))</td>
+                            <td class="num">@I18n.FormatCurrency(activeShown.Where(x => x.Status == "Active").Sum(MonthlyCharge))</td>
+                            <td colspan="2"></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool IsAdministrator { get; set; }
+    [Parameter] public int UserId { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private List<FixedAsset> assets = [];
+    private List<CostCenter> centers = [];
+    private List<AccountHead> assetHeads = [];
+    private Dictionary<int, decimal> charged = [];
+    private FixedAsset editor = NewAsset();
+    private string fundingCode = "2000", message = "", messageClass = "success", actionReason = "", disposeIn = "1000";
+    private int ccFilter, transferTo;
+    private FixedAsset? actionAsset;
+    private bool actionIsTransfer;
+    private DateTime disposeDate = DateTime.Today;
+    private decimal disposeAmount;
+    private bool financialLocked => editor.ID != 0 && (editor.PurchaseVoucherID.HasValue || charged.GetValueOrDefault(editor.ID) > 0);
+
+    private static FixedAsset NewAsset() => new() { PurchaseDate = DateTime.Today, InServiceDate = DateTime.Today, UsefulLifeYears = 10, Status = "Active" };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { await LoadAsync(); }
+        catch (Exception) { Fail(I18n.T("The database did not answer in time (it may be busy). Press 🔄 or reopen the tab to try again.", "ডাটাবেস সময়মতো উত্তর দেয়নি (ব্যস্ত থাকতে পারে)। 🔄 চাপুন বা ট্যাবটা আবার খুলুন।")); }
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        assets = await db.FixedAssets.AsNoTracking().OrderBy(x => x.Status).ThenBy(x => x.AssetCode).ToListAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        assetHeads = await db.AccountHeads.AsNoTracking()
+            .Where(x => x.AccountType == "Asset" && x.IsActive && string.Compare(x.Code, "1500") >= 0 && string.Compare(x.Code, "1600") < 0)
+            .OrderBy(x => x.Code).ToListAsync();
+        charged = (await db.FixedAssetDepreciations.AsNoTracking().GroupBy(x => x.AssetID).Select(g => new { g.Key, Sum = g.Sum(x => x.Amount) }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Sum);
+        if (editor.ID == 0 && string.IsNullOrWhiteSpace(editor.AssetCode)) editor.AssetCode = NextTag();
+    }
+
+    private string NextTag()
+    {
+        var max = assets.Select(x => x.AssetCode.StartsWith("FA-") && int.TryParse(x.AssetCode[3..], out var n) ? n : 0).DefaultIfEmpty(0).Max();
+        return $"FA-{max + 1:0000}";
+    }
+
+    private decimal Accumulated(FixedAsset a) => a.OpeningAccumulatedDepreciation + charged.GetValueOrDefault(a.ID);
+    public static decimal MonthlyCharge(FixedAsset a) => a.UsefulLifeYears <= 0 ? 0 : Math.Round((a.Cost - a.SalvageValue) / (a.UsefulLifeYears * 12m), 2);
+    private string CenterName(int id) => centers.FirstOrDefault(x => x.ID == id) is { } c ? $"{c.Code} · {c.Name}" : "—";
+    private string HeadName(int id) => assetHeads.FirstOrDefault(x => x.ID == id)?.Name ?? "";
+
+    private void ResetEditor() { editor = NewAsset(); editor.AssetCode = NextTag(); fundingCode = "2000"; }
+    private void Select(FixedAsset a) => editor = new()
+    {
+        ID = a.ID, AssetCode = a.AssetCode, Name = a.Name, SerialNo = a.SerialNo, AssetAccountID = a.AssetAccountID, CostCenterID = a.CostCenterID,
+        Location = a.Location, Supplier = a.Supplier, InvoiceNo = a.InvoiceNo, PurchaseDate = a.PurchaseDate, InServiceDate = a.InServiceDate,
+        Cost = a.Cost, SalvageValue = a.SalvageValue, UsefulLifeYears = a.UsefulLifeYears, OpeningAccumulatedDepreciation = a.OpeningAccumulatedDepreciation,
+        Status = a.Status, WarrantyEnd = a.WarrantyEnd, PurchaseVoucherID = a.PurchaseVoucherID
+    };
+
+    private void OpenAction(FixedAsset a, bool transfer)
+    {
+        actionAsset = a; actionIsTransfer = transfer; actionReason = ""; transferTo = 0; disposeDate = DateTime.Today; disposeAmount = 0;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!IsAdministrator) return;
+        editor.AssetCode = (editor.AssetCode ?? "").Trim().ToUpperInvariant();
+        editor.Name = (editor.Name ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(editor.AssetCode) || string.IsNullOrWhiteSpace(editor.Name)) { Fail(I18n.T("Asset tag and name are required.", "ট্যাগ ও নাম আবশ্যক।")); return; }
+        if (editor.AssetAccountID <= 0 || editor.CostCenterID <= 0) { Fail(I18n.T("Select the asset head and the department.", "সম্পদের খাত ও বিভাগ নির্বাচন করুন।")); return; }
+        if (editor.Cost <= 0 || editor.UsefulLifeYears <= 0 || editor.UsefulLifeYears > 100) { Fail(I18n.T("Enter the cost and a useful life between 1 and 100 years.", "কেনা দাম ও ১–১০০ বছরের আয়ু দিন।")); return; }
+        if (editor.SalvageValue < 0 || editor.SalvageValue >= editor.Cost) { Fail(I18n.T("Salvage must be below the cost.", "শেষ মূল্য কেনা দামের কম হতে হবে।")); return; }
+        if (editor.OpeningAccumulatedDepreciation < 0 || editor.OpeningAccumulatedDepreciation > editor.Cost - editor.SalvageValue) { Fail(I18n.T("Depreciation already charged cannot exceed cost − salvage.", "আগে জমা অবচয় (কেনা দাম − শেষ মূল্য) এর বেশি হতে পারে না।")); return; }
+        if (editor.InServiceDate.Date < editor.PurchaseDate.Date) { Fail(I18n.T("In-service date cannot be before the purchase date.", "চালুর তারিখ কেনার তারিখের আগে হতে পারে না।")); return; }
+
+        try
+        {
+            await using (var check = await DbFactory.CreateDbContextAsync())
+                if (await check.FixedAssets.AnyAsync(x => x.AssetCode == editor.AssetCode && x.ID != editor.ID)) { Fail(I18n.T("This asset tag already exists.", "এই ট্যাগ আগে থেকেই আছে।")); return; }
+            var lockedNow = financialLocked;
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            if (editor.ID == 0)
+            {
+                var asset = new FixedAsset
+                {
+                    AssetCode = editor.AssetCode, Name = editor.Name, SerialNo = editor.SerialNo?.Trim(), AssetAccountID = editor.AssetAccountID, CostCenterID = editor.CostCenterID,
+                    Location = editor.Location?.Trim(), Supplier = editor.Supplier?.Trim(), InvoiceNo = editor.InvoiceNo?.Trim(), PurchaseDate = editor.PurchaseDate.Date,
+                    InServiceDate = editor.InServiceDate.Date, Cost = editor.Cost, SalvageValue = editor.SalvageValue, UsefulLifeYears = editor.UsefulLifeYears,
+                    OpeningAccumulatedDepreciation = editor.OpeningAccumulatedDepreciation, Status = "Active", WarrantyEnd = editor.WarrantyEnd, EnteredBy = UserId, TransDate = DateTime.Now
+                };
+                db.FixedAssets.Add(asset);
+                await db.SaveChangesAsync();
+                if (!string.IsNullOrEmpty(fundingCode))
+                {
+                    var fundType = fundingCode switch { "2000" => "Liability", "3000" => "Equity", _ => "Asset" };
+                    var fundId = await AccountMap.HeadAsync(db, fundingCode, fundType, 0);
+                    if (fundId == 0) throw new InvalidOperationException($"Account head {fundingCode} is missing in the chart of accounts.");
+                    var lines = new List<AccountingPosting.PostingLine> { new(asset.AssetAccountID, asset.Cost, 0, asset.CostCenterID) };
+                    if (fundingCode == "3000" && asset.OpeningAccumulatedDepreciation > 0)
+                    {
+                        // Existing asset: book its depreciation to date too, the net value goes to capital.
+                        lines.Add(new(await AccumulatedHeadAsync(db, asset.AssetAccountID), 0, asset.OpeningAccumulatedDepreciation, asset.CostCenterID));
+                        lines.Add(new(fundId, 0, asset.Cost - asset.OpeningAccumulatedDepreciation));
+                    }
+                    else lines.Add(new(fundId, 0, asset.Cost));
+                    var voucher = AccountingPosting.AddPostedVoucher(db, fundingCode == "3000" ? "Journal" : "Purchase", asset.PurchaseDate,
+                        $"Fixed asset {asset.AssetCode} {asset.Name}", $"FIXED-ASSET:{asset.ID}", UserId, lines.ToArray());
+                    await db.SaveChangesAsync();
+                    asset.PurchaseVoucherID = voucher.ID;
+                    await db.SaveChangesAsync();
+                }
+            }
+            else
+            {
+                var x = await db.FixedAssets.FindAsync(editor.ID);
+                if (x is null) return false;
+                x.AssetCode = editor.AssetCode; x.Name = editor.Name; x.SerialNo = editor.SerialNo?.Trim(); x.Location = editor.Location?.Trim();
+                x.Supplier = editor.Supplier?.Trim(); x.InvoiceNo = editor.InvoiceNo?.Trim(); x.WarrantyEnd = editor.WarrantyEnd;
+                if (!lockedNow)
+                {
+                    x.AssetAccountID = editor.AssetAccountID; x.PurchaseDate = editor.PurchaseDate.Date; x.InServiceDate = editor.InServiceDate.Date;
+                    x.Cost = editor.Cost; x.SalvageValue = editor.SalvageValue; x.UsefulLifeYears = editor.UsefulLifeYears;
+                    x.OpeningAccumulatedDepreciation = editor.OpeningAccumulatedDepreciation;
+                }
+                await db.SaveChangesAsync();
+            }
+            return true;
+            });
+            Ok(I18n.T("Fixed asset saved.", "স্থায়ী সম্পদ সংরক্ষিত হয়েছে।"));
+            ResetEditor();
+            await LoadAsync();
+            editor.AssetCode = NextTag();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+    }
+
+    /// <summary>Accumulated-depreciation head paired with an asset head: 15x0 → 16x0.</summary>
+    public static async Task<int> AccumulatedHeadAsync(HpmDbContext db, int assetAccountId)
+    {
+        var code = await db.AccountHeads.AsNoTracking().Where(x => x.ID == assetAccountId).Select(x => x.Code).FirstOrDefaultAsync() ?? "1510";
+        var accCode = code.Length == 4 && code.StartsWith("15") ? "16" + code[2..] : "1610";
+        var id = await AccountMap.HeadAsync(db, accCode, "Asset", 0);
+        if (id == 0) id = await AccountMap.HeadAsync(db, "1610", "Asset", 0);
+        if (id == 0) throw new InvalidOperationException($"Accumulated depreciation head {accCode} is missing in the chart of accounts.");
+        return id;
+    }
+
+    private async Task TransferAsync()
+    {
+        if (!IsAdministrator || actionAsset is null) return;
+        if (transferTo <= 0) { Fail(I18n.T("Select the new department.", "নতুন বিভাগ নির্বাচন করুন।")); return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var x = await db.FixedAssets.FindAsync(actionAsset.ID);
+        if (x is null) return;
+        db.FixedAssetTransfers.Add(new FixedAssetTransfer { AssetID = x.ID, FromCostCenterID = x.CostCenterID, ToCostCenterID = transferTo, TransferDate = DateTime.Today, Reason = actionReason.Trim(), EnteredBy = UserId });
+        x.CostCenterID = transferTo;
+        await db.SaveChangesAsync();
+        Ok(I18n.T($"{x.AssetCode} moved. Depreciation is charged to the new department from now on.", $"{x.AssetCode} স্থানান্তরিত। এখন থেকে অবচয় নতুন বিভাগে পড়বে।"));
+        actionAsset = null;
+        await LoadAsync();
+    }
+
+    private async Task DisposeAsync()
+    {
+        if (!IsAdministrator || actionAsset is null) return;
+        if (disposeAmount < 0 || string.IsNullOrWhiteSpace(actionReason)) { Fail(I18n.T("Enter the sale amount (0 if scrapped) and a reason.", "বিক্রয়মূল্য (ফেলে দিলে ০) ও কারণ লিখুন।")); return; }
+        try
+        {
+            var assetId = actionAsset.ID;
+            var (code, gainLoss) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            var x = await db.FixedAssets.FindAsync(assetId);
+            if (x is null || x.Status != "Active") throw new InvalidOperationException("Asset is no longer active.");
+            var accumulated = x.OpeningAccumulatedDepreciation + (await db.FixedAssetDepreciations.Where(d => d.AssetID == x.ID).SumAsync(d => (decimal?)d.Amount) ?? 0);
+            var bookValue = x.Cost - accumulated;
+            var gainLoss = disposeAmount - bookValue;
+            var lines = new List<AccountingPosting.PostingLine>();
+            if (accumulated > 0) lines.Add(new(await AccumulatedHeadAsync(db, x.AssetAccountID), accumulated, 0, x.CostCenterID));
+            if (disposeAmount > 0) lines.Add(new(await AccountMap.HeadAsync(db, disposeIn, "Asset", AccountingPosting.Cash), disposeAmount, 0));
+            if (gainLoss > 0) lines.Add(new(await AccountMap.IncomeAsync(db, AccountMap.OtherIncome), 0, gainLoss, x.CostCenterID));
+            if (gainLoss < 0) lines.Add(new(await AccountMap.HeadAsync(db, AccountMap.OtherAdminExpense, "Expense", 5), -gainLoss, 0, x.CostCenterID));
+            lines.Add(new(x.AssetAccountID, 0, x.Cost, x.CostCenterID));
+            var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", disposeDate.Date, $"Disposal of {x.AssetCode} {x.Name}: {actionReason.Trim()}", $"FIXED-ASSET-DISPOSAL:{x.ID}", UserId, lines.ToArray());
+            await db.SaveChangesAsync();
+            x.Status = "Disposed"; x.DisposedDate = disposeDate.Date; x.DisposalAmount = disposeAmount; x.DisposalVoucherID = voucher.ID;
+            await db.SaveChangesAsync();
+            return (x.AssetCode, gainLoss);
+            });
+            Ok(I18n.T($"{code} disposed. {(gainLoss >= 0 ? "Gain" : "Loss")}: {I18n.FormatCurrency(Math.Abs(gainLoss))}.", $"{code} বাতিল হয়েছে। {(gainLoss >= 0 ? "লাভ" : "ক্ষতি")}: {I18n.FormatCurrency(Math.Abs(gainLoss))}।"));
+            actionAsset = null;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+    }
+
+    private void Ok(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+}

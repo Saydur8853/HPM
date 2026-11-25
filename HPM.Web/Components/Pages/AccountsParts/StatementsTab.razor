@@ -1,0 +1,315 @@
+@* Accounts tab 7: financial statements built only from approved voucher lines, so every report
+   agrees with the ledger: Trial Balance, Profit & Loss, Balance Sheet, Department P&L, hourly income. *@
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+
+<div class="acc-card" style="margin-bottom:14px;">
+    <div style="padding:10px 14px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; justify-content:space-between;">
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            @foreach (var s in new[] { ("dept", "🏥 Department P&L"), ("pl", "📈 Profit & Loss"), ("bs", "🏦 Balance Sheet"), ("tb", "⚖️ Trial Balance"), ("hourly", "⏱️ Hourly Income") })
+            {
+                <button type="button" class="acc-pill-filter @(view == s.Item1 ? "active" : "")" @onclick="() => view = s.Item1">@s.Item2</button>
+            }
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+            <span style="font-size:11px; color:#64748b; font-weight:700;">
+                @(view is "bs" or "tb" ? I18n.T("As of", "তারিখ পর্যন্ত") + " " + ToDate.ToString("dd MMM yyyy") :
+                  view == "hourly" ? ToDate.ToString("dd MMM yyyy") :
+                  FromDate.ToString("dd MMM yyyy") + " — " + ToDate.ToString("dd MMM yyyy"))
+            </span>
+            <button type="button" class="acc-print-btn primary" @onclick='() => JS.InvokeVoidAsync("hpm.printElement", "acc-statement-print", StatementTitle)'>🖨️ @I18n.T("Print")</button>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(loadError))
+{
+    <div class="alert danger" style="padding:8px 14px; font-size:12px; font-weight:700; margin-bottom:12px; border-radius:6px;">@loadError</div>
+}
+
+<div class="acc-card" id="acc-statement-print">
+    <div class="acc-card-header">
+        <div>
+            <h2 class="acc-card-title"><span>@StatementTitle</span></h2>
+            <div style="font-size:11px; color:#64748b;">@Branding.HospitalName · @SubTitle</div>
+        </div>
+    </div>
+
+    @if (view == "tb")
+    {
+        <div class="acc-table-wrap">
+            <table class="acc-table">
+                <thead><tr><th style="width:80px;">@I18n.T("Code")</th><th>@I18n.T("Account Head", "হিসাব খাত")</th><th>@I18n.T("Type")</th><th class="num">@I18n.T("Debit (৳)", "ডেবিট")</th><th class="num">@I18n.T("Credit (৳)", "ক্রেডিট")</th></tr></thead>
+                <tbody>
+                    @foreach (var a in heads.Where(a => balanceToDate.GetValueOrDefault(a.ID) != 0))
+                    {
+                        var b = balanceToDate[a.ID];
+                        <tr><td><strong style="color:#0284c7;">@a.Code</strong></td><td>@a.Name</td><td style="font-size:11px;">@a.AccountType</td>
+                            <td class="num">@(b > 0 ? I18n.FormatCurrency(b) : "")</td><td class="num">@(b < 0 ? I18n.FormatCurrency(-b) : "")</td></tr>
+                    }
+                    @{ var tbDr = balanceToDate.Values.Where(x => x > 0).Sum(); var tbCr = -balanceToDate.Values.Where(x => x < 0).Sum(); }
+                    <tr class="total-row"><td colspan="3" style="text-align:right;">@I18n.T("Total", "মোট") @(tbDr == tbCr ? "✓" : "⚠")</td><td class="num">@I18n.FormatCurrency(tbDr)</td><td class="num">@I18n.FormatCurrency(tbCr)</td></tr>
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (view == "pl")
+    {
+        <div class="acc-table-wrap">
+            <table class="acc-table">
+                <tbody>
+                    @PlSection(I18n.T("Income", "আয়"), PlHeads(a => a.AccountType == "Income"), true)
+                    <tr class="total-row"><td>@I18n.T("Net Income", "নিট আয়")</td><td class="num">@I18n.FormatCurrency(plIncome)</td></tr>
+                    @PlSection(I18n.T("Direct Cost", "সরাসরি খরচ"), PlHeads(a => a.AccountType == "Expense" && a.Code.StartsWith('5')), false)
+                    <tr class="total-row"><td>@I18n.T("Gross Profit (Contribution)", "সরাসরি লাভ")</td><td class="num">@I18n.FormatCurrency(plIncome - plDirect)</td></tr>
+                    @PlSection(I18n.T("Operating Expense", "পরিচালন খরচ"), PlHeads(a => a.AccountType == "Expense" && !a.Code.StartsWith('5') && !a.Code.StartsWith('7')), false)
+                    @PlSection(I18n.T("Depreciation & Finance Cost", "অবচয় ও আর্থিক খরচ"), PlHeads(a => a.AccountType == "Expense" && a.Code.StartsWith('7')), false)
+                    <tr class="total-row" style="font-size:13px;"><td>@I18n.T("Net Profit", "নিট লাভ")</td>
+                        <td class="num" style="color:@(plIncome - plExpense >= 0 ? "#047857" : "#b91c1c");">@I18n.FormatCurrency(plIncome - plExpense)</td></tr>
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (view == "bs")
+    {
+        var assets = heads.Where(a => a.AccountType == "Asset" && balanceToDate.GetValueOrDefault(a.ID) != 0).ToList();
+        var liabilities = heads.Where(a => a.AccountType == "Liability" && balanceToDate.GetValueOrDefault(a.ID) != 0).ToList();
+        var equity = heads.Where(a => a.AccountType == "Equity" && balanceToDate.GetValueOrDefault(a.ID) != 0).ToList();
+        var totalAssets = assets.Sum(a => balanceToDate[a.ID]);
+        var totalLiabilities = -liabilities.Sum(a => balanceToDate[a.ID]);
+        var totalEquity = -equity.Sum(a => balanceToDate[a.ID]) + profitToDate;
+        <div class="acc-grid-2col" style="padding:12px; gap:12px;">
+            <table class="acc-table">
+                <thead><tr><th>@I18n.T("Assets", "সম্পদ")</th><th class="num">৳</th></tr></thead>
+                <tbody>
+                    @foreach (var a in assets) { <tr><td><span style="color:#0284c7; font-weight:700;">@a.Code</span> @a.Name</td><td class="num">@I18n.FormatCurrency(balanceToDate[a.ID])</td></tr> }
+                    <tr class="total-row"><td>@I18n.T("Total Assets", "মোট সম্পদ")</td><td class="num">@I18n.FormatCurrency(totalAssets)</td></tr>
+                </tbody>
+            </table>
+            <table class="acc-table">
+                <thead><tr><th>@I18n.T("Liabilities & Equity", "দায় ও মালিকানা")</th><th class="num">৳</th></tr></thead>
+                <tbody>
+                    @foreach (var a in liabilities) { <tr><td><span style="color:#0284c7; font-weight:700;">@a.Code</span> @a.Name</td><td class="num">@I18n.FormatCurrency(-balanceToDate[a.ID])</td></tr> }
+                    <tr class="total-row"><td>@I18n.T("Total Liabilities", "মোট দায়")</td><td class="num">@I18n.FormatCurrency(totalLiabilities)</td></tr>
+                    @foreach (var a in equity) { <tr><td><span style="color:#0284c7; font-weight:700;">@a.Code</span> @a.Name</td><td class="num">@I18n.FormatCurrency(-balanceToDate[a.ID])</td></tr> }
+                    <tr><td>@I18n.T("Profit to date (not yet closed)", "এ পর্যন্ত লাভ (ক্লোজ হয়নি)")</td><td class="num">@I18n.FormatCurrency(profitToDate)</td></tr>
+                    <tr class="total-row"><td>@I18n.T("Total Liabilities & Equity", "মোট দায় ও মালিকানা") @(totalAssets == totalLiabilities + totalEquity ? "✓" : "⚠")</td><td class="num">@I18n.FormatCurrency(totalLiabilities + totalEquity)</td></tr>
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (view == "dept")
+    {
+        <div class="acc-table-wrap">
+            <table class="acc-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Department", "বিভাগ")</th>
+                        <th class="num">@I18n.T("Net Income", "নিট আয়")</th>
+                        <th class="num">@I18n.T("Direct Cost", "সরাসরি খরচ")</th>
+                        <th class="num">@I18n.T("Contribution", "সরাসরি লাভ")</th>
+                        <th class="num">@I18n.T("Own Expense", "নিজস্ব খরচ")</th>
+                        <th class="num">@I18n.T("Before Allocation", "বণ্টনের আগে")</th>
+                        <th class="num">@I18n.T("Allocated", "বণ্টিত খরচ")</th>
+                        <th class="num">@I18n.T("Net Profit", "নিট লাভ")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in deptRows)
+                    {
+                        <tr>
+                            <td><strong>@r.Name</strong></td>
+                            <td class="num">@Money(r.Income)</td>
+                            <td class="num">@Money(r.Direct)</td>
+                            <td class="num" style="font-weight:700;">@Money(r.Income - r.Direct)</td>
+                            <td class="num">@Money(r.Own)</td>
+                            <td class="num" style="font-weight:700;">@Money(r.Income - r.Direct - r.Own)</td>
+                            <td class="num">@Money(r.Allocated)</td>
+                            <td class="num" style="font-weight:850; color:@(r.Net >= 0 ? "#047857" : "#b91c1c");">@Money(r.Net)</td>
+                        </tr>
+                    }
+                    <tr class="total-row">
+                        <td>@I18n.T("Hospital Total", "হাসপাতাল মোট")</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Income))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Direct))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Income - x.Direct))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Own))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Income - x.Direct - x.Own))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Allocated))</td>
+                        <td class="num">@I18n.FormatCurrency(deptRows.Sum(x => x.Net))</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div style="padding:8px 14px; font-size:11px; color:#64748b;">
+            @I18n.T("Allocated = shared and service-department costs spread at month end. Judge a department in-charge on \"Before Allocation\".",
+                    "বণ্টিত খরচ = মাস শেষে ভাগ হওয়া যৌথ ও সেবা বিভাগের খরচ। ইনচার্জের মূল্যায়ন \"বণ্টনের আগে\" দিয়ে করুন।")
+        </div>
+    }
+    else
+    {
+        <div class="acc-table-wrap">
+            <table class="acc-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Hour", "ঘণ্টা")</th>
+                        @foreach (var c in hourlyCenters) { <th class="num">@CenterName(c)</th> }
+                        <th class="num">@I18n.T("Total", "মোট")</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (hourly.Count == 0)
+                    {
+                        <tr><td colspan="@(hourlyCenters.Count + 2)" style="text-align:center; padding:24px; color:#64748b;">@I18n.T("No income posted on this day.", "এই দিনে কোনো আয় নেই।")</td></tr>
+                    }
+                    @foreach (var h in hourly.Select(x => x.Hour).Distinct().OrderBy(x => x))
+                    {
+                        <tr>
+                            <td style="font-weight:750;">@($"{h:00}:00 – {h:00}:59")</td>
+                            @foreach (var c in hourlyCenters) { <td class="num">@Money(hourly.Where(x => x.Hour == h && x.CC == c).Sum(x => x.Net))</td> }
+                            <td class="num" style="font-weight:800;">@I18n.FormatCurrency(hourly.Where(x => x.Hour == h).Sum(x => x.Net))</td>
+                        </tr>
+                    }
+                    @if (hourly.Count > 0)
+                    {
+                        <tr class="total-row">
+                            <td>@I18n.T("Day Total", "দিনের মোট")</td>
+                            @foreach (var c in hourlyCenters) { <td class="num">@I18n.FormatCurrency(hourly.Where(x => x.CC == c).Sum(x => x.Net))</td> }
+                            <td class="num">@I18n.FormatCurrency(hourly.Sum(x => x.Net))</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div style="padding:8px 14px; font-size:11px; color:#64748b;">
+            @I18n.T("Net income (after discount) by the time each bill was posted, for the \"To\" date of the period filter.",
+                    "প্রতিটা বিল পোস্টের সময় অনুযায়ী নিট আয় (ডিসকাউন্ট বাদে), পিরিয়ড ফিল্টারের \"শেষ\" তারিখের জন্য।")
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public DateTime FromDate { get; set; }
+    [Parameter] public DateTime ToDate { get; set; }
+    [Parameter] public int RefreshToken { get; set; }
+
+    private string view = "dept";
+    private string loadError = "";
+    private List<AccountHead> heads = [];
+    private List<CostCenter> centers = [];
+    private Dictionary<int, decimal> balanceToDate = [], periodNet = [];
+    private decimal plIncome, plDirect, plExpense, profitToDate;
+    private List<DeptRow> deptRows = [];
+    private List<(int Hour, int? CC, decimal Net)> hourly = [];
+    private List<int?> hourlyCenters = [];
+    private (DateTime, DateTime, int) loaded;
+
+    private sealed record DeptRow(string Name, decimal Income, decimal Direct, decimal Own, decimal Allocated)
+    {
+        public decimal Net => Income - Direct - Own - Allocated;
+    }
+
+    private string StatementTitle => view switch
+    {
+        "tb" => I18n.T("Trial Balance", "ট্রায়াল ব্যালেন্স"),
+        "pl" => I18n.T("Profit & Loss Statement", "লাভ-ক্ষতি বিবরণী"),
+        "bs" => I18n.T("Balance Sheet", "ব্যালেন্স শিট"),
+        "hourly" => I18n.T("Hourly Income by Department", "বিভাগভিত্তিক ঘণ্টাওয়ারি আয়"),
+        _ => I18n.T("Department Profit & Loss", "বিভাগভিত্তিক লাভ-ক্ষতি")
+    };
+
+    private string SubTitle => view is "bs" or "tb" ? $"As of {ToDate:dd MMM yyyy}" : view == "hourly" ? $"{ToDate:dd MMM yyyy}" : $"{FromDate:dd MMM yyyy} — {ToDate:dd MMM yyyy}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loaded == (FromDate, ToDate, RefreshToken)) return;
+        try { loadError = ""; await LoadAsync(); }
+        catch (Exception) { loadError = I18n.T("The database did not answer in time (it may be busy). Press 🔄 or reopen the tab to try again.", "ডাটাবেস সময়মতো উত্তর দেয়নি (ব্যস্ত থাকতে পারে)। 🔄 চাপুন বা ট্যাবটা আবার খুলুন।"); }
+    }
+
+    private async Task LoadAsync()
+    {
+        loaded = (FromDate, ToDate, RefreshToken);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        heads = await db.AccountHeads.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        var from = FromDate.Date; var end = ToDate.Date.AddDays(1);
+
+        var posted = from l in db.AccountVoucherLines
+                     join v in db.AccountVouchers on l.VoucherID equals v.ID
+                     where v.IsPosted && v.Status != "Pending" && v.Status != "Rejected"
+                     select new { l.AccountID, l.CostCenterID, l.Debit, l.Credit, v.VoucherDate, v.TransDate, v.Reference, v.ReversalOfVoucherID };
+
+        balanceToDate = (await posted.Where(x => x.VoucherDate < end).GroupBy(x => x.AccountID)
+                .Select(g => new { g.Key, Net = g.Sum(x => x.Debit - x.Credit) }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Net);
+        var types = heads.ToDictionary(x => x.ID, x => x.AccountType);
+        profitToDate = -balanceToDate.Where(x => types.GetValueOrDefault(x.Key) is "Income" or "Expense").Sum(x => x.Value);
+
+        var period = await posted.Where(x => x.VoucherDate >= from && x.VoucherDate < end)
+            .Select(x => new { x.AccountID, x.CostCenterID, x.Debit, x.Credit, x.Reference, x.ReversalOfVoucherID }).ToListAsync();
+        var allocationVoucherIds = (await db.AccountVouchers.AsNoTracking()
+            .Where(x => x.Reference != null && x.Reference.StartsWith("ALLOCATION:")).Select(x => x.ID).ToListAsync()).ToHashSet();
+        bool IsAllocation(string? reference, long? reversalOf) =>
+            (reference != null && reference.StartsWith("ALLOCATION:")) || (reversalOf is long r && allocationVoucherIds.Contains(r));
+        periodNet = period.GroupBy(x => x.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Credit - x.Debit));
+        plIncome = period.Where(x => types.GetValueOrDefault(x.AccountID) == "Income").Sum(x => x.Credit - x.Debit);
+        var codes = heads.ToDictionary(x => x.ID, x => x.Code);
+        bool IsExpense(int id) => types.GetValueOrDefault(id) == "Expense";
+        bool IsDirect(int id) => IsExpense(id) && codes.GetValueOrDefault(id, "").StartsWith('5');
+        plDirect = period.Where(x => IsDirect(x.AccountID)).Sum(x => x.Debit - x.Credit);
+        plExpense = period.Where(x => IsExpense(x.AccountID)).Sum(x => x.Debit - x.Credit);
+
+        // Department P&L: allocation vouchers are shown in their own column.
+        deptRows = period.Where(x => types.GetValueOrDefault(x.AccountID) is "Income" or "Expense")
+            .GroupBy(x => x.CostCenterID)
+            .Select(g =>
+            {
+                var alloc = g.Where(x => IsAllocation(x.Reference, x.ReversalOfVoucherID)).ToList();
+                var rest = g.Where(x => !IsAllocation(x.Reference, x.ReversalOfVoucherID)).ToList();
+                return (CC: g.Key, Row: new DeptRow(
+                    g.Key is int id ? CenterName(id) : I18n.T("(No department)", "(বিভাগ নেই)"),
+                    rest.Where(x => types[x.AccountID] == "Income").Sum(x => x.Credit - x.Debit),
+                    rest.Where(x => IsDirect(x.AccountID)).Sum(x => x.Debit - x.Credit),
+                    rest.Where(x => IsExpense(x.AccountID) && !IsDirect(x.AccountID)).Sum(x => x.Debit - x.Credit),
+                    alloc.Sum(x => x.Debit - x.Credit)));
+            })
+            .OrderBy(x => x.CC is null ? "ZZZ" : CenterCode(x.CC.Value))
+            .Select(x => x.Row)
+            .Where(r => r.Income != 0 || r.Direct != 0 || r.Own != 0 || r.Allocated != 0)
+            .ToList();
+
+        // Hourly income on the "To" day.
+        var day = ToDate.Date; var dayEnd = day.AddDays(1);
+        var incomeIds = heads.Where(x => x.AccountType == "Income").Select(x => x.ID).ToList();
+        hourly = (await posted.Where(x => x.VoucherDate >= day && x.VoucherDate < dayEnd && incomeIds.Contains(x.AccountID))
+                .Select(x => new { x.TransDate, x.CostCenterID, Net = x.Credit - x.Debit }).ToListAsync())
+            .GroupBy(x => (x.TransDate.Hour, x.CostCenterID))
+            .Select(g => (g.Key.Hour, g.Key.CostCenterID, g.Sum(x => x.Net)))
+            .ToList();
+        hourlyCenters = hourly.Select(x => x.CC).Distinct().OrderBy(x => x is null ? "ZZZ" : CenterCode(x.Value)).ToList();
+    }
+
+    private string CenterName(int? id) => id is int i && centers.FirstOrDefault(x => x.ID == i) is { } c ? c.Name : I18n.T("(No department)", "(বিভাগ নেই)");
+    private string CenterCode(int id) => centers.FirstOrDefault(x => x.ID == id)?.Code ?? "ZZZ";
+    private string Money(decimal v) => v == 0 ? "—" : I18n.FormatCurrency(v);
+
+    private List<(AccountHead Head, decimal Amount)> PlHeads(Func<AccountHead, bool> filter) =>
+        heads.Where(filter).Select(a => (a, periodNet.GetValueOrDefault(a.ID))).Where(x => x.Item2 != 0).ToList();
+
+    private RenderFragment PlSection(string title, List<(AccountHead Head, decimal Amount)> rows, bool isIncome) => __builder =>
+    {
+        <tr><td colspan="2" style="font-weight:850; background:#f8fafc; color:#0f172a;">@title</td></tr>
+        @foreach (var r in rows)
+        {
+            <tr>
+                <td style="padding-left:22px;"><span style="color:#0284c7; font-weight:700;">@r.Head.Code</span> @r.Head.Name</td>
+                <td class="num">@I18n.FormatCurrency(isIncome ? r.Amount : -r.Amount)</td>
+            </tr>
+        }
+        @if (rows.Count == 0)
+        {
+            <tr><td colspan="2" style="padding-left:22px; color:#94a3b8;">—</td></tr>
+        }
+    };
+}

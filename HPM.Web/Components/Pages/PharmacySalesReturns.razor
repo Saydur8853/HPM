@@ -507,6 +507,7 @@
             var header=new PharmacySalesReturn{CashMemoID=source.ID,StoreID=source.BufferStore??1,RefundAmount=refund,Reason=reason.Trim(),IsPosted=true,EnteredBy=uid,TransDate=now};
             db.PharmacySalesReturns.Add(header);
             await db.SaveChangesAsync();
+            decimal restockCost=0;
             foreach(var line in lines)
             {
                 var sold=source.Items.Single(x=>x.ID==line.CashMemoSubID);
@@ -518,6 +519,7 @@
                     var stock=await db.MedicineStoreBalances.SingleAsync(x=>x.ID==line.StockBalanceID);
                     if(stock.MedicineStoreID!=header.StoreID||stock.ServiceID!=line.ServiceID)throw new InvalidOperationException("Invalid restock batch.");
                     stock.Balance+=line.Quantity;
+                    restockCost+=buyRate*line.Quantity;
                 }
                 db.PharmacySalesReturnItems.Add(new PharmacySalesReturnItem{SalesReturnID=header.ID,CashMemoSubID=line.CashMemoSubID,ServiceID=line.ServiceID,StockBalanceID=line.StockBalanceID>0?line.StockBalanceID:null,Quantity=line.Quantity,Rate=line.Rate,BuyRate=buyRate,IsRestocked=line.StockBalanceID>0});
                 if(source.PatientType=="2"&&!string.IsNullOrWhiteSpace(source.RegNo))
@@ -532,10 +534,21 @@
             if(!await db.AccountVouchers.AnyAsync(x=>x.Reference==originalReference))
             {
                 var originalNet=Math.Max(0,(source.Total??gross)-(source.Discount??0));
-                if(originalNet>0)AccountingPosting.AddPostedVoucher(db,source.PatientType=="1"?"Receipt":"Journal",source.TransDate,$"Pharmacy sale to {source.Name}",originalReference,source.EnteredBy,(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,originalNet,0),(AccountingPosting.PharmacySales,0,originalNet));
+                if(originalNet>0)AccountingPosting.AddPostedVoucher(db,source.PatientType=="1"?"Receipt":"Journal",source.TransDate,$"Pharmacy sale to {source.Name}",originalReference,source.EnteredBy,
+                    [new AccountingPosting.PostingLine(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,originalNet,0),
+                     new AccountingPosting.PostingLine(await AccountMap.HeadAsync(db,AccountMap.PharmacySales,"Income",AccountingPosting.PharmacySales),0,originalNet,await AccountMap.CenterAsync(db,AccountMap.CcPharmacy))]);
             }
             if(source.PatientType=="1")db.CentralCashCollections.Add(new CentralCashCollection{Amount=-refund,ModuleFlag=4,HeadID=4,EnteredBy=uid,TransDate=now,TransDateCL=now,ReferenceID=header.ID});
-            AccountingPosting.AddPostedVoucher(db,"Sales Return",now,$"Pharmacy sales return for memo #{source.ID}",$"PHARMACY-SALES-RETURN:{header.ID}",uid,(AccountingPosting.PharmacySales,refund,0),(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,0,refund));
+            // Refund out of Pharmacy sales; restocked medicine goes back to inventory at its cost.
+            var pharmacyCc=await AccountMap.CenterAsync(db,AccountMap.CcPharmacy);
+            var returnCost=Math.Round(restockCost,2);
+            AccountingPosting.AddPostedVoucher(db,"Sales Return",now,$"Pharmacy sales return for memo #{source.ID}",$"PHARMACY-SALES-RETURN:{header.ID}",uid,
+            [
+                new AccountingPosting.PostingLine(await AccountMap.HeadAsync(db,AccountMap.PharmacySales,"Income",AccountingPosting.PharmacySales),refund,0,pharmacyCc),
+                new AccountingPosting.PostingLine(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,0,refund),
+                new AccountingPosting.PostingLine(await AccountMap.HeadAsync(db,AccountMap.MedicineInventory,"Asset",AccountingPosting.CostOfMedicineSold),returnCost,0),
+                new AccountingPosting.PostingLine(AccountingPosting.CostOfMedicineSold,0,returnCost,pharmacyCc)
+            ]);
             await db.SaveChangesAsync();
             return (Header: header, Refund: refund);
             }, IsolationLevel.Serializable);

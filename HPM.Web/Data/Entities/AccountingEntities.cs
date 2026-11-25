@@ -10,6 +10,93 @@ public sealed class AccountHead
     [Required, StringLength(20)] public string AccountType { get; set; } = "Asset";
     public int? ParentID { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>Head used by automatic posting; its type cannot change and it cannot be deactivated.</summary>
+    public bool IsSystem { get; set; }
+    /// <summary>Every voucher line on this head must name a cost center.</summary>
+    public bool RequiresCostCenter { get; set; }
+}
+
+/// <summary>A hospital department that earns income (Revenue), serves others (Service) or runs the hospital (Admin).</summary>
+public sealed class CostCenter
+{
+    public int ID { get; set; }
+    [Required, StringLength(20)] public string Code { get; set; } = string.Empty;
+    [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
+    [Required, StringLength(20)] public string CenterType { get; set; } = "Revenue";
+    [StringLength(100)] public string? Incharge { get; set; }
+    public decimal? AreaSqFt { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsSystem { get; set; }
+}
+
+public sealed class FixedAsset
+{
+    public int ID { get; set; }
+    [Required, StringLength(30)] public string AssetCode { get; set; } = string.Empty;
+    [Required, StringLength(150)] public string Name { get; set; } = string.Empty;
+    [StringLength(100)] public string? SerialNo { get; set; }
+    public int AssetAccountID { get; set; }
+    public int CostCenterID { get; set; }
+    [StringLength(150)] public string? Location { get; set; }
+    [StringLength(150)] public string? Supplier { get; set; }
+    [StringLength(50)] public string? InvoiceNo { get; set; }
+    public DateTime PurchaseDate { get; set; }
+    public DateTime InServiceDate { get; set; }
+    public decimal Cost { get; set; }
+    public decimal SalvageValue { get; set; }
+    public int UsefulLifeYears { get; set; } = 10;
+    public decimal OpeningAccumulatedDepreciation { get; set; }
+    [Required, StringLength(20)] public string Status { get; set; } = "Active";
+    public DateTime? WarrantyEnd { get; set; }
+    public DateTime? DisposedDate { get; set; }
+    public decimal? DisposalAmount { get; set; }
+    public long? PurchaseVoucherID { get; set; }
+    public long? DisposalVoucherID { get; set; }
+    public int EnteredBy { get; set; }
+    public DateTime TransDate { get; set; }
+}
+
+public sealed class FixedAssetTransfer
+{
+    public int ID { get; set; }
+    public int AssetID { get; set; }
+    public int FromCostCenterID { get; set; }
+    public int ToCostCenterID { get; set; }
+    public DateTime TransferDate { get; set; }
+    [StringLength(300)] public string? Reason { get; set; }
+    public int EnteredBy { get; set; }
+}
+
+public sealed class FixedAssetDepreciation
+{
+    public long ID { get; set; }
+    public int AssetID { get; set; }
+    public DateTime PeriodMonth { get; set; }
+    public decimal Amount { get; set; }
+    public int CostCenterID { get; set; }
+    public long VoucherID { get; set; }
+}
+
+/// <summary>How the month-end close spreads one cost center's expenses over the revenue cost centers.</summary>
+public sealed class AllocationRule
+{
+    public int ID { get; set; }
+    public int SourceCostCenterID { get; set; }
+    /// <summary>Area, Revenue, BillCount or Fixed.</summary>
+    [Required, StringLength(20)] public string Basis { get; set; } = "Area";
+    /// <summary>Only for Basis = Fixed: the receiving cost center and its weight.</summary>
+    public int? TargetCostCenterID { get; set; }
+    public decimal? Weight { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class AllocationRun
+{
+    public int ID { get; set; }
+    public DateTime PeriodMonth { get; set; }
+    public long VoucherID { get; set; }
+    public int RunBy { get; set; }
+    public DateTime RunAt { get; set; }
 }
 
 public sealed class AccountVoucher
@@ -40,6 +127,7 @@ public sealed class AccountVoucherLine
     public int AccountID { get; set; }
     public decimal Debit { get; set; }
     public decimal Credit { get; set; }
+    public int? CostCenterID { get; set; }
     public AccountVoucher? Voucher { get; set; }
 }
 

@@ -149,6 +149,15 @@ await using (var scope = app.Services.CreateAsyncScope())
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<HpmDbContext>>();
         await using var db = await dbFactory.CreateDbContextAsync();
         await db.Database.MigrateAsync();
+        // Cost-center accounting tables, extended chart of accounts and cost centers (idempotent).
+        try
+        {
+            await AccountingSchema.EnsureAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Accounting schema update failed: {Message}", ex.Message);
+        }
         if (app.Environment.IsDevelopment())
             await HrmDemoDataSeeder.SeedAsync(db);
 

@@ -904,6 +904,7 @@
                 await db.SaveChangesAsync();
 
                 var sl = 1;
+                decimal memoCost = 0;
                 foreach (var line in curLines)
                 {
                     var med = await db.Services.FindAsync(line.ServiceID);
@@ -929,6 +930,7 @@
                     }
                     if (remaining > 0) throw new InvalidOperationException($"Insufficient stock for {med?.Name}.");
                     soldItem.BuyRate = line.Quantity <= 0 ? 0 : Math.Round(totalCost / line.Quantity, 2);
+                    memoCost += totalCost;
                     
                     line.BatchNo = string.Join(", ", soldItem.BatchAllocations.Select(b => b.BatchNo).Where(b => !string.IsNullOrEmpty(b)));
                     line.ExpireDate = soldItem.BatchAllocations.OrderBy(b => b.ExpireDate).FirstOrDefault()?.ExpireDate;
@@ -958,7 +960,21 @@
                 }
 
                 if (curPatientType == "1") db.CentralCashCollections.Add(new CentralCashCollection { Amount = curNet, ModuleFlag = 4, HeadID = 4, EnteredBy = uid, TransDate = now, TransDateCL = now, ReferenceID = memo.ID });
-                if (curNet > 0) AccountingPosting.AddPostedVoucher(db, curPatientType == "1" ? "Receipt" : "Journal", now, $"Pharmacy sale to {memo.Name}", $"PHARMACY-SALE:{memo.ID}", uid, (curPatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, curNet, 0), (AccountingPosting.PharmacySales, 0, curNet));
+                if (curNet > 0 || memoCost > 0)
+                {
+                    // Sale at net price to the Pharmacy department, and the medicine cost out of inventory.
+                    var pharmacyCc = await AccountMap.CenterAsync(db, AccountMap.CcPharmacy);
+                    var salesId = await AccountMap.HeadAsync(db, AccountMap.PharmacySales, "Income", AccountingPosting.PharmacySales);
+                    var inventoryId = await AccountMap.HeadAsync(db, AccountMap.MedicineInventory, "Asset", AccountingPosting.CostOfMedicineSold);
+                    var cost = Math.Round(memoCost, 2);
+                    AccountingPosting.AddPostedVoucher(db, curPatientType == "1" ? "Receipt" : "Journal", now, $"Pharmacy sale to {memo.Name}", $"PHARMACY-SALE:{memo.ID}", uid,
+                    [
+                        new AccountingPosting.PostingLine(curPatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, curNet, 0),
+                        new AccountingPosting.PostingLine(salesId, 0, curNet, pharmacyCc),
+                        new AccountingPosting.PostingLine(AccountingPosting.CostOfMedicineSold, cost, 0, pharmacyCc),
+                        new AccountingPosting.PostingLine(inventoryId, 0, cost)
+                    ]);
+                }
 
                 await db.SaveChangesAsync();
                 await tx.CommitAsync();

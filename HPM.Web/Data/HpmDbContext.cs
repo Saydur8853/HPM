@@ -86,6 +86,12 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<CashierHandover> CashierHandovers => Set<CashierHandover>();
     public DbSet<FinancialPeriodLock> FinancialPeriodLocks => Set<FinancialPeriodLock>();
     public DbSet<FinancialReversal> FinancialReversals => Set<FinancialReversal>();
+    public DbSet<CostCenter> CostCenters => Set<CostCenter>();
+    public DbSet<FixedAsset> FixedAssets => Set<FixedAsset>();
+    public DbSet<FixedAssetTransfer> FixedAssetTransfers => Set<FixedAssetTransfer>();
+    public DbSet<FixedAssetDepreciation> FixedAssetDepreciations => Set<FixedAssetDepreciation>();
+    public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
+    public DbSet<AllocationRun> AllocationRuns => Set<AllocationRun>();
     public DbSet<LegacyMigrationRun> LegacyMigrationRuns => Set<LegacyMigrationRun>();
     public DbSet<LegacyMigrationQuarantine> LegacyMigrationQuarantines => Set<LegacyMigrationQuarantine>();
     public DbSet<LabTestParameter> LabTestParameters => Set<LabTestParameter>();
@@ -838,6 +844,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         category.Property(x => x.GroupSubID).HasColumnName("Group_Sub_ID");
         category.Property(x => x.InvestigationSLNO).HasColumnName("Investigation_SLNO");
         category.Property(x => x.DiagnosticType).HasColumnName("Diagnostic_Type").HasMaxLength(30);
+        category.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
 
         var service = b.Entity<Service>();
         service.ToTable("Service");
@@ -940,6 +947,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         category.Property(x => x.AdmissionFee).HasColumnName("Admission_Fee").HasColumnType("numeric(18,2)");
         category.Property(x => x.ServiceCharge).HasColumnName("Service_Charge").HasColumnType("numeric(18,2)");
         category.Property(x => x.Food).HasColumnType("numeric(18,2)");
+        category.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
         category.HasOne<IpdDepartment>().WithMany().HasForeignKey(x => x.IpdDepartmentID).OnDelete(DeleteBehavior.Restrict);
         category.HasData(new BedCategory { ID = 1, Name = "General Bed", Rate = 1000m, IpdDepartmentID = 1, AdmissionFee = 500m, ServiceCharge = 0m, Food = 0m });
 
@@ -1489,6 +1497,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         account.Property(x => x.AccountType).HasColumnName("Account_Type").HasMaxLength(20);
         account.Property(x => x.ParentID).HasColumnName("Parent_ID");
         account.Property(x => x.IsActive).HasColumnName("Is_Active");
+        account.Property(x => x.IsSystem).HasColumnName("Is_System");
+        account.Property(x => x.RequiresCostCenter).HasColumnName("Requires_Cost_Center");
         account.HasIndex(x => x.Code).IsUnique();
         account.HasData(
             new AccountHead { ID = 1, Code = "1000", Name = "Cash in Hand", AccountType = "Asset", IsActive = true },
@@ -1531,6 +1541,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         line.Property(x => x.AccountID).HasColumnName("Account_ID");
         line.Property(x => x.Debit).HasColumnType("numeric(18,2)");
         line.Property(x => x.Credit).HasColumnType("numeric(18,2)");
+        line.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
         line.HasOne(x => x.Voucher).WithMany(x => x.Lines).HasForeignKey(x => x.VoucherID).OnDelete(DeleteBehavior.Cascade);
         line.HasOne<AccountHead>().WithMany().HasForeignKey(x => x.AccountID).OnDelete(DeleteBehavior.Restrict);
         line.HasIndex(x => new { x.AccountID, x.VoucherID });
@@ -1577,6 +1588,81 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         reversal.Property(x => x.ReversedBy).HasColumnName("Reversed_By");
         reversal.Property(x => x.ReversedAt).HasColumnName("Reversed_At").HasColumnType("datetime");
         reversal.HasIndex(x => new { x.EntityType, x.EntityID }).IsUnique();
+
+        // Cost centers, fixed assets and month-end allocation. These tables are created by
+        // AccountingSchema.EnsureAsync at startup (idempotent SQL), not by an EF migration.
+        var cc = b.Entity<CostCenter>();
+        cc.ToTable("Accounts_Cost_Center");
+        cc.HasKey(x => x.ID);
+        cc.Property(x => x.Code).HasMaxLength(20);
+        cc.Property(x => x.Name).HasMaxLength(100);
+        cc.Property(x => x.CenterType).HasColumnName("Center_Type").HasMaxLength(20);
+        cc.Property(x => x.Incharge).HasMaxLength(100);
+        cc.Property(x => x.AreaSqFt).HasColumnName("Area_Sq_Ft").HasColumnType("numeric(18,2)");
+        cc.Property(x => x.IsActive).HasColumnName("Is_Active");
+        cc.Property(x => x.IsSystem).HasColumnName("Is_System");
+
+        var asset = b.Entity<FixedAsset>();
+        asset.ToTable("Accounts_Fixed_Asset");
+        asset.HasKey(x => x.ID);
+        asset.Property(x => x.AssetCode).HasColumnName("Asset_Code").HasMaxLength(30);
+        asset.Property(x => x.Name).HasMaxLength(150);
+        asset.Property(x => x.SerialNo).HasColumnName("Serial_No").HasMaxLength(100);
+        asset.Property(x => x.AssetAccountID).HasColumnName("Asset_Account_ID");
+        asset.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
+        asset.Property(x => x.Location).HasMaxLength(150);
+        asset.Property(x => x.Supplier).HasMaxLength(150);
+        asset.Property(x => x.InvoiceNo).HasColumnName("Invoice_No").HasMaxLength(50);
+        asset.Property(x => x.PurchaseDate).HasColumnName("Purchase_Date").HasColumnType("date");
+        asset.Property(x => x.InServiceDate).HasColumnName("In_Service_Date").HasColumnType("date");
+        asset.Property(x => x.Cost).HasColumnType("numeric(18,2)");
+        asset.Property(x => x.SalvageValue).HasColumnName("Salvage_Value").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.UsefulLifeYears).HasColumnName("Useful_Life_Years");
+        asset.Property(x => x.OpeningAccumulatedDepreciation).HasColumnName("Opening_Acc_Depreciation").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.Status).HasMaxLength(20);
+        asset.Property(x => x.WarrantyEnd).HasColumnName("Warranty_End").HasColumnType("date");
+        asset.Property(x => x.DisposedDate).HasColumnName("Disposed_Date").HasColumnType("date");
+        asset.Property(x => x.DisposalAmount).HasColumnName("Disposal_Amount").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.PurchaseVoucherID).HasColumnName("Purchase_Voucher_ID");
+        asset.Property(x => x.DisposalVoucherID).HasColumnName("Disposal_Voucher_ID");
+        asset.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        asset.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+
+        var transfer = b.Entity<FixedAssetTransfer>();
+        transfer.ToTable("Accounts_Fixed_Asset_Transfer");
+        transfer.HasKey(x => x.ID);
+        transfer.Property(x => x.AssetID).HasColumnName("Asset_ID");
+        transfer.Property(x => x.FromCostCenterID).HasColumnName("From_Cost_Center_ID");
+        transfer.Property(x => x.ToCostCenterID).HasColumnName("To_Cost_Center_ID");
+        transfer.Property(x => x.TransferDate).HasColumnName("Transfer_Date").HasColumnType("date");
+        transfer.Property(x => x.Reason).HasMaxLength(300);
+        transfer.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+
+        var dep = b.Entity<FixedAssetDepreciation>();
+        dep.ToTable("Accounts_Fixed_Asset_Depreciation");
+        dep.HasKey(x => x.ID);
+        dep.Property(x => x.AssetID).HasColumnName("Asset_ID");
+        dep.Property(x => x.PeriodMonth).HasColumnName("Period_Month").HasColumnType("date");
+        dep.Property(x => x.Amount).HasColumnType("numeric(18,2)");
+        dep.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
+        dep.Property(x => x.VoucherID).HasColumnName("Voucher_ID");
+
+        var rule = b.Entity<AllocationRule>();
+        rule.ToTable("Accounts_Allocation_Rule");
+        rule.HasKey(x => x.ID);
+        rule.Property(x => x.SourceCostCenterID).HasColumnName("Source_Cost_Center_ID");
+        rule.Property(x => x.Basis).HasMaxLength(20);
+        rule.Property(x => x.TargetCostCenterID).HasColumnName("Target_Cost_Center_ID");
+        rule.Property(x => x.Weight).HasColumnType("numeric(18,4)");
+        rule.Property(x => x.IsActive).HasColumnName("Is_Active");
+
+        var run = b.Entity<AllocationRun>();
+        run.ToTable("Accounts_Allocation_Run");
+        run.HasKey(x => x.ID);
+        run.Property(x => x.PeriodMonth).HasColumnName("Period_Month").HasColumnType("date");
+        run.Property(x => x.VoucherID).HasColumnName("Voucher_ID");
+        run.Property(x => x.RunBy).HasColumnName("Run_By");
+        run.Property(x => x.RunAt).HasColumnName("Run_At").HasColumnType("datetime");
     }
 
     private static void ConfigureDiagnostic(ModelBuilder b)

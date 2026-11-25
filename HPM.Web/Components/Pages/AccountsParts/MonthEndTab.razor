@@ -1,0 +1,494 @@
+@* Accounts tab 6: month-end close in three steps — depreciation, cost allocation, period lock —
+   plus the one-time move of existing medicine stock into the inventory account. *@
+@inject IDbContextFactory<HpmDbContext> DbFactory
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" style="padding:8px 14px; font-size:12px; font-weight:700; margin-bottom:12px; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+        <span>@message</span>
+        <button type="button" style="background:none; border:none; cursor:pointer; font-weight:800; color:inherit;" @onclick='() => message = ""'>✕</button>
+    </div>
+}
+
+<div class="acc-card" style="margin-bottom:14px;">
+    <div class="acc-card-header">
+        <div>
+            <h2 class="acc-card-title"><span>🗓️ @I18n.T("Month-End Close", "মাস শেষের ক্লোজিং")</span></h2>
+            <div style="font-size:11px; color:#64748b;">
+                @I18n.T("Run the steps in order: 1 depreciation → 2 cost allocation → 3 lock the month.", "ধাপগুলো ক্রমে চালান: ১ অবচয় → ২ খরচ বণ্টন → ৩ মাস লক।")
+            </div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <span class="acc-field-label" style="margin:0;">@I18n.T("Month", "মাস"):</span>
+            <input type="month" class="classic-input" style="height:30px !important; width:160px;" value="@month.ToString("yyyy-MM")" @onchange="OnMonthChanged" />
+        </div>
+    </div>
+</div>
+
+<div class="acc-grid-2col">
+    <!-- Step 1: Depreciation -->
+    <div class="acc-card">
+        <div class="acc-card-header">
+            <h2 class="acc-card-title"><span>① 📉 @I18n.T("Depreciation", "অবচয়") — @month.ToString("MMMM yyyy")</span></h2>
+            @if (depreciationVoucher is not null)
+            {
+                <span class="pill" style="font-size:10.5px; background:#d1fae5; color:#047857; font-weight:800;">✓ @I18n.T("Posted") @depreciationVoucher.VoucherNo</span>
+            }
+        </div>
+        <div class="acc-table-wrap" style="max-height:320px; overflow-y:auto;">
+            <table class="acc-table">
+                <thead><tr><th>@I18n.T("Asset", "সম্পদ")</th><th>@I18n.T("Department", "বিভাগ")</th><th class="num">@I18n.T("Amount (৳)", "টাকা")</th></tr></thead>
+                <tbody>
+                    @if (depreciationPreview.Count == 0)
+                    {
+                        <tr><td colspan="3" style="text-align:center; padding:18px; color:#64748b;">@I18n.T("No depreciation due for this month.", "এই মাসে কোনো অবচয় নেই।")</td></tr>
+                    }
+                    @foreach (var d in depreciationPreview)
+                    {
+                        <tr><td><strong>@d.Asset.AssetCode</strong> · @d.Asset.Name</td><td style="font-size:11.5px;">@CenterName(d.Asset.CostCenterID)</td><td class="num">@I18n.FormatCurrency(d.Amount)</td></tr>
+                    }
+                    @if (depreciationPreview.Count > 0)
+                    {
+                        <tr class="total-row"><td colspan="2" style="text-align:right;">@I18n.T("Total", "মোট"):</td><td class="num">@I18n.FormatCurrency(depreciationPreview.Sum(x => x.Amount))</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (IsAdministrator)
+        {
+            <div class="acc-card-body" style="display:flex; gap:8px;">
+                @if (depreciationVoucher is null)
+                {
+                    <button type="button" class="btn btn-primary" style="flex:1; height:32px; font-weight:800;" disabled="@(depreciationPreview.Count == 0 || busy)" @onclick="PostDepreciationAsync">
+                        📉 @I18n.T("Post Depreciation", "অবচয় পোস্ট করুন")
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-secondary" style="flex:1; height:32px; font-weight:750; color:#b45309;" disabled="@busy" @onclick="UndoDepreciationAsync">
+                        ↩ @I18n.T("Undo this month's depreciation", "এই মাসের অবচয় বাতিল")
+                    </button>
+                }
+            </div>
+        }
+    </div>
+
+    <!-- Step 2: Allocation -->
+    <div class="acc-card">
+        <div class="acc-card-header">
+            <h2 class="acc-card-title"><span>② ⚖️ @I18n.T("Cost Allocation", "খরচ বণ্টন") — @month.ToString("MMMM yyyy")</span></h2>
+            @if (allocationVoucher is not null)
+            {
+                <span class="pill" style="font-size:10.5px; background:#d1fae5; color:#047857; font-weight:800;">✓ @I18n.T("Posted") @allocationVoucher.VoucherNo</span>
+            }
+        </div>
+        <div class="acc-table-wrap" style="max-height:320px; overflow-y:auto;">
+            <table class="acc-table">
+                <thead><tr><th>@I18n.T("From", "থেকে")</th><th>@I18n.T("To", "যাবে")</th><th class="num">@I18n.T("Amount (৳)", "টাকা")</th></tr></thead>
+                <tbody>
+                    @if (allocationPreview.Count == 0)
+                    {
+                        <tr><td colspan="3" style="text-align:center; padding:18px; color:#64748b;">@I18n.T("Nothing to spread for this month (no expenses on service/admin departments, or no rules).", "এই মাসে ভাগ করার মতো খরচ বা নিয়ম নেই।")</td></tr>
+                    }
+                    @foreach (var g in allocationPreview.GroupBy(x => x.Source))
+                    {
+                        @foreach (var t in g.GroupBy(x => x.Target))
+                        {
+                            <tr><td style="font-size:11.5px;">@CenterName(g.Key)</td><td style="font-size:11.5px;">@CenterName(t.Key)</td><td class="num">@I18n.FormatCurrency(t.Sum(x => x.Amount))</td></tr>
+                        }
+                    }
+                    @if (allocationPreview.Count > 0)
+                    {
+                        <tr class="total-row"><td colspan="2" style="text-align:right;">@I18n.T("Total spread", "মোট বণ্টন"):</td><td class="num">@I18n.FormatCurrency(allocationPreview.Sum(x => x.Amount))</td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @foreach (var w in allocationWarnings)
+        {
+            <div style="padding:4px 14px; font-size:11px; color:#b45309;">⚠ @w</div>
+        }
+        @if (IsAdministrator)
+        {
+            <div class="acc-card-body" style="display:flex; gap:8px;">
+                @if (allocationVoucher is null)
+                {
+                    <button type="button" class="btn btn-primary" style="flex:1; height:32px; font-weight:800;" disabled="@(allocationPreview.Count == 0 || busy)" @onclick="PostAllocationAsync">
+                        ⚖️ @I18n.T("Post Allocation", "বণ্টন পোস্ট করুন")
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="btn btn-secondary" style="flex:1; height:32px; font-weight:750; color:#b45309;" disabled="@busy" @onclick="UndoAllocationAsync">
+                        ↩ @I18n.T("Undo this month's allocation", "এই মাসের বণ্টন বাতিল")
+                    </button>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+<div class="acc-grid-2col" style="margin-top:14px;">
+    <!-- Step 3: Lock -->
+    <div class="acc-card">
+        <div class="acc-card-header">
+            <h2 class="acc-card-title"><span>③ 🛡️ @I18n.T("Lock the Month", "মাস লক") — @month.ToString("MMMM yyyy")</span></h2>
+            @if (monthLocked) { <span class="pill" style="font-size:10.5px; background:#d1fae5; color:#047857; font-weight:800;">🔒 @I18n.T("Locked", "লক করা")</span> }
+        </div>
+        <div class="acc-card-body">
+            <div style="font-size:11.5px; color:#475569; margin-bottom:10px;">
+                @I18n.T("After locking, no bill, voucher or posting can be dated inside this month. Lock only a finished month.",
+                        "লক করার পর এই মাসের তারিখে কোনো বিল, ভাউচার বা পোস্টিং করা যাবে না। শুধু শেষ হয়ে যাওয়া মাস লক করুন।")
+            </div>
+            @if (IsAdministrator && !monthLocked)
+            {
+                <button type="button" class="btn btn-primary" style="width:100%; height:32px; font-weight:800;" disabled="@(busy || MonthEnd >= DateTime.Today)" @onclick="LockMonthAsync">
+                    🛡️ @I18n.T("Lock", "লক করুন") @month.ToString("MMMM yyyy")
+                </button>
+                @if (MonthEnd >= DateTime.Today)
+                {
+                    <div style="font-size:10.5px; color:#b45309; margin-top:4px;">⚠ @I18n.T("This month has not ended yet.", "এই মাস এখনো শেষ হয়নি।")</div>
+                }
+            }
+        </div>
+    </div>
+
+    <!-- One-time: opening medicine stock -->
+    <div class="acc-card">
+        <div class="acc-card-header">
+            <h2 class="acc-card-title"><span>💊 @I18n.T("Opening Medicine Stock (one time)", "ওষুধের ওপেনিং স্টক (একবারই)")</span></h2>
+            @if (openingStockVoucher is not null) { <span class="pill" style="font-size:10.5px; background:#d1fae5; color:#047857; font-weight:800;">✓ @openingStockVoucher.VoucherNo</span> }
+        </div>
+        <div class="acc-card-body">
+            <div style="font-size:11.5px; color:#475569; margin-bottom:8px;">
+                @I18n.T("Medicine purchases used to be booked as expense. From now on purchases go to Medicine Inventory and the cost is booked when medicine is sold. Move the stock on hand into inventory once, on the day the new model starts.",
+                        "আগে ওষুধ কেনাকেই খরচ ধরা হতো। এখন থেকে কেনা ওষুধ মজুদে (Inventory) যায়, আর বিক্রির সময় খরচ হয়। নতুন মডেল চালুর দিনে হাতে থাকা স্টক একবার মজুদে তুলে নিন।")
+            </div>
+            <div style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
+                <div>
+                    <span class="acc-field-label">@I18n.T("Stock value at cost", "কেনা দামে স্টকের মূল্য")</span>
+                    <div style="font-size:16px; font-weight:850; color:#0369a1;">@I18n.FormatCurrency(stockValue)</div>
+                </div>
+                <div><span class="acc-field-label">@I18n.T("Date", "তারিখ")</span><InputDate class="classic-input" style="height:30px !important;" @bind-Value="openingDate" /></div>
+                @if (IsAdministrator && openingStockVoucher is null)
+                {
+                    <button type="button" class="btn btn-primary" style="height:30px; font-weight:800;" disabled="@(busy || stockValue <= 0)" @onclick="PostOpeningStockAsync">
+                        💊 @I18n.T("Move to Inventory", "মজুদে তুলুন")
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool IsAdministrator { get; set; }
+    [Parameter] public int UserId { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private const string OpeningStockReference = "OPENING-MEDICINE-STOCK";
+    private DateTime month = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1);
+    private DateTime MonthEnd => month.AddMonths(1).AddDays(-1);
+    private DateTime openingDate = DateTime.Today;
+    private List<CostCenter> centers = [];
+    private List<(FixedAsset Asset, decimal Amount)> depreciationPreview = [];
+    private List<(int Source, int Target, int AccountID, decimal Amount)> allocationPreview = [];
+    private List<string> allocationWarnings = [];
+    private AccountVoucher? depreciationVoucher, allocationVoucher, openingStockVoucher;
+    private bool monthLocked, busy;
+    private decimal stockValue;
+    private string message = "", messageClass = "success";
+
+    private string DepreciationReference => $"DEPRECIATION:{month:yyyy-MM}";
+    private string AllocationReference => $"ALLOCATION:{month:yyyy-MM}";
+
+    protected override async Task OnInitializedAsync() => await SafeLoadAsync();
+
+    private async Task SafeLoadAsync()
+    {
+        try { await LoadAsync(); }
+        catch (Exception) { Fail(I18n.T("The database did not answer in time (it may be busy). Press 🔄 or reopen the tab to try again.", "ডাটাবেস সময়মতো উত্তর দেয়নি (ব্যস্ত থাকতে পারে)। 🔄 চাপুন বা ট্যাবটা আবার খুলুন।")); }
+    }
+
+    private async Task OnMonthChanged(ChangeEventArgs e)
+    {
+        if (DateTime.TryParse($"{e.Value}-01", out var m)) { month = new DateTime(m.Year, m.Month, 1); await SafeLoadAsync(); }
+    }
+
+    private static Task<AccountVoucher?> ActiveVoucherAsync(HpmDbContext db, string reference) =>
+        db.AccountVouchers.AsNoTracking().Where(x => x.Reference == reference && x.IsPosted && x.Status != "Cancelled").OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        depreciationVoucher = await ActiveVoucherAsync(db, DepreciationReference);
+        allocationVoucher = await ActiveVoucherAsync(db, AllocationReference);
+        openingStockVoucher = await ActiveVoucherAsync(db, OpeningStockReference);
+        monthLocked = await db.FinancialPeriodLocks.AnyAsync(x => x.IsActive && x.FromDate <= month && x.ToDate >= MonthEnd);
+        depreciationPreview = depreciationVoucher is null ? await DepreciationDueAsync(db) : await PostedDepreciationAsync(db);
+        (allocationPreview, allocationWarnings) = await AllocationPlanAsync(db);
+        stockValue = openingStockVoucher is null ? await StockValueAsync(db) : 0;
+    }
+
+    private string CenterName(int id) => centers.FirstOrDefault(x => x.ID == id) is { } c ? $"{c.Code} · {c.Name}" : "—";
+
+    // ---------- Step 1: depreciation ----------
+    private async Task<List<(FixedAsset, decimal)>> DepreciationDueAsync(HpmDbContext db)
+    {
+        var assets = await db.FixedAssets.AsNoTracking().Where(x => x.Status == "Active" && x.InServiceDate <= MonthEnd).ToListAsync();
+        var charged = (await db.FixedAssetDepreciations.AsNoTracking().GroupBy(x => x.AssetID).Select(g => new { g.Key, Sum = g.Sum(x => x.Amount) }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Sum);
+        var already = (await db.FixedAssetDepreciations.AsNoTracking().Where(x => x.PeriodMonth == month).Select(x => x.AssetID).ToListAsync()).ToHashSet();
+        var result = new List<(FixedAsset, decimal)>();
+        foreach (var a in assets.Where(a => !already.Contains(a.ID)))
+        {
+            var remaining = a.Cost - a.SalvageValue - a.OpeningAccumulatedDepreciation - charged.GetValueOrDefault(a.ID);
+            var amount = Math.Min(FixedAssetsTab.MonthlyCharge(a), remaining);
+            if (amount > 0) result.Add((a, amount));
+        }
+        return result;
+    }
+
+    private async Task<List<(FixedAsset, decimal)>> PostedDepreciationAsync(HpmDbContext db)
+    {
+        var rows = await db.FixedAssetDepreciations.AsNoTracking().Where(x => x.PeriodMonth == month).ToListAsync();
+        var ids = rows.Select(x => x.AssetID).ToArray();
+        var assets = await db.FixedAssets.AsNoTracking().Where(x => ids.Contains(x.ID)).ToDictionaryAsync(x => x.ID);
+        return rows.Where(r => assets.ContainsKey(r.AssetID)).Select(r => (assets[r.AssetID], r.Amount)).ToList();
+    }
+
+    private async Task PostDepreciationAsync()
+    {
+        if (!IsAdministrator || busy) return;
+        busy = true;
+        try
+        {
+            var (total, voucherNo) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            if (await ActiveVoucherAsync(db, DepreciationReference) is not null) throw new InvalidOperationException("Depreciation for this month is already posted.");
+            var due = await DepreciationDueAsync(db);
+            if (due.Count == 0) throw new InvalidOperationException("No depreciation due for this month.");
+            var expenseId = await AccountMap.HeadAsync(db, AccountMap.DepreciationExpense, "Expense", 0);
+            if (expenseId == 0) throw new InvalidOperationException("Account head 7000 Depreciation Expense is missing.");
+            var lines = new List<AccountingPosting.PostingLine>();
+            foreach (var g in due.GroupBy(x => x.Item1.CostCenterID))
+                lines.Add(new(expenseId, g.Sum(x => x.Item2), 0, g.Key));
+            foreach (var g in due.GroupBy(x => (x.Item1.AssetAccountID, x.Item1.CostCenterID)))
+                lines.Add(new(await FixedAssetsTab.AccumulatedHeadAsync(db, g.Key.AssetAccountID), 0, g.Sum(x => x.Item2), g.Key.CostCenterID));
+            var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", MonthEnd, $"Depreciation for {month:MMMM yyyy}", DepreciationReference, UserId, lines.ToArray());
+            await db.SaveChangesAsync();
+            foreach (var (asset, amount) in due)
+                db.FixedAssetDepreciations.Add(new FixedAssetDepreciation { AssetID = asset.ID, PeriodMonth = month, Amount = amount, CostCenterID = asset.CostCenterID, VoucherID = voucher.ID });
+            await db.SaveChangesAsync();
+            return (due.Sum(x => x.Item2), voucher.VoucherNo);
+            }, System.Data.IsolationLevel.Serializable);
+            Ok(I18n.T($"Depreciation {I18n.FormatCurrency(total)} posted ({voucherNo}).", $"অবচয় {I18n.FormatCurrency(total)} পোস্ট হয়েছে ({voucherNo})।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    private async Task UndoDepreciationAsync()
+    {
+        if (!IsAdministrator || busy || depreciationVoucher is null) return;
+        busy = true;
+        try
+        {
+            var voucherId = depreciationVoucher.ID;
+            var mustUndoAllocation = I18n.T("Undo this month's allocation first.", "আগে এই মাসের বণ্টন বাতিল করুন।");
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            if (await ActiveVoucherAsync(db, AllocationReference) is not null) throw new InvalidOperationException(mustUndoAllocation);
+            var voucher = await db.AccountVouchers.SingleAsync(x => x.ID == voucherId);
+            await AccountingPosting.ReversePostedVoucherAsync(db, voucher, "Month-end depreciation undone", UserId, DateTime.Now);
+            db.FixedAssetDepreciations.RemoveRange(await db.FixedAssetDepreciations.Where(x => x.VoucherID == voucher.ID).ToListAsync());
+            await db.SaveChangesAsync();
+            return true;
+            });
+            Ok(I18n.T("Depreciation for this month was reversed.", "এই মাসের অবচয় রিভার্স হয়েছে।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    // ---------- Step 2: allocation ----------
+    private async Task<(List<(int, int, int, decimal)>, List<string>)> AllocationPlanAsync(HpmDbContext db)
+    {
+        var warnings = new List<string>();
+        var monthStart = month; var monthStop = month.AddMonths(1);
+        var rules = await db.AllocationRules.AsNoTracking().Where(x => x.IsActive).ToListAsync();
+        var revenueCenters = centers.Where(x => x.IsActive && x.CenterType == "Revenue").ToList();
+        var revenueIds = revenueCenters.Select(x => x.ID).ToHashSet();
+
+        var posted = await (from l in db.AccountVoucherLines
+                            join v in db.AccountVouchers on l.VoucherID equals v.ID
+                            join a in db.AccountHeads on l.AccountID equals a.ID
+                            where v.IsPosted && v.Status != "Pending" && v.Status != "Rejected"
+                                  && v.VoucherDate >= monthStart && v.VoucherDate < monthStop && l.CostCenterID != null
+                                  && (a.AccountType == "Income" || a.AccountType == "Expense")
+                                  && (v.Reference == null || v.Reference != AllocationReference)
+                            select new { CC = l.CostCenterID!.Value, l.AccountID, a.AccountType, l.Debit, l.Credit, l.VoucherID }).ToListAsync();
+
+        var incomeWeights = posted.Where(x => x.AccountType == "Income" && revenueIds.Contains(x.CC))
+            .GroupBy(x => x.CC).Select(g => (g.Key, g.Sum(x => x.Credit - x.Debit))).Where(x => x.Item2 > 0).ToList();
+        var billWeights = posted.Where(x => x.AccountType == "Income" && x.Credit > 0 && revenueIds.Contains(x.CC))
+            .GroupBy(x => x.CC).Select(g => (g.Key, (decimal)g.Select(x => x.VoucherID).Distinct().Count())).ToList();
+        var areaWeights = revenueCenters.Where(x => x.AreaSqFt > 0).Select(x => (x.ID, x.AreaSqFt!.Value)).ToList();
+
+        var plan = new List<(int, int, int, decimal)>();
+        foreach (var source in rules.Select(x => x.SourceCostCenterID).Distinct())
+        {
+            if (revenueIds.Contains(source)) continue;
+            var basis = rules.First(x => x.SourceCostCenterID == source).Basis;
+            List<(int Key, decimal Weight)> weights = basis switch
+            {
+                "Area" => areaWeights,
+                "BillCount" => billWeights,
+                "Fixed" => rules.Where(x => x.SourceCostCenterID == source && x.Basis == "Fixed" && x.TargetCostCenterID != null && x.Weight > 0)
+                                .Select(x => (x.TargetCostCenterID!.Value, x.Weight!.Value)).ToList(),
+                _ => incomeWeights
+            };
+            var expenses = posted.Where(x => x.CC == source && x.AccountType == "Expense")
+                .GroupBy(x => x.AccountID).Select(g => (Account: g.Key, Amount: g.Sum(x => x.Debit - x.Credit))).Where(x => x.Amount > 0).ToList();
+            if (expenses.Count == 0) continue;
+            if (weights.Count == 0)
+            {
+                warnings.Add(I18n.T($"{CenterName(source)}: no {basis} figures this month, spread by income share instead.",
+                                    $"{CenterName(source)}: এই মাসে {basis} তথ্য নেই, আয়ের অনুপাতে ভাগ হবে।"));
+                weights = incomeWeights;
+            }
+            if (weights.Count == 0)
+            {
+                warnings.Add(I18n.T($"{CenterName(source)}: no revenue department had income this month, not spread.",
+                                    $"{CenterName(source)}: এই মাসে কোনো আয়ের বিভাগে আয় নেই, ভাগ হবে না।"));
+                continue;
+            }
+            foreach (var (account, amount) in expenses)
+                foreach (var (target, share) in AccountingPosting.Split(amount, weights))
+                    plan.Add((source, target, account, share));
+        }
+        return (plan, warnings);
+    }
+
+    private async Task PostAllocationAsync()
+    {
+        if (!IsAdministrator || busy) return;
+        busy = true;
+        try
+        {
+            var (total, voucherNo) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            if (await ActiveVoucherAsync(db, AllocationReference) is not null) throw new InvalidOperationException("Allocation for this month is already posted.");
+            var (plan, _) = await AllocationPlanAsync(db);
+            if (plan.Count == 0) throw new InvalidOperationException("Nothing to allocate for this month.");
+            var lines = new List<AccountingPosting.PostingLine>();
+            foreach (var g in plan.GroupBy(x => (x.Item3, x.Item1)))
+                lines.Add(new(g.Key.Item1, 0, g.Sum(x => x.Item4), g.Key.Item2));
+            foreach (var g in plan.GroupBy(x => (x.Item3, x.Item2)))
+                lines.Add(new(g.Key.Item1, g.Sum(x => x.Item4), 0, g.Key.Item2));
+            var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", MonthEnd, $"Cost allocation for {month:MMMM yyyy}", AllocationReference, UserId, lines.ToArray());
+            await db.SaveChangesAsync();
+            var oldRun = await db.AllocationRuns.Where(x => x.PeriodMonth == month).ToListAsync();
+            db.AllocationRuns.RemoveRange(oldRun);
+            db.AllocationRuns.Add(new AllocationRun { PeriodMonth = month, VoucherID = voucher.ID, RunBy = UserId, RunAt = DateTime.Now });
+            await db.SaveChangesAsync();
+            return (plan.Sum(x => x.Item4), voucher.VoucherNo);
+            }, System.Data.IsolationLevel.Serializable);
+            Ok(I18n.T($"Allocation {I18n.FormatCurrency(total)} posted ({voucherNo}).", $"বণ্টন {I18n.FormatCurrency(total)} পোস্ট হয়েছে ({voucherNo})।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    private async Task UndoAllocationAsync()
+    {
+        if (!IsAdministrator || busy || allocationVoucher is null) return;
+        busy = true;
+        try
+        {
+            var voucherId = allocationVoucher.ID;
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+            var voucher = await db.AccountVouchers.SingleAsync(x => x.ID == voucherId);
+            await AccountingPosting.ReversePostedVoucherAsync(db, voucher, "Month-end allocation undone", UserId, DateTime.Now);
+            db.AllocationRuns.RemoveRange(await db.AllocationRuns.Where(x => x.PeriodMonth == month).ToListAsync());
+            await db.SaveChangesAsync();
+            return true;
+            });
+            Ok(I18n.T("Allocation for this month was reversed.", "এই মাসের বণ্টন রিভার্স হয়েছে।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    // ---------- Step 3: lock ----------
+    private async Task LockMonthAsync()
+    {
+        if (!IsAdministrator || busy) return;
+        busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.FinancialPeriodLocks.AnyAsync(x => x.IsActive && x.FromDate <= MonthEnd && x.ToDate >= month))
+                throw new InvalidOperationException(I18n.T("Part of this month is already locked.", "এই মাসের কিছু অংশ আগেই লক করা।"));
+            db.FinancialPeriodLocks.Add(new FinancialPeriodLock { FromDate = month, ToDate = MonthEnd, Reason = $"Month-end close {month:MMMM yyyy}", IsActive = true, LockedBy = UserId, LockedAt = DateTime.Now });
+            await db.SaveChangesAsync();
+            Ok(I18n.T($"{month:MMMM yyyy} locked.", $"{month:MMMM yyyy} লক করা হয়েছে।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    // ---------- One time: opening medicine stock ----------
+    private static async Task<decimal> StockValueAsync(HpmDbContext db)
+    {
+        var batches = await db.MedicineStoreBalances.AsNoTracking().Where(x => x.Balance > 0).ToListAsync();
+        if (batches.Count == 0) return 0;
+        var challanIds = batches.Where(x => x.MedicineReceivingChallanSubID.HasValue).Select(x => x.MedicineReceivingChallanSubID!.Value).Distinct().ToArray();
+        var challanCost = challanIds.Length == 0 ? new Dictionary<long, decimal>() : await db.MedicineReceivingChallanItems.AsNoTracking()
+            .Where(x => challanIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.BuyRate);
+        var serviceIds = batches.Select(x => x.ServiceID).Distinct().ToArray();
+        var serviceCost = await db.Services.AsNoTracking().Where(x => serviceIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.BuyRate ?? 0);
+        return Math.Round(batches.Sum(b => b.Balance * (b.MedicineReceivingChallanSubID is long c && challanCost.TryGetValue(c, out var cost) ? cost : serviceCost.GetValueOrDefault(b.ServiceID))), 2);
+    }
+
+    private async Task PostOpeningStockAsync()
+    {
+        if (!IsAdministrator || busy) return;
+        busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await ActiveVoucherAsync(db, OpeningStockReference) is not null) throw new InvalidOperationException("Opening stock is already posted.");
+            var value = await StockValueAsync(db);
+            if (value <= 0) throw new InvalidOperationException("There is no medicine stock to move.");
+            var inventoryId = await AccountMap.HeadAsync(db, AccountMap.MedicineInventory, "Asset", 0);
+            if (inventoryId == 0) throw new InvalidOperationException("Account head 1200 Medicine Inventory is missing.");
+            var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", openingDate.Date, "Opening medicine stock moved from expense to inventory", OpeningStockReference, UserId,
+            [
+                new AccountingPosting.PostingLine(inventoryId, value, 0),
+                new AccountingPosting.PostingLine(AccountingPosting.CostOfMedicineSold, 0, value, await AccountMap.CenterAsync(db, AccountMap.CcPharmacy))
+            ]);
+            await db.SaveChangesAsync();
+            Ok(I18n.T($"Medicine stock {I18n.FormatCurrency(value)} moved to inventory ({voucher.VoucherNo}).", $"ওষুধের স্টক {I18n.FormatCurrency(value)} মজুদে তোলা হয়েছে ({voucher.VoucherNo})।"));
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
+        finally { busy = false; }
+    }
+
+    private void Ok(string text) { messageClass = "success"; message = text; }
+    private void Fail(string text) { messageClass = "danger"; message = text; }
+}

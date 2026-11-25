@@ -1229,15 +1229,21 @@
                 var originalReference = $"DIAGNOSTIC:{source.ID}";
                 if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
                 {
-                    var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
-                    if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
-                    if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
-                    originalLines.Add((AccountingPosting.HospitalRevenue, 0, net));
-                    AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
+                    var originalParts = await OperationalAccounting.DiagnosticPartsAsync(db, source.Items.Select(x => (x.TestID, x.Rate, (decimal)x.Quantity)), source.Total);
+                    await OperationalAccounting.SyncBillAsync(db, originalReference, source.ID, originalParts, source.Discount, Math.Min(source.Paid, net),
+                        source.TransDate, source.EnteredBy, $"Diagnostic memo #{source.ID}");
                 }
-                var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (AccountingPosting.HospitalRevenue, adjustment, 0) };
-                if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
-                if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
+                // The revenue given back comes out of the departments of the returned tests.
+                var returnCenters = await AccountMap.DiagnosticCentersAsync(db, selected.Select(x => x.Item.TestID));
+                var diagnosticIncomeId = await AccountMap.IncomeAsync(db, AccountMap.DiagnosticIncome);
+                var returnLines = AccountingPosting.Split(adjustment, selected
+                        .GroupBy(x => returnCenters.GetValueOrDefault(x.Item.TestID))
+                        .Select(g => (g.Key, g.Sum(x => x.Item.Rate * x.Quantity))))
+                    .Select(x => new AccountingPosting.PostingLine(diagnosticIncomeId, x.Amount, 0, x.Key))
+                    .ToList();
+                if (returnLines.Count == 0 && adjustment > 0) returnLines.Add(new AccountingPosting.PostingLine(diagnosticIncomeId, adjustment, 0));
+                if (refund > 0) returnLines.Add(new AccountingPosting.PostingLine(AccountingPosting.Cash, 0, refund));
+                if (receivableAdjustment > 0) returnLines.Add(new AccountingPosting.PostingLine(AccountingPosting.PatientReceivable, 0, receivableAdjustment));
                 AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
                 if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
                 await db.SaveChangesAsync();
