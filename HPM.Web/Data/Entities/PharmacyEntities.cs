@@ -94,7 +94,22 @@ public sealed class PharmacyCashMemo
     public bool IsPackage { get; set; }
     public bool? IsCredit { get; set; }
     public int? BufferStore { get; set; }
+    /// <summary>How the customer paid: Cash, Bank, MFS or a custom method. Null for legacy / IPD bed-bill memos.</summary>
+    [StringLength(40)] public string? PaymentMethod { get; set; }
+    /// <summary>Optional reference code / note for non-cash payments (txn id, card slip, etc.).</summary>
+    [StringLength(100)] public string? PaymentRef { get; set; }
     public List<PharmacyCashMemoItem> Items { get; set; } = [];
+}
+
+public sealed class PharmacyPaymentMethod
+{
+    public const string Cash = "Cash";
+
+    public int ID { get; set; }
+    [Required, StringLength(40)] public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public int SortOrder { get; set; }
+    public bool IsSystem { get; set; }
 }
 
 public sealed class PharmacyCashMemoItem

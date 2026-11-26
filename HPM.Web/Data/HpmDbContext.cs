@@ -65,6 +65,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<MedicineReceivingChallan> MedicineReceivingChallans => Set<MedicineReceivingChallan>();
     public DbSet<MedicineReceivingChallanItem> MedicineReceivingChallanItems => Set<MedicineReceivingChallanItem>();
     public DbSet<PharmacyCashMemo> PharmacyCashMemos => Set<PharmacyCashMemo>();
+    public DbSet<PharmacyPaymentMethod> PharmacyPaymentMethods => Set<PharmacyPaymentMethod>();
     public DbSet<PharmacyCashMemoItem> PharmacyCashMemoItems => Set<PharmacyCashMemoItem>();
     public DbSet<PharmacySaleBatchAllocation> PharmacySaleBatchAllocations => Set<PharmacySaleBatchAllocation>();
     public DbSet<SupplierLedger> SupplierLedgers => Set<SupplierLedger>();
@@ -850,6 +851,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         var service = b.Entity<Service>();
         service.ToTable("Service");
         service.HasKey(x => x.ID);
+        service.Property(x => x.Sku).HasColumnName("SKU").HasMaxLength(50);
         service.Property(x => x.Name).HasMaxLength(200);
         service.Property(x => x.SaleRate).HasColumnName("Sale_Rate").HasColumnType("numeric(18,2)");
         service.Property(x => x.BuyRate).HasColumnName("Buy_Rate").HasColumnType("numeric(18,2)");
@@ -867,6 +869,10 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         service.Property(x => x.DiscountStart).HasColumnName("Discount_Start");
         service.Property(x => x.DiscountEnd).HasColumnName("Discount_End");
         service.HasIndex(x => new { x.CategoryID, x.Name });
+        service.HasIndex(x => new { x.CategoryID, x.Sku }).IsUnique().HasFilter("[SKU] IS NOT NULL AND [SKU] <> ''");
+        service.HasIndex(x => new { x.CategoryID, x.GenericID });
+        service.HasIndex(x => new { x.CategoryID, x.TypeID });
+        service.HasIndex(x => new { x.CategoryID, x.SupplierID });
 
         department.HasData(
             new Department { ID = 1, Name = "Emergency" },
@@ -1237,7 +1243,18 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         memo.Property(x => x.IsPackage).HasColumnName("Is_Package");
         memo.Property(x => x.IsCredit).HasColumnName("Is_Credit");
         memo.Property(x => x.BufferStore).HasColumnName("Buffer_Store");
+        memo.Property(x => x.PaymentMethod).HasColumnName("Payment_Method").HasMaxLength(40);
+        memo.Property(x => x.PaymentRef).HasColumnName("Payment_Ref").HasMaxLength(100);
         memo.HasIndex(x => x.TransDate);
+
+        var paymentMethod = b.Entity<PharmacyPaymentMethod>();
+        paymentMethod.ToTable("Pharmacy_Payment_Method");
+        paymentMethod.HasKey(x => x.ID);
+        paymentMethod.Property(x => x.Name).HasMaxLength(40);
+        paymentMethod.Property(x => x.IsActive).HasColumnName("Is_Active");
+        paymentMethod.Property(x => x.SortOrder).HasColumnName("Sort_Order");
+        paymentMethod.Property(x => x.IsSystem).HasColumnName("Is_System");
+        paymentMethod.HasIndex(x => x.Name).IsUnique();
 
         var memoItem = b.Entity<PharmacyCashMemoItem>();
         memoItem.ToTable("Cash_Memo_Sub");

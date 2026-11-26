@@ -175,7 +175,30 @@
                                             </div>
                                         }
                                     </div>
+
+                                    @if (auth.User.IsInRole(RoleNames.Administrator) && Licensed("/diagnostic/investigations"))
+                                    {
+                                        <div class="pharm-menu-footer diag-flow-footer">
+                                            <NavLink class="pharm-menu-setup-link" href="/diagnostic/investigations" Match="NavLinkMatch.Prefix" @onclick="CloseMenus">
+                                                <span class="pharm-menu-link-icon">🧪</span>
+                                                <span class="pharm-menu-link-text">
+                                                    <strong>@I18n.T("Investigations Setup")</strong>
+                                                    <small>@I18n.T("Pathology, imaging & special investigations, parameters & categories")</small>
+                                                </span>
+                                                <span class="pharm-menu-setup-badge">@I18n.T("Open") &rsaquo;</span>
+                                            </NavLink>
+                                        </div>
+                                    }
                                 </div>
+                            }
+                            else if (TryGetMegaGroup(group.Key, out var mega))
+                            {
+                                <MegaMenuPanel PositionClass="legacy-menu-dropdown"
+                                               Icon="@mega.Icon"
+                                               Title="@mega.Title"
+                                               Subtitle="@mega.Subtitle"
+                                               Sections="@BuildMegaSections(group, auth.User)"
+                                               OnClose="CloseMenus" />
                             }
                             else
                             {
@@ -289,16 +312,20 @@
         Link("doctor-appointment", "Doctor Appointment", "/appointments", ModuleAccess.Appointments),
 
         Group("opd", "OPD & Emergency", ModuleAccess.OpdGroup,
-            Item("OPD Ticket", "/tickets", ModuleAccess.OpdTickets),
-            Item("OPD & Emergency Service", "/emergency-services", ModuleAccess.EmergencyServices)),
+            Header("Outpatient (OPD)", "🎫"),
+            Item("OPD Ticket", "/tickets", ModuleAccess.OpdTickets, "🎫", null, "Doctor visit ticket, serial & consultation fee"),
+            Header("Emergency", "🚑"),
+            Item("OPD & Emergency Service", "/emergency-services", ModuleAccess.EmergencyServices, "🚑", null, "Emergency care, procedures & service billing")),
 
         Group("ipd", "IPD Services", ModuleAccess.IpdGroup,
-            Item("Patient Admission", "/ipd/admissions", ModuleAccess.IpdAdmissions),
-            Item("Bed Occupancy & Transfer", "/ipd/bed-occupancy", ModuleAccess.IpdOccupancy),
-            Item("Services & Charges", "/ipd/patient-services", ModuleAccess.IpdPatientServices),
-            Item("Payments & Receipts", "/ipd/advance-receipts", ModuleAccess.IpdMoneyReceipts),
-            Item("Medical Clearance", "/ipd/medical-discharge-orders", ModuleAccess.IpdMedicalDischarge),
-            Item("Final Billing & Discharge", "/ipd/discharge-billing", ModuleAccess.IpdBilling)),
+            Header("Admission & Ward", "🛏️"),
+            Item("Patient Admission", "/ipd/admissions", ModuleAccess.IpdAdmissions, "🏥", null, "Admit patient, assign bed & doctor"),
+            Item("Bed Occupancy & Transfer", "/ipd/bed-occupancy", ModuleAccess.IpdOccupancy, "🔄", null, "Live bed map, transfer & vacancy"),
+            Item("Services & Charges", "/ipd/patient-services", ModuleAccess.IpdPatientServices, "💉", null, "Ward services, procedures & daily charges"),
+            Header("Billing & Discharge", "💳"),
+            Item("Payments & Receipts", "/ipd/advance-receipts", ModuleAccess.IpdMoneyReceipts, "🧾", null, "Advance deposit & money receipts"),
+            Item("Medical Clearance", "/ipd/medical-discharge-orders", ModuleAccess.IpdMedicalDischarge, "✅", null, "Doctor's discharge order & summary"),
+            Item("Final Billing & Discharge", "/ipd/discharge-billing", ModuleAccess.IpdBilling, "📑", null, "Final bill, settlement & release")),
 
         Group("diagnostics-lab", "Diagnostics & Lab", ModuleAccess.DiagnosticGroup,
             Header("Billing & Cashier", "💳"),
@@ -333,6 +360,41 @@
             Item("Birth & Death Certificates", "/medical/certificates?type=birth", ModuleAccess.MedicalCertificates, "👶", "Civil Registry", "Official birth & death hospital registers"),
             Item("Medical & Fitness Certificates", "/medical/certificates?type=fitness", ModuleAccess.MedicalCertificates, "💪", "Fitness / Leave", "Physical fitness & medical illness leave certificates"))
     ];
+
+    /// <summary>Groups rendered with the shared Pharmacy-style mega menu.</summary>
+    /// <remarks>A method (not a static field) so it is always initialised, even after hot reload.</remarks>
+    private static bool TryGetMegaGroup(string key, out (string Icon, string Title, string Subtitle) meta)
+    {
+        (bool Found, (string, string, string) Meta) result = key switch
+        {
+            "opd" => (true, ("🩺", "OPD & Emergency", "Outpatient tickets & emergency services")),
+            "ipd" => (true, ("🛏️", "IPD Services", "Admission, ward services, billing & discharge")),
+            _ => (false, ("", "", ""))
+        };
+        meta = result.Meta;
+        return result.Found;
+    }
+
+    /// <summary>Splits a group's items into sections at each Header item, keeping only links the user may open.</summary>
+    private IReadOnlyList<MegaMenuSection> BuildMegaSections(MenuGroup group, System.Security.Claims.ClaimsPrincipal user)
+    {
+        var sections = new List<MegaMenuSection>();
+        string title = "", icon = "📁";
+        var links = new List<MegaMenuLink>();
+        void Flush()
+        {
+            if (links.Count > 0) sections.Add(new MegaMenuSection(title, icon, links.ToList()));
+            links.Clear();
+        }
+        foreach (var item in group.Items)
+        {
+            if (item.IsHeader) { Flush(); title = item.Label; icon = item.Icon ?? "📁"; continue; }
+            if (item.IsSeparator || item.IsLogout || string.IsNullOrWhiteSpace(item.Href) || !CanViewItem(user, item)) continue;
+            links.Add(new MegaMenuLink(item.Label, item.Href, item.Icon ?? "•", item.Description, item.Badge));
+        }
+        Flush();
+        return sections;
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -410,7 +472,7 @@
         (href.StartsWith("/doctor/prescription", StringComparison.OrdinalIgnoreCase) && enabledModules.Contains(LicensedModules.Pharmacy)) ||
         LicensedModules.ForPath(href) is not string code || enabledModules.Contains(code);
     private bool CanViewGroup(System.Security.Claims.ClaimsPrincipal user, MenuGroup group) =>
-        ModuleAccess.CanView(user, group.Roles) && Licensed(group.Href) && (group.Items.Count == 0 || group.Items.Any(item => CanViewItem(user, item)));
+        ModuleAccess.CanView(user, group.Roles) && Licensed(group.Href) && (group.Items.Count == 0 || group.Items.Any(item => !item.IsHeader && !item.IsSeparator && CanViewItem(user, item)));
     private bool CanViewItem(System.Security.Claims.ClaimsPrincipal user, MenuItem item) =>
         item.IsSeparator || item.IsHeader || (ModuleAccess.CanView(user, item.Roles) && Licensed(item.Href) && (item.Children.Count == 0 || item.Children.Any(child => CanViewItem(user, child))));
     private static MenuGroup Group(string key, string label, params MenuItem[] items) => new(key, label, string.Empty, [], items);

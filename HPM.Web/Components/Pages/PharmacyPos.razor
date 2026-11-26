@@ -4,468 +4,697 @@
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IJSRuntime JS
 @inject IBarcodeQrService BarcodeQr
+@inject UserWorkspacePreferences WorkspacePrefs
 @implements IDisposable
 @using System.Security.Claims
 @using System.Data
 @using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Pharmacy POS") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Medicine Sale (POS)") | @Branding.HospitalName</PageTitle>
 
-<div class="pharmacy-classic-fit">
+<div class="pharmacy-classic-fit px-root">
     <!-- Topbar -->
-    <div class="pharmacy-classic-topbar">
-        <div class="diagnostic-title-block">
-            <span class="diagnostic-title-eyebrow">@I18n.T("Pharmacy & Dispensary")</span>
-            <h1 class="diagnostic-title-main">@I18n.T("Pharmacy Point of Sale")</h1>
-            <span class="diagnostic-title-subtitle">@I18n.T("Fast counter sales, barcode lookup, generic replacement and instant receipts.")</span>
-        </div>
-
-        <div class="diagnostic-metrics-strip">
-            <div class="diagnostic-metric-chip">
-                <span class="metric-label">@I18n.T("Today's Sales")</span>
-                <span class="metric-value">@recent.Count</span>
-            </div>
-            <div class="diagnostic-metric-chip">
-                <span class="metric-label">@I18n.T("Today's Revenue")</span>
-                <span class="metric-value" style="color: #059669;">@I18n.FormatCurrency(recent.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0)))</span>
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">@I18n.T("Medicine Sale (POS)")</h1>
+            <div class="px-seg">
+                <button type="button" class="@(patientType == "1" ? "on" : "")" disabled="@(savedMemo != null)" @onclick='() => SetPatientType("1")'>@I18n.T("OPD / Walk-in")</button>
+                <button type="button" class="@(patientType == "2" ? "on" : "")" disabled="@(savedMemo != null)" @onclick='() => SetPatientType("2")'>@I18n.T("IPD Patient")</button>
             </div>
         </div>
 
-        <div class="diagnostic-topbar-actions">
-            <button class="btn btn-secondary btn-sm" @onclick="Reset">@I18n.T("+ New Counter Sale")</button>
-            <button class="btn btn-ghost btn-sm" @onclick="LoadAsync">↻ @I18n.T("Refresh")</button>
+        <label class="px-store-chip @(savedMemo == null && lines.Count > 0 ? "locked" : "")"
+               title="@(savedMemo == null && lines.Count > 0 ? I18n.T("Clear the cart to change store") : I18n.T("Your store stays selected until you sign out"))">
+            <span class="px-store-label">🏪 @I18n.T("Store")</span>
+            <select @bind="storeId" @bind:after="OnStoreChangedAsync" disabled="@(savedMemo != null || lines.Count > 0)">
+                @foreach (var x in stores.Where(x => x.IsActive))
+                {
+                    <option value="@x.ID">@x.Name</option>
+                }
+            </select>
+        </label>
+
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Today's Bills")</span><b>@recent.Count</b></div>
+            <div class="px-metric"><span>@I18n.T("Today's Total")</span><b class="ok">@I18n.FormatCurrency(recent.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0)))</b></div>
+            <NavLink class="px-btn ghost" href="/pharmacy/sales-returns">↩ @I18n.T("Customer Return")</NavLink>
+            <button type="button" class="px-btn" @onclick="Reset">+ @I18n.T("New Sale")</button>
         </div>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(message))
     {
-        <div class="alert @messageClass" style="margin: 0.25rem 0.75rem 0; padding: 0.35rem 0.75rem; font-size: 0.82rem;">@message</div>
+        <div class="px-alert @messageClass">
+            <span>@message</span>
+            <button type="button" @onclick='() => message = ""'>✕</button>
+        </div>
     }
 
-    <!-- Main 2-Column Split Workspace -->
     <div class="pharmacy-classic-workspace">
-        <!-- Left: Sales Form & Cart Card -->
-        <div class="pharmacy-form-card">
-            <div class="pharmacy-card-header">
-                <h2>@(savedMemo == null ? I18n.T("Counter Sale & Dispensing") : $"{I18n.T("Pharmacy Cash Receipt")} #{savedMemo.ID}")</h2>
-                <span class="pharmacy-badge">@(savedMemo != null ? I18n.T("PAID") : I18n.T("ACTIVE DRAFT"))</span>
-            </div>
+        <!-- Left: Bill -->
+        <section class="px-card">
+            <header class="px-card-head">
+                <div class="px-card-title">
+                    <h2>@(savedMemo == null ? I18n.T("Current Bill") : $"{I18n.T("Bill")} #PH-{savedMemo.ID}")</h2>
+                    <span class="px-badge @(savedMemo == null ? "new" : savedMemo.IsCredit == true ? "credit" : "paid")">
+                        @(savedMemo != null ? (savedMemo.IsCredit == true ? I18n.T("ADDED TO BED BILL") : I18n.T("PAID")) : I18n.T("NEW"))
+                    </span>
+                </div>
+                @if (savedMemo == null)
+                {
+                    <div class="px-scan">
+                        <span class="px-scan-icon">⌁</span>
+                        <input type="text"
+                               @ref="scanInputRef"
+                               placeholder="@I18n.T("Scan barcode / RX-ID / wristband  [F4]")"
+                               @bind="posScanQuery"
+                               @bind:event="oninput"
+                               @onkeydown="HandlePosScanKeyDown"
+                               autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(posScanQuery))
+                        {
+                            <button type="button" class="px-x" @onclick="ClearPosScan">✕</button>
+                        }
+                    </div>
+                }
+            </header>
 
-            <div class="pharmacy-form-wrapper">
-                <div class="pharmacy-form-body">
-                    <!-- Barcode / QR Scanner Input -->
-                    @if (savedMemo == null)
-                    {
-                        <div class="scanner-search-group" style="margin: 0; padding: 4px 8px;">
-                            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
-                            <input type="text"
-                                   class="scanner-input"
-                                   placeholder="@I18n.T("Scan Medicine Barcode, Prescription QR (RX-XXXX), or IPD Wristband (I2600...)...")"
-                                   @bind="posScanQuery"
-                                   @bind:event="oninput"
-                                   @onkeydown="HandlePosScanKeyDown" />
-                            @if (!string.IsNullOrWhiteSpace(posScanQuery))
+            <div class="px-card-body">
+                <!-- Customer / patient -->
+                @if (patientType == "1")
+                {
+                    <div class="px-panel px-grid-2">
+                        <label class="px-field">
+                            <span>@I18n.T("Customer Name") <i>*</i></span>
+                            <input @bind="customerName" maxlength="50" disabled="@(savedMemo != null)" onfocus="this.select()" />
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Mobile (Optional)")</span>
+                            <input @bind="contact" maxlength="20" inputmode="tel" placeholder="01XXXXXXXXX" disabled="@(savedMemo != null)" />
+                        </label>
+                    </div>
+                }
+                else
+                {
+                    <div class="px-panel px-grid-ipd">
+                        <div class="px-field">
+                            <span>@I18n.T("Admitted Patient") <i>*</i></span>
+                            @if (savedMemo != null)
                             {
-                                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearPosScan">✕</button>
+                                <input value="@($"{customerName} ({regNo})")" disabled />
+                            }
+                            else if (!string.IsNullOrWhiteSpace(regNo))
+                            {
+                                <div class="px-selected">
+                                    <span class="px-bed">@(string.IsNullOrWhiteSpace(selectedBedName) ? "IPD" : selectedBedName)</span>
+                                    <b>@customerName</b>
+                                    <small>@regNo</small>
+                                    <button type="button" @onclick="ClearIpdPatient">@I18n.T("Change")</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="px-typeahead">
+                                    <input type="text"
+                                           placeholder="@I18n.T("Search bed / cabin, name, reg # or mobile...")"
+                                           @bind="ipdSearchQuery"
+                                           @bind:event="oninput"
+                                           @bind:after="() => highlightedIpdIndex = 0"
+                                           @onfocus="() => showIpdSuggestions = true"
+                                           @onblur="() => showIpdSuggestions = false"
+                                           @onkeydown="HandleIpdKeyDown"
+                                           autocomplete="off" />
+                                    @if (showIpdSuggestions)
+                                    {
+                                        var ipdList = FilteredInpatients;
+                                        <div class="px-dropdown" id="px-ipd-dd">
+                                            @if (ipdList.Count == 0)
+                                            {
+                                                <div class="px-dd-empty">@I18n.T("No admitted patient matches") “@ipdSearchQuery”</div>
+                                            }
+                                            @for (var i = 0; i < ipdList.Count; i++)
+                                            {
+                                                var adm = ipdList[i];
+                                                <div class="px-dd-item @(i == highlightedIpdIndex ? "is-active" : "")" @onmousedown:preventDefault @onclick="() => SelectInpatient(adm)">
+                                                    <div class="px-dd-main">
+                                                        <div class="px-dd-name">@Hl(adm.PatientName, ipdTokens)</div>
+                                                        <div class="px-dd-sub">@I18n.T("Reg"): <b>@Hl(adm.RegNo, ipdTokens)</b>@(string.IsNullOrWhiteSpace(adm.Contact) ? "" : " · ")@Hl(adm.Contact, ipdTokens)</div>
+                                                    </div>
+                                                    <span class="px-bed">@Hl(adm.BedName, ipdTokens)</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        <div class="px-field">
+                            <span>@I18n.T("Billing Mode")</span>
+                            <div class="px-seg full">
+                                <button type="button" class="@(ipdPaymentMode == "credit" ? "on" : "")" disabled="@(savedMemo != null)" @onclick='() => ipdPaymentMode = "credit"'>@I18n.T("Add to Bed Bill")</button>
+                                <button type="button" class="@(ipdPaymentMode == "cash" ? "on" : "")" disabled="@(savedMemo != null)" @onclick='() => ipdPaymentMode = "cash"'>@I18n.T("Cash Paid")</button>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (savedMemo == null)
+                {
+                    @if (loadedPrescriptionId.HasValue)
+                    {
+                        <div class="px-rx-strip">
+                            <span>📄 <b>@I18n.T("Loaded Prescription"):</b> @prescriptionLabel</span>
+                            <button type="button" @onclick="ClearLoadedPrescription">✕</button>
+                        </div>
+                    }
+
+                    @if (rxShortages.Count > 0)
+                    {
+                        <div class="px-short-box">
+                            <div class="px-short-head">
+                                <span>⚠️ @I18n.T("Prescribed but not in stock") (@rxShortages.Count) — @I18n.T("pick a same-generic alternative")</span>
+                                <button type="button" title="@I18n.T("Dismiss")" @onclick="() => rxShortages = []">✕</button>
+                            </div>
+                            @foreach (var sh in rxShortages.ToList())
+                            {
+                                var shortage = sh;
+                                var shMed = medicineById.GetValueOrDefault(shortage.ServiceId);
+                                var shGeneric = shMed?.GenericID is int sg && genericNames.TryGetValue(sg, out var sgn) ? sgn : "";
+                                var alts = AlternativesFor(shortage.ServiceId);
+                                var elsewhere = OtherStoreStock(shortage.ServiceId);
+                                <div class="px-short-row">
+                                    <div class="px-short-title">
+                                        <b>@MedicineName(shortage.ServiceId)</b>
+                                        @if (!string.IsNullOrWhiteSpace(shGeneric))
+                                        {
+                                            <small>(@shGeneric)</small>
+                                        }
+                                        <span class="px-stock out">@I18n.T("Need") @shortage.Needed.ToString("0.##")</span>
+                                        @if (elsewhere.Count > 0)
+                                        {
+                                            <small>🏪 @I18n.T("Available at"): @string.Join(", ", elsewhere.Select(e => $"{e.Store} ({e.Qty:N0})"))</small>
+                                        }
+                                    </div>
+                                    <div class="px-short-alts">
+                                        @if (alts.Count == 0)
+                                        {
+                                            <span class="px-short-none">@I18n.T("No same-generic alternative in stock.")</span>
+                                        }
+                                        @foreach (var a in alts)
+                                        {
+                                            var alt = a;
+                                            <button type="button" class="px-short-alt" @onclick="() => UseAlternative(shortage, alt)" title="@I18n.T("Add to bill in place of the prescribed medicine")">
+                                                + @alt.Name
+                                                <span>@I18n.T("Stock") @Available(alt.ID).ToString("N0") · @I18n.FormatCurrency(alt.SaleRate ?? 0)</span>
+                                            </button>
+                                        }
+                                        <button type="button" class="px-link" @onclick="() => SearchForShortageAsync(shortage)">🔍 @I18n.T("Search others")</button>
+                                    </div>
+                                </div>
                             }
                         </div>
                     }
 
-                    <!-- Customer Demographics Bar -->
-                    <div class="billing-demographics-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
-                        <label>
-                            <span>@I18n.T("Patient Category") <span class="req">*</span></span>
-                            <select class="form-select form-select-sm" @bind="patientType" disabled="@(savedMemo != null)">
-                                <option value="1">@I18n.T("OPD / Walk-in")</option>
-                                <option value="2">@I18n.T("Admitted Inpatient (IPD)")</option>
-                            </select>
-                        </label>
-                        <label>
-                            <span>@I18n.T("Medicine Store") <span class="req">*</span></span>
-                            <select class="form-select form-select-sm" @bind="storeId" disabled="@(savedMemo != null)">
-                                <option value="0">@I18n.T("Select Store")</option>
-                                @foreach (var x in stores.Where(x => x.IsActive))
-                                {
-                                    <option value="@x.ID">@x.Name</option>
-                                }
-                            </select>
-                        </label>
-                        <label>
-                            <span>@I18n.T("Customer Name") <span class="req">*</span></span>
-                            <input class="form-control form-control-sm" @bind="customerName" maxlength="50" disabled="@(savedMemo != null)" />
-                        </label>
-                        <label>
-                            <span>@I18n.T("Contact Mobile")</span>
-                            <input class="form-control form-control-sm" @bind="contact" maxlength="20" disabled="@(savedMemo != null)" />
-                        </label>
-                        @if (patientType == "2")
-                        {
-                            <label style="grid-column: span 4;">
-                                <span>@I18n.T("IPD Reg. Number") <span class="req">*</span></span>
-                                <input class="form-control form-control-sm" @bind="regNo" maxlength="10" placeholder="e.g. I26001" disabled="@(savedMemo != null)" />
-                            </label>
-                        }
-                    </div>
-
-                    <!-- Prescription & Medicine Line Editor -->
-                    @if (savedMemo == null)
-                    {
-                        <!-- Prescription Integration Strip -->
-                        <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 4px 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                            <div style="display: flex; align-items: center; gap: 6px; flex: 1 1 auto;">
-                                <span style="font-size: 11px; font-weight: 700; color: #166534; white-space: nowrap;">@I18n.T("Prescription #"):</span>
-                                <InputNumber class="form-control form-control-sm" style="max-width: 100px; height: 26px;" @bind-Value="prescriptionId" />
-                                <span style="font-size: 11px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">@prescriptionLabel</span>
-                            </div>
-                            <div style="display: flex; gap: 4px; flex-shrink: 0;">
-                                <button type="button" class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" @onclick="LoadPrescriptionAsync">
-                                    @I18n.T("Dispense Rx")
-                                </button>
-                                <a class="btn btn-ghost btn-sm" style="padding: 2px 8px; font-size: 11px;" href="pharmacy/prescriptions" target="_blank">
-                                    @I18n.T("New Rx")
-                                </a>
-                            </div>
-                        </div>
-
-                        <!-- Cashier Hotkeys Strip -->
-                        <div class="pos-hotkeys-strip">
-                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F1</span> @I18n.T("Search Med")</span>
-                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F4</span> @I18n.T("Switch OPD/IPD")</span>
-                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">F9</span> @I18n.T("Tender & Print")</span>
-                            <span class="pos-hotkey-chip"><span class="pos-hotkey-key">Esc</span> @I18n.T("Reset Form")</span>
-                        </div>
-
-                        <!-- Add Medicine Row with Autocomplete Typeahead -->
-                        <div class="billing-line-editor" style="grid-template-columns: minmax(210px, 2.2fr) 75px 85px auto; gap: 8px;">
-                            <div class="pos-typeahead-wrapper">
-                                <span style="font-size:11px; font-weight:700; color:#334155; display:block; margin-bottom:2px;">
-                                    @I18n.T("Medicine / Brand / Generic") <span class="req">*</span>
-                                </span>
-                                <div style="position:relative;">
+                    <!-- Medicine entry -->
+                    <div class="px-entry">
+                        <div class="px-field px-entry-search">
+                            <span>
+                                @I18n.T("Search Medicine") <i>*</i>
+                                <em>@I18n.T("brand, generic, type or code — multiple words allowed")</em>
+                            </span>
+                            <div class="px-typeahead">
+                                <div class="px-search-box @(selectedMedObj != null ? "picked" : "")">
+                                    <span class="px-search-icon">🔍</span>
                                     <input type="text"
-                                           class="form-control form-control-sm"
-                                           placeholder="@I18n.T("Type medicine or generic name...")"
+                                           @ref="medSearchInputRef"
+                                           placeholder="@I18n.T("e.g. napa 500, paracetamol, omep cap...  [F2]")"
                                            @bind="medSearchQuery"
                                            @bind:event="oninput"
+                                           @bind:after="OnMedSearchInput"
                                            @onkeydown="HandleMedSearchKeyDown"
                                            @onfocus="() => showMedSuggestions = true"
+                                           @onblur="() => showMedSuggestions = false"
                                            autocomplete="off" />
                                     @if (!string.IsNullOrWhiteSpace(medSearchQuery))
                                     {
-                                        <button type="button" class="btn btn-ghost" style="position:absolute; right:4px; top:50%; transform:translateY(-50%); padding:0 5px; font-size:10px;" @onclick="ClearMedSearch">✕</button>
+                                        <button type="button" class="px-x" @onclick="ClearMedSearch">✕</button>
                                     }
                                 </div>
 
-                                @if (showMedSuggestions && FilteredMedicines.Any())
+                                @if (showMedSuggestions && medTokens.Length > 0 && selectedMedObj == null)
                                 {
-                                    <div class="pos-med-dropdown">
-                                        @for (var i = 0; i < FilteredMedicines.Count; i++)
+                                    <div class="px-dropdown wide" id="px-med-dd">
+                                        <div class="px-dd-head">
+                                            <span>@medMatchCount @I18n.T("match(es)") @(medMatchCount > medResults.Count ? $"· {I18n.T("showing")} {medResults.Count}" : "")</span>
+                                            <span class="px-dd-keys">↑↓ @I18n.T("move") · Enter @I18n.T("select") · Esc @I18n.T("close")</span>
+                                        </div>
+                                        @if (medResults.Count == 0)
                                         {
-                                            var m = FilteredMedicines[i];
-                                            var isHl = i == highlightedMedIndex;
-                                            var stockAvail = Available(m.ID);
-                                            var hasStock = stockAvail > 0;
-                                            <div class="pos-med-item @(isHl ? "highlighted" : "")"
+                                            <div class="px-dd-empty">
+                                                @I18n.T("No medicine found for") “@medSearchQuery”
+                                                @if (inStockOnly)
+                                                {
+                                                    <button type="button" class="px-link" @onmousedown:preventDefault @onclick="ToggleInStockOnly">@I18n.T("Show out-of-stock too")</button>
+                                                }
+                                            </div>
+                                        }
+                                        @for (var i = 0; i < medResults.Count; i++)
+                                        {
+                                            var hit = medResults[i];
+                                            var idx = i;
+                                            <div class="px-dd-item @(i == highlightedMedIndex ? "is-active" : "") @(hit.Stock > 0 ? "" : "dim")"
                                                  @onmousedown:preventDefault
-                                                 @onclick="() => SelectMedicine(m)">
-                                                <div>
-                                                    <div class="pos-med-name">@m.Name</div>
-                                                    <div class="pos-med-sub">
-                                                        @if (m.TypeID.HasValue && typeNames.TryGetValue(m.TypeID.Value, out var t))
+                                                 @onmouseover="() => highlightedMedIndex = idx"
+                                                 @onclick="() => SelectMedicineAsync(hit.Med)">
+                                                <div class="px-dd-main">
+                                                    <div class="px-dd-name">
+                                                        @Hl(hit.Med.Name, medTokens)
+                                                        @if (!string.IsNullOrWhiteSpace(hit.Type))
                                                         {
-                                                            <span class="rx-type-pill">@t</span>
-                                                        }
-                                                        @if (m.GenericID.HasValue && genericNames.TryGetValue(m.GenericID.Value, out var g))
-                                                        {
-                                                            <span>(@g)</span>
+                                                            <span class="px-type">@Hl(hit.Type, medTokens)</span>
                                                         }
                                                     </div>
+                                                    @if (!string.IsNullOrWhiteSpace(hit.Generic) || !string.IsNullOrWhiteSpace(hit.Med.Sku))
+                                                    {
+                                                        <div class="px-dd-sub">
+                                                            @if (!string.IsNullOrWhiteSpace(hit.Generic))
+                                                            {
+                                                                <span>@Hl(hit.Generic, medTokens)</span>
+                                                            }
+                                                            @if (!string.IsNullOrWhiteSpace(hit.Med.Sku))
+                                                            {
+                                                                <span class="px-code">#@Hl(hit.Med.Sku, medTokens)</span>
+                                                            }
+                                                        </div>
+                                                    }
                                                 </div>
-                                                <div style="text-align:right;">
-                                                    <span class="pos-stock-badge @(hasStock ? "in-stock" : "out-stock")">
-                                                        @(hasStock ? $"{I18n.T("Stock")}: {stockAvail:N0}" : I18n.T("Out of Stock"))
+                                                <div class="px-dd-side">
+                                                    <b>@I18n.FormatCurrency(hit.Med.SaleRate ?? 0)</b>
+                                                    <span class="px-stock @(hit.Stock > 0 ? (hit.Stock <= 10 ? "low" : "ok") : "out")">
+                                                        @(hit.Stock > 0 ? $"{I18n.T("Stock")} {hit.Stock:N0}" : I18n.T("Out of stock"))
                                                     </span>
-                                                    <div style="font-size:11px; font-weight:700; color:#0369a1; margin-top:2px;">
-                                                        @I18n.FormatCurrency(m.SaleRate ?? 0)
-                                                    </div>
                                                 </div>
                                             </div>
                                         }
                                     </div>
                                 }
                             </div>
-                            <label>
-                                <span>@I18n.T("Qty") <span class="req">*</span></span>
-                                <InputNumber class="form-control form-control-sm" @bind-Value="lineQuantity" />
+                        </div>
+                        <label class="px-field px-entry-qty">
+                            <span>@I18n.T("Qty") <i>*</i></span>
+                            <input type="number" @ref="qtyInputRef" min="1" step="1" @bind="lineQuantity" @bind:event="oninput" @onkeydown="HandleQtyKeyDown" />
+                        </label>
+                        <label class="px-field px-entry-rate">
+                            <span>@I18n.T("Unit Price")</span>
+                            <input type="number" min="0" step="0.01" @bind="lineRate" @onkeydown="HandleQtyKeyDown" />
+                        </label>
+                        <div class="px-entry-actions">
+                            <button type="button" class="px-btn primary" @onclick="AddLineAndRefocusAsync" disabled="@(selectedMedObj == null)">+ @I18n.T("Add")</button>
+                        </div>
+
+                        <div class="px-entry-foot">
+                            <label class="px-check">
+                                <input type="checkbox" checked="@inStockOnly" @onchange="ToggleInStockOnly" />
+                                <span>@I18n.T("In-stock only")</span>
                             </label>
-                            <label>
-                                <span>@I18n.T("Rate")</span>
-                                <InputNumber class="form-control form-control-sm" @bind-Value="lineRate" />
-                            </label>
-                            <div style="display:flex; gap:4px; align-items:flex-end;">
-                                <button type="button" class="btn btn-secondary btn-sm" style="height: 28px; padding: 0 10px;" @onclick="AddLine">
-                                    + @I18n.T("Add")
-                                </button>
-                                @if (selectedMedObj != null && selectedMedObj.GenericID.HasValue && genericAlternatives.Count > 0)
+                            @if (selectedMedObj != null)
+                            {
+                                var selStock = Available(selectedMedObj.ID);
+                                <span class="px-picked-info">
+                                    <b>@selectedMedObj.Name</b>
+                                    <span class="px-stock @(selStock > 0 ? (selStock <= 10 ? "low" : "ok") : "out")">@I18n.T("Available"): @selStock.ToString("N0")</span>
+                                    @if (selectedMedObj.GenericID.HasValue && genericAlternatives.Count > 0)
+                                    {
+                                        <button type="button" class="px-link" @onclick="() => showGenericAlternatives = !showGenericAlternatives">
+                                            @I18n.T("Same generic") (@genericAlternatives.Count)
+                                        </button>
+                                    }
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="px-hint"><kbd>F2</kbd> @I18n.T("search") <kbd>Enter</kbd> @I18n.T("add") <kbd>F9</kbd> @I18n.T("save & print")</span>
+                            }
+                        </div>
+                    </div>
+
+                    @if (showGenericAlternatives && genericAlternatives.Count > 0)
+                    {
+                        <div class="px-alt-box">
+                            <div class="px-alt-head">
+                                <span>💡 @I18n.T("Same generic in stock") — @(selectedMedObj?.GenericID.HasValue == true && genericNames.TryGetValue(selectedMedObj.GenericID.Value, out var gen) ? gen : "")</span>
+                                <button type="button" @onclick="() => showGenericAlternatives = false">✕</button>
+                            </div>
+                            <div class="px-alt-list">
+                                @foreach (var alt in genericAlternatives.Take(6))
                                 {
-                                    <button type="button" class="btn btn-ghost btn-sm" style="height: 28px; padding: 0 6px; font-size: 11px; color:#b45309;" title="@I18n.T("Generic Alternatives")" @onclick="() => showGenericAlternatives = !showGenericAlternatives">
-                                        🧬 @I18n.T("Alt") (@genericAlternatives.Count)
+                                    <button type="button" class="px-alt-item" @onclick="() => SelectMedicineAsync(alt)">
+                                        <b>@alt.Name</b>
+                                        <span>@I18n.T("Stock") @Available(alt.ID).ToString("N0") · @I18n.FormatCurrency(alt.SaleRate ?? 0)</span>
                                     </button>
                                 }
                             </div>
                         </div>
+                    }
+                }
 
-                        @if (showGenericAlternatives && genericAlternatives.Count > 0)
+                <!-- Cart -->
+                <div class="px-cart">
+                    <div class="px-cart-head">
+                        <div>#</div>
+                        <div>@I18n.T("Medicine")</div>
+                        <div class="r">@I18n.T("Stock")</div>
+                        <div class="c">@I18n.T("Qty")</div>
+                        <div class="r">@I18n.T("Rate")</div>
+                        <div class="r">@I18n.T("Amount")</div>
+                        <div></div>
+                    </div>
+                    <div class="px-cart-rows">
+                        @if (lines.Count == 0)
                         {
-                            <!-- Generic Alternatives Assistant Panel -->
-                            <div class="pos-generic-alt-box">
-                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                                    <span style="font-size:11px; font-weight:800; color:#92400e;">
-                                        🧬 @I18n.T("In-Stock Generic Alternatives") (@(selectedMedObj?.GenericID.HasValue == true && genericNames.TryGetValue(selectedMedObj.GenericID.Value, out var gen) ? gen : "Same Generic")):
-                                    </span>
-                                    <button type="button" class="btn-clear" style="font-size:11px; border:none; background:transparent; cursor:pointer;" @onclick="() => showGenericAlternatives = false">✕</button>
-                                </div>
-                                <div style="display:flex; flex-direction:column; gap:4px;">
-                                    @foreach (var alt in genericAlternatives.Take(4))
+                            <div class="px-empty">
+                                <div class="px-empty-icon">🛒</div>
+                                <div>@I18n.T("Cart is empty")</div>
+                                <small>@I18n.T("Search a medicine above, scan a barcode, or load a prescription from the right panel.")</small>
+                            </div>
+                        }
+                        @for (var i = 0; i < lines.Count; i++)
+                        {
+                            var index = i;
+                            var x = lines[i];
+                            <div class="px-cart-row">
+                                <div class="muted">@(i + 1)</div>
+                                <div class="px-cart-name">
+                                    <b>@MedicineName(x.ServiceID)</b>
+                                    @if (!string.IsNullOrWhiteSpace(x.BatchNo))
                                     {
-                                        <div class="pos-alt-item">
-                                            <div>
-                                                <strong style="font-size:12px; color:#0f172a;">@alt.Name</strong>
-                                                <span style="margin-left:6px; font-size:11px; color:#15803d; font-weight:700;">
-                                                    • @I18n.T("In Stock"): @Available(alt.ID).ToString("N0")
-                                                </span>
-                                                <span style="margin-left:6px; font-size:11px; color:#475569;">
-                                                    • @I18n.FormatCurrency(alt.SaleRate ?? 0)
-                                                </span>
-                                            </div>
-                                            <button type="button" class="btn btn-secondary btn-sm" style="padding:1px 8px; font-size:11px;" @onclick="() => SelectMedicine(alt)">
-                                                @I18n.T("Select Alternative")
-                                            </button>
+                                        <small>B: @x.BatchNo</small>
+                                    }
+                                    @if (x.PrescriptionMedicineID.HasValue)
+                                    {
+                                        <small class="rx">Rx</small>
+                                    }
+                                </div>
+                                <div class="r muted">@(savedMemo == null ? Available(x.ServiceID).ToString("N0") : "—")</div>
+                                <div class="c">
+                                    @if (savedMemo == null)
+                                    {
+                                        <div class="px-stepper">
+                                            <button type="button" @onclick="() => StepLineQty(index, -1)">−</button>
+                                            <input type="number" min="1" value="@x.Quantity.ToString("0.##")" @onchange="e => SetLineQty(index, e.Value?.ToString())" />
+                                            <button type="button" @onclick="() => StepLineQty(index, 1)">+</button>
                                         </div>
+                                    }
+                                    else
+                                    {
+                                        <b>@x.Quantity.ToString("0.##")</b>
+                                    }
+                                </div>
+                                <div class="r">@I18n.FormatCurrency(x.Rate)</div>
+                                <div class="r strong">@I18n.FormatCurrency(x.Total)</div>
+                                <div class="c">
+                                    @if (savedMemo == null)
+                                    {
+                                        <button type="button" class="px-del" @onclick="() => RemoveLine(index)" title="@I18n.T("Remove")">✕</button>
                                     }
                                 </div>
                             </div>
                         }
-                    }
+                    </div>
+                </div>
 
-                    <!-- Cart Data Table -->
-                    <div class="billing-line-table-wrap" style="flex: 1 1 auto; max-height: none;">
-                        <div class="billing-line-head" style="grid-template-columns: 32px minmax(140px, 1fr) 75px 60px 85px 85px 32px;">
-                            <div>#</div>
-                            <div>@I18n.T("Medicine / Product")</div>
-                            <div style="text-align: right;">@I18n.T("Stock")</div>
-                            <div style="text-align: right;">@I18n.T("Qty")</div>
-                            <div style="text-align: right;">@I18n.T("Rate")</div>
-                            <div style="text-align: right;">@I18n.T("Total")</div>
-                            <div></div>
-                        </div>
-
-                        <div class="billing-line-rows">
-                            @if (lines.Count == 0)
-                            {
-                                <div class="empty-state small" style="padding: 18px 0; text-align: center; color: #94a3b8; font-size: 11.5px;">
-                                    @I18n.T("No medicines added to cart yet.")
-                                </div>
-                            }
-                            @for (var i = 0; i < lines.Count; i++)
-                            {
-                                var index = i;
-                                var x = lines[i];
-                                <div class="billing-line-row" style="grid-template-columns: 32px minmax(140px, 1fr) 75px 60px 85px 85px 32px;">
-                                    <div style="color: #64748b; font-size: 10.5px;">@(i + 1)</div>
-                                    <div style="font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                        @MedicineName(x.ServiceID)
-                                        @if (!string.IsNullOrWhiteSpace(x.BatchNo))
-                                        {
-                                            <span style="font-size:10px; color:#64748b; margin-left:4px; font-weight:normal;">[B: @x.BatchNo]</span>
-                                        }
+                <!-- Payment + totals -->
+                <div class="px-pay">
+                    @if (CollectsPayment)
+                    {
+                        <div class="px-tender @(IsCashPayment ? "" : "noncash")">
+                            <div class="px-field px-pay-method">
+                                <span>@I18n.T("Payment Method")</span>
+                                @if (addingPaymentMethod)
+                                {
+                                    <div class="px-inline-add">
+                                        <input @ref="newMethodInputRef" @bind="newPaymentMethodName" @bind:event="oninput" maxlength="40"
+                                               placeholder="@I18n.T("e.g. Card, bKash")" @onkeydown="HandleNewMethodKeyDown" />
+                                        <button type="button" class="px-btn primary" title="@I18n.T("Save method")" @onclick="AddPaymentMethodAsync">✓</button>
+                                        <button type="button" class="px-btn" title="@I18n.T("Cancel")" @onclick="CancelAddPaymentMethod">✕</button>
                                     </div>
-                                    <div style="text-align: right; color: #64748b;">@Available(x.ServiceID).ToString("N2")</div>
-                                    <div style="text-align: right; font-weight: 700;">@x.Quantity</div>
-                                    <div style="text-align: right;">@I18n.FormatCurrency(x.Rate)</div>
-                                    <div style="text-align: right; font-weight: 800; color: #0f172a;">@I18n.FormatCurrency(x.Total)</div>
-                                    <div style="text-align: center;">
+                                }
+                                else
+                                {
+                                    <select value="@paymentMethod" @onchange="OnPaymentMethodChangedAsync" disabled="@(savedMemo != null)">
+                                        @foreach (var pm in paymentMethods)
+                                        {
+                                            <option value="@pm.Name">@PaymentIcon(pm.Name) @pm.Name</option>
+                                        }
+                                        @if (!paymentMethods.Any(x => x.Name == paymentMethod))
+                                        {
+                                            <option value="@paymentMethod">@paymentMethod</option>
+                                        }
                                         @if (savedMemo == null)
                                         {
-                                            <button type="button" @onclick="() => RemoveLine(index)" title="@I18n.T("Remove")">✕</button>
+                                            <option value="@NewMethodOption">＋ @I18n.T("Add new method…")</option>
+                                        }
+                                    </select>
+                                }
+                            </div>
+
+                            @if (IsCashPayment)
+                            {
+                                <label class="px-field px-cash-given">
+                                    <span>@I18n.T("Cash Given")</span>
+                                    <input type="number" min="0" step="1" @ref="tenderInputRef" @bind="tenderedAmount" @bind:event="oninput" placeholder="0" disabled="@(savedMemo != null)" />
+                                </label>
+                                @if (savedMemo == null)
+                                {
+                                    <div class="px-chips">
+                                        <button type="button" @onclick="SetExactCash">@I18n.T("Exact")</button>
+                                        @foreach (var note in new[] { 100, 200, 500, 1000 })
+                                        {
+                                            var n = note;
+                                            <button type="button" @onclick="() => SetQuickCash(n)">@n</button>
                                         }
                                     </div>
+                                }
+                                <div class="px-change @(ChangeDue > 0 ? "has" : "")">
+                                    <span>@I18n.T("Change")</span>
+                                    <b>@I18n.FormatCurrency(ChangeDue)</b>
                                 </div>
                             }
+                            else
+                            {
+                                <div class="px-field px-paid-amount">
+                                    <span>@I18n.T("Amount Received")</span>
+                                    <div class="px-paid-value">@I18n.FormatCurrency(Net)</div>
+                                </div>
+                                <label class="px-field px-ref">
+                                    <span>@I18n.T("Ref. / Note") <em>@I18n.T("optional")</em></span>
+                                    <input type="text" @bind="paymentRef" maxlength="100" disabled="@(savedMemo != null)"
+                                           placeholder="@I18n.T("Txn ID, card slip no., sender number...")" />
+                                </label>
+                            }
                         </div>
-                    </div>
-
-                    <!-- Bottom Summary with Tender Cash & Change Due Calculator -->
-                    <div class="billing-bottom-summary align-end" style="margin-top: auto; padding-top: 4px;">
-                        <div class="billing-totals-compact">
-                            <div>
-                                <span>@I18n.T("Gross Total"):</span>
-                                <strong>@I18n.FormatCurrency(Gross)</strong>
-                            </div>
-                            <label>
-                                <span>@I18n.T("Discount"):</span>
-                                <InputNumber @bind-Value="discount" disabled="@(savedMemo != null)" />
-                            </label>
-                            <div class="grand-due">
-                                <span>@I18n.T("Net Payable"):</span>
-                                <strong>@I18n.FormatCurrency(Net)</strong>
-                            </div>
+                    }
+                    else
+                    {
+                        <div class="px-tender info">
+                            🛏️ @I18n.T("This bill will be added to the patient's IPD bed bill. No cash is collected now.")
                         </div>
+                    }
 
-                        <!-- Tender Cash & Change Due Calculator -->
-                        <div class="tender-calculator-wrap">
-                            <label style="display:flex; align-items:center; gap:6px; margin:0;">
-                                <span style="font-size:11px; font-weight:700; color:#166534; white-space:nowrap;">💵 @I18n.T("Cash Received"):</span>
-                                <InputNumber class="form-control form-control-sm" style="width:85px; height:26px; font-weight:800; color:#166534;" @bind-Value="tenderedAmount" />
-                            </label>
-                            <div class="quick-cash-chips">
-                                <button type="button" class="quick-cash-chip" @onclick="SetExactCash">@I18n.T("Exact")</button>
-                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(100)">৳100</button>
-                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(500)">৳500</button>
-                                <button type="button" class="quick-cash-chip" @onclick="() => SetQuickCash(1000)">৳1000</button>
-                            </div>
-                            <div style="font-size:12px; font-weight:800; color:@(ChangeDue > 0 ? "#059669" : "#64748b"); margin-left:auto;">
-                                <span>@I18n.T("Change to Return"):</span>
-                                <strong style="font-size:13px; color:#059669; margin-left:4px;">@I18n.FormatCurrency(ChangeDue)</strong>
-                            </div>
+                    <div class="px-totals">
+                        <div><span>@I18n.T("Items")</span><b>@lines.Count (@lines.Sum(x => x.Quantity).ToString("0.##") @I18n.T("units"))</b></div>
+                        <div><span>@I18n.T("Sub Total")</span><b>@I18n.FormatCurrency(Gross)</b></div>
+                        <label>
+                            <span>@I18n.T("Discount")</span>
+                            <input type="number" min="0" step="1" @bind="discount" disabled="@(savedMemo != null)" />
+                        </label>
+                        <div class="grand">
+                            <span>@(patientType == "2" && ipdPaymentMode == "credit" ? I18n.T("Bed Bill Total") : I18n.T("Net Payable"))</span>
+                            <b>@I18n.FormatCurrency(Net)</b>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Sticky Actions Footer -->
-                <div class="pharmacy-form-footer">
-                    <div>
-                        @if (savedMemo != null)
+            <footer class="px-card-foot">
+                <div class="px-print-fmt">
+                    <span>@I18n.T("Print")</span>
+                    <div class="px-seg">
+                        <button type="button" class="@(isThermalPrint ? "on" : "")" @onclick="() => isThermalPrint = true">80mm</button>
+                        <button type="button" class="@(!isThermalPrint ? "on" : "")" @onclick="() => isThermalPrint = false">A4</button>
+                    </div>
+                </div>
+                <div class="px-foot-actions">
+                    @if (savedMemo == null)
+                    {
+                        <button type="button" class="px-btn" @onclick="() => PostAsync(false)" disabled="@(isSaving || lines.Count == 0)">@I18n.T("Save Only")</button>
+                        <button type="button" class="px-btn primary lg" @onclick="() => PostAsync(true)" disabled="@(isSaving || lines.Count == 0)">
+                            @(isSaving ? I18n.T("Saving…") : $"{I18n.T("Save & Print")} · {I18n.FormatCurrency(Net)}")
+                            <kbd>F9</kbd>
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" class="px-btn" @onclick="() => PrintWithFormatAsync(true)">🖨 @I18n.T("Print 80mm")</button>
+                        <button type="button" class="px-btn" @onclick="() => PrintWithFormatAsync(false)">🖨 @I18n.T("Print A4")</button>
+                        <button type="button" class="px-btn primary lg" @onclick="Reset">+ @I18n.T("New Sale")</button>
+                    }
+                </div>
+            </footer>
+        </section>
+
+        <!-- Right: queues -->
+        <aside class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-seg full">
+                    <button type="button" class="@(rightQueueTab == "sales" ? "on" : "")" @onclick='() => rightQueueTab = "sales"'>@I18n.T("Today's Bills") <span class="px-count">@recent.Count</span></button>
+                    <button type="button" class="@(rightQueueTab == "rx" ? "on" : "")" @onclick='() => rightQueueTab = "rx"'>@I18n.T("Pending Rx") <span class="px-count warn">@pendingPrescriptions.Count</span></button>
+                </div>
+                <div class="px-search-box sm">
+                    <span class="px-search-icon">🔍</span>
+                    @if (rightQueueTab == "sales")
+                    {
+                        <input type="text" placeholder="@I18n.T("Memo #, name, mobile or reg...")" @bind="recentScanQuery" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(recentScanQuery))
                         {
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span class="text-success fw-bold" style="font-size: 12px;">✓ @I18n.T("Sale memo finalized & accounts posted")</span>
-                                <span class="badge" style="background:#e0f2fe; color:#0369a1; font-size:10px;">
-                                    Format: @(isThermalPrint ? "80mm Roll" : "A4/A5 Slip")
+                            <button type="button" class="px-x" @onclick='() => recentScanQuery = ""'>✕</button>
+                        }
+                    }
+                    else
+                    {
+                        <input type="text" placeholder="@I18n.T("RX #, patient name or ID...")" @bind="rxQueueSearch" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(rxQueueSearch))
+                        {
+                            <button type="button" class="px-x" @onclick='() => rxQueueSearch = ""'>✕</button>
+                        }
+                    }
+                </div>
+            </header>
+
+            <div class="px-queue">
+                @if (rightQueueTab == "sales")
+                {
+                    var list = FilteredRecent.ToList();
+                    @if (list.Count == 0)
+                    {
+                        <div class="px-empty sm">@(string.IsNullOrWhiteSpace(recentScanQuery) ? I18n.T("No sales recorded today.") : I18n.T("No bill matches your search."))</div>
+                    }
+                    @foreach (var x in list)
+                    {
+                        var isCurrent = savedMemo?.ID == x.ID;
+                        <button type="button" class="px-q-item @(isCurrent ? "active" : "")" @onclick="() => SelectMemoAsync(x)">
+                            <span class="px-q-id">#@x.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">
+                                    @Hl(x.Name, recentTokens)
+                                    @if (x.PatientType == "2")
+                                    {
+                                        <span class="px-tag @(x.IsCredit == true ? "violet" : "blue")">@(x.IsCredit == true ? "IPD Bill" : "IPD Cash")</span>
+                                    }
                                 </span>
-                            </div>
-                        }
-                        else
-                        {
-                            <span class="text-muted" style="font-size: 11.5px;">@lines.Count @I18n.T("item(s) in cart")</span>
-                        }
+                                <span class="px-q-meta">
+                                    @x.TransDate.ToString("hh:mm tt")
+                                    @if (!string.IsNullOrWhiteSpace(x.RegNo)) { <text> · @Hl(x.RegNo, recentTokens)</text> }
+                                    @if (!string.IsNullOrWhiteSpace(x.Contact)) { <text> · @Hl(x.Contact, recentTokens)</text> }
+                                </span>
+                            </span>
+                            <span class="px-q-amt">@I18n.FormatCurrency((x.Total ?? 0) - (x.Discount ?? 0))</span>
+                        </button>
+                    }
+                }
+                else
+                {
+                    var rxList = FilteredPendingRx.ToList();
+                    @if (rxList.Count == 0)
+                    {
+                        <div class="px-empty sm">@(string.IsNullOrWhiteSpace(rxQueueSearch) ? I18n.T("No pending doctor prescriptions or ward indents.") : I18n.T("No prescription matches your search."))</div>
+                    }
+                    @foreach (var rx in rxList)
+                    {
+                        <button type="button" class="px-q-item @(loadedPrescriptionId == rx.ID ? "active" : "")" @onclick="() => LoadFromQueueAsync(rx.ID)">
+                            <span class="px-q-id">RX-@rx.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">
+                                    @Hl(rx.PatientName, rxTokens)
+                                    @if (rx.IsIpdIndent)
+                                    {
+                                        <span class="px-tag violet">WARD</span>
+                                    }
+                                </span>
+                                <span class="px-q-meta">@rx.ItemCount @I18n.T("items") · @rx.CreatedDate.ToString("dd MMM")@(string.IsNullOrWhiteSpace(rx.PatientId) ? "" : $" · {rx.PatientId}")</span>
+                            </span>
+                            <span class="px-q-load">@I18n.T("Load") →</span>
+                        </button>
+                    }
+                }
+            </div>
+        </aside>
+    </div>
+
+    @if (dialog != null)
+    {
+        <div class="px-modal-backdrop" @onclick="CloseDialog">
+            <div class="px-modal @dialog.Kind" role="alertdialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="px-modal-head">
+                    <span class="px-modal-icon">@(dialog.Kind == "cash" ? "💵" : "⚠️")</span>
+                    <h3>@dialog.Title</h3>
+                </div>
+                <ul class="px-modal-list">
+                    @foreach (var msg in dialog.Messages)
+                    {
+                        <li>@msg</li>
+                    }
+                </ul>
+                @if (dialog.Kind == "cash")
+                {
+                    <div class="px-modal-summary">
+                        <div><span>@I18n.T("Net Payable")</span><b>@I18n.FormatCurrency(Net)</b></div>
+                        <div><span>@I18n.T("Cash Given")</span><b>@I18n.FormatCurrency(tenderedAmount ?? 0)</b></div>
                     </div>
-                    <div style="display: flex; gap: 8px; align-items:center;">
-                        @if (savedMemo == null)
-                        {
-                            <button class="btn btn-primary btn-sm" @onclick="PostAsync" disabled="@isSaving">
-                                @if (isSaving)
-                                {
-                                    <span class="spinner-border spinner-border-sm me-1"></span>
-                                }
-                                @(isSaving ? I18n.T("Saving…") : I18n.T("Complete Sale & Print Receipt"))
-                            </button>
-                        }
-                        else
-                        {
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button type="button" class="btn @(isThermalPrint ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 8px; font-size:11px;" @onclick="() => isThermalPrint = true">
-                                    🖨️ 80mm Roll
-                                </button>
-                                <button type="button" class="btn @(!isThermalPrint ? "btn-primary" : "btn-secondary") btn-sm" style="padding:2px 8px; font-size:11px;" @onclick="() => isThermalPrint = false">
-                                    📄 A4/A5 Slip
-                                </button>
-                            </div>
-                            <button class="btn btn-secondary btn-sm" @onclick="PrintAsync">
-                                🖨 @(isThermalPrint ? I18n.T("Print 80mm Receipt") : I18n.T("Print Invoice"))
-                            </button>
-                            <button class="btn btn-primary btn-sm" @onclick="Reset">
-                                + @I18n.T("New Sale")
-                            </button>
-                        }
-                    </div>
+                }
+                <div class="px-modal-actions">
+                    @if (dialog.Kind == "cash")
+                    {
+                        <button type="button" class="px-btn" @onclick="FocusCashInputAsync">@I18n.T("Enter Cash Amount")</button>
+                        <button type="button" class="px-btn primary" @onclick="ReceiveExactAndSaveAsync">✓ @I18n.T("Received") @I18n.FormatCurrency(Net) — @I18n.T("Save")</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="px-btn primary" @onclick="CloseDialog">@I18n.T("OK")</button>
+                    }
                 </div>
             </div>
         </div>
-
-        <!-- Right: Recent Sales Queue Card -->
-        <div class="pharmacy-queue-card">
-            <div class="pharmacy-queue-top">
-                <h2>@I18n.T("Today's Pharmacy Sales")</h2>
-                <span class="diagnostic-badge">@FilteredRecent.Count() @I18n.T("memos")</span>
-            </div>
-
-            <!-- Queue Search / Scanner -->
-            <div class="scanner-search-group" style="margin: 6px 10px; padding: 3px 8px;">
-                <span class="scanner-icon" title="Scan or search memo"><SearchIcon /></span>
-                <input type="text"
-                       class="scanner-input"
-                       placeholder="@I18n.T("Scan / Search Memo # (PH-XXXX) or Customer...")"
-                       @bind="recentScanQuery"
-                       @bind:event="oninput" />
-                @if (!string.IsNullOrWhiteSpace(recentScanQuery))
-                {
-                    <button type="button" class="btn btn-ghost" style="padding: 0 6px; font-size: 11px;" @onclick="ClearRecentScan">✕</button>
-                }
-            </div>
-
-            <!-- Scrollable Queue List -->
-            <div class="billing-queue-list">
-                @if (!FilteredRecent.Any())
-                {
-                    <div class="empty-state small" style="padding: 24px 0; text-align: center; color: #94a3b8; font-size: 11.5px;">
-                        @I18n.T("No matching sales records.")
-                    </div>
-                }
-                @foreach (var x in FilteredRecent)
-                {
-                    var isCurrent = savedMemo?.ID == x.ID;
-                    <div class="billing-queue-item @(isCurrent ? "active" : "")" @onclick="() => SelectMemoAsync(x)">
-                        <div class="billing-queue-serial">#@x.ID</div>
-                        <div class="billing-queue-info">
-                            <div class="billing-queue-name">
-                                @x.Name
-                                @if (x.PatientType == "2")
-                                {
-                                    <span class="badge badge-info" style="font-size: 9px; padding: 1px 4px;">IPD</span>
-                                }
-                            </div>
-                            <div class="billing-queue-meta">
-                                @(!string.IsNullOrWhiteSpace(x.RegNo) ? $"{x.RegNo} · " : "")@x.TransDate.ToString("hh:mm tt")
-                            </div>
-                        </div>
-                        <div class="billing-queue-amount">
-                            @I18n.FormatCurrency((x.Total ?? 0) - (x.Discount ?? 0))
-                        </div>
-                        <div class="billing-queue-actions">
-                            <button type="button" class="btn btn-ghost btn-sm" style="padding: 1px 5px; font-size: 11px;" title="@I18n.T("View & Print")">
-                                👁
-                            </button>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-    </div>
+    }
 </div>
 
 @if (savedMemo != null)
 {
-    <!-- 80mm POS Thermal Receipt -->
-    <div id="pharmacy-thermal-print" class="pos-receipt-80mm" style="@(isThermalPrint ? "" : "display:none;")">
+    <!-- 1. 80mm POS Thermal Receipt -->
+    <div id="pharmacy-thermal-print" class="pos-receipt-80mm pharm-print-only">
         <div class="pos-thermal-header">
             <div class="pos-thermal-title">@Branding.HospitalName</div>
             <div style="font-size:10px; font-weight:700;">@I18n.T("PHARMACY CASH MEMO")</div>
             <div class="pos-thermal-meta">
                 <div><b>@($"MEMO: #PH-{savedMemo.ID}")</b></div>
                 <div>@savedMemo.TransDate.ToString("dd/MM/yyyy hh:mm tt")</div>
-                <div>@I18n.T("Patient"): @savedMemo.Name</div>
+                <div>@I18n.T("Customer"): @savedMemo.Name</div>
                 @if (!string.IsNullOrWhiteSpace(savedMemo.Contact))
                 {
-                    <div>@I18n.T("Contact"): @savedMemo.Contact</div>
+                    <div>@I18n.T("Mobile"): @savedMemo.Contact</div>
                 }
-                <div>@I18n.T("Type"): @(savedMemo.PatientType == "2" ? $"IPD ({savedMemo.RegNo})" : "OPD Walk-in")</div>
+                <div>@I18n.T("Mode"): @(savedMemo.PatientType == "2" ? (savedMemo.IsCredit == true ? $"IPD Bed Bill ({savedMemo.RegNo})" : $"IPD ({savedMemo.RegNo})") : "OPD")</div>
+                @if (savedMemo.IsCredit != true)
+                {
+                    <div>@I18n.T("Paid via"): <b>@(savedMemo.PaymentMethod ?? PharmacyPaymentMethod.Cash)</b>@(string.IsNullOrWhiteSpace(savedMemo.PaymentRef) ? "" : $" · Ref: {savedMemo.PaymentRef}")</div>
+                }
             </div>
         </div>
 
         <table class="pos-thermal-table">
             <thead>
                 <tr>
-                    <th style="width:48%;">@I18n.T("Item / Batch")</th>
+                    <th style="width:48%;">@I18n.T("Medicine")</th>
                     <th style="text-align:right; width:16%;">@I18n.T("Qty")</th>
                     <th style="text-align:right; width:18%;">@I18n.T("Rate")</th>
                     <th style="text-align:right; width:18%;">@I18n.T("Total")</th>
@@ -495,7 +724,7 @@
 
         <div class="pos-thermal-summary">
             <div class="pos-thermal-row">
-                <span>@I18n.T("Gross Total"):</span>
+                <span>@I18n.T("Sub Total"):</span>
                 <span>@I18n.FormatCurrency(savedMemo.Total ?? Gross)</span>
             </div>
             @if ((savedMemo.Discount ?? 0) > 0)
@@ -506,13 +735,13 @@
                 </div>
             }
             <div class="pos-thermal-row grand">
-                <span>@I18n.T("Net Payable"):</span>
+                <span>@(savedMemo.IsCredit == true ? I18n.T("Added to Bed Bill") : I18n.T("Net Total")):</span>
                 <span>@I18n.FormatCurrency((savedMemo.Total ?? 0) - (savedMemo.Discount ?? 0))</span>
             </div>
-            @if (tenderedAmount.HasValue && tenderedAmount.Value > 0)
+            @if (savedMemo.IsCredit != true && (savedMemo.PaymentMethod ?? PharmacyPaymentMethod.Cash) == PharmacyPaymentMethod.Cash && tenderedAmount.HasValue && tenderedAmount.Value > 0)
             {
                 <div class="pos-thermal-row" style="margin-top:2px;">
-                    <span>@I18n.T("Cash Paid"):</span>
+                    <span>@I18n.T("Cash Given"):</span>
                     <span>@I18n.FormatCurrency(tenderedAmount.Value)</span>
                 </div>
                 <div class="pos-thermal-row">
@@ -523,37 +752,41 @@
         </div>
 
         <div class="pos-thermal-footer">
-            <div>@I18n.T("Prepared By"): <strong>@currentUserName</strong></div>
-            <div>@I18n.T("Medicines once sold cannot be returned without original cash memo.")</div>
-            <div style="margin-top:4px; font-weight:700;">*** @I18n.T("Thank you & Get Well Soon") ***</div>
+            <div>@I18n.T("Served By"): <strong>@currentUserName</strong></div>
+            <div>@I18n.T("Bring original receipt for medicine return.")</div>
         </div>
         <PrintDeveloperFooter Compact="true" />
     </div>
 
-    <!-- Standard A4/A5 Print Document -->
-    <div id="pharmacy-sale-print" class="print-sheet panel print-document" style="@(!isThermalPrint ? "" : "display:none;")">
-        <PrintDocumentHeader Title="@I18n.T("Pharmacy Cash Receipt")"
-                             SubTitle="@I18n.T("Pharmacy & Dispensary")"
+    <!-- 2. Official A4 Pharmacy Bill / Cash Memo -->
+    <div id="pharmacy-sale-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@(savedMemo.IsCredit == true ? I18n.T("IPD Pharmacy Medication Bill") : I18n.T("Pharmacy Cash Memo / Bill"))"
+                             SubTitle="@I18n.T("Hospital Pharmacy")"
                              DocumentNo="@($"PH-{savedMemo.ID}")"
                              BarcodeCode="@($"PH-{savedMemo.ID}")"
                              QrPayload="@BarcodeQr.GeneratePharmacyQrPayload(savedMemo.ID, savedMemo.Name, (savedMemo.Total ?? 0) - (savedMemo.Discount ?? 0))" />
 
         <div class="print-grid">
-            <div><span>@I18n.T("Patient Name"):</span> <b>@savedMemo.Name</b></div>
-            <div><span>@I18n.T("Contact Mobile"):</span> <b>@savedMemo.Contact</b></div>
-            <div><span>@I18n.T("Patient Category"):</span> <b>@(savedMemo.PatientType == "2" ? "IPD" : "OPD")</b></div>
-            <div><span>@I18n.T("IPD Reg. Number"):</span> <b>@savedMemo.RegNo</b></div>
+            <div><span>@I18n.T("Customer / Patient"):</span> <b>@savedMemo.Name</b></div>
+            <div><span>@I18n.T("Mobile"):</span> <b>@(string.IsNullOrWhiteSpace(savedMemo.Contact) ? "—" : savedMemo.Contact)</b></div>
+            <div><span>@I18n.T("Date & Time"):</span> <b>@savedMemo.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+            <div><span>@I18n.T("Billing Type"):</span> <b>@(savedMemo.PatientType == "2" ? (savedMemo.IsCredit == true ? $"IPD Bed Bill ({savedMemo.RegNo})" : $"IPD ({savedMemo.RegNo})") : "OPD Walk-in")</b></div>
+            @if (savedMemo.IsCredit != true)
+            {
+                <div><span>@I18n.T("Payment"):</span> <b>@(savedMemo.PaymentMethod ?? PharmacyPaymentMethod.Cash)@(string.IsNullOrWhiteSpace(savedMemo.PaymentRef) ? "" : $" · Ref: {savedMemo.PaymentRef}")</b></div>
+            }
         </div>
+
         <table class="data-table">
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
-                    <th>@I18n.T("Batch #")</th>
-                    <th>@I18n.T("Expiry Date")</th>
+                    <th>@I18n.T("Medicine Name")</th>
+                    <th>@I18n.T("Batch")</th>
+                    <th>@I18n.T("Expiry")</th>
                     <th class="num">@I18n.T("Qty")</th>
-                    <th class="num">@I18n.T("Rate")</th>
-                    <th class="num">@I18n.T("Total")</th>
+                    <th class="num">@I18n.T("Unit Price")</th>
+                    <th class="num">@I18n.T("Amount")</th>
                 </tr>
             </thead>
             <tbody>
@@ -572,11 +805,13 @@
                 }
             </tbody>
         </table>
+
         <div class="print-total">
+            <div><span>@I18n.T("Sub Total")</span><b>@I18n.FormatCurrency(savedMemo.Total ?? Gross)</b></div>
             <div><span>@I18n.T("Discount")</span><b>@I18n.FormatCurrency(savedMemo.Discount ?? 0)</b></div>
-            <div class="grand"><span>@I18n.T("Net Total")</span><b>@I18n.FormatCurrency((savedMemo.Total ?? 0) - (savedMemo.Discount ?? 0))</b></div>
+            <div class="grand"><span>@(savedMemo.IsCredit == true ? I18n.T("Charged to IPD Bed Bill") : I18n.T("Net Total"))</span><b>@I18n.FormatCurrency((savedMemo.Total ?? 0) - (savedMemo.Discount ?? 0))</b></div>
         </div>
-        <PrintDocumentFooter Signatures='new string[] { I18n.T("Patient / Attendant", "Customer"), I18n.T("Cashier", "Pharmacist") }' />
+        <PrintDocumentFooter Signatures='new string[] { I18n.T("Customer / Receiver"), I18n.T("Pharmacist / Cashier") }' />
     </div>
 }
 
@@ -587,26 +822,62 @@
     [SupplyParameterFromQuery(Name = "patientType")]
     public string? QueryPatientType { get; set; }
 
+    private ElementReference medSearchInputRef;
+    private ElementReference qtyInputRef;
+    private ElementReference scanInputRef;
+    private DotNetObjectReference<PharmacyPos>? selfRef;
+
     private List<Service> medicines = [];
+    private Dictionary<int, Service> medicineById = [];
+    private List<MedIndexEntry> medIndex = [];
     private List<MedicineStore> stores = [];
-    private List<MedicineStoreBalance> stocks = [];
+    private Dictionary<(int StoreId, int ServiceId), decimal> stockMap = [];
     private List<PharmacyCashMemo> recent = [];
+    private List<InpatientLookupItem> admittedPatients = [];
+    private List<PendingRxItem> pendingPrescriptions = [];
     private List<SaleLine> lines = [];
+    private List<RxShortage> rxShortages = [];
     private PharmacyCashMemo? savedMemo;
+
+    private int currentUserId;
+    private int? preferredStoreId;
     private string patientType = "1";
-    private int storeId = 1;
-    private string customerName = "Walk-in Customer";
+    private string ipdPaymentMode = "credit";
+    private string rightQueueTab = "sales";
+    private int storeId;
+    private string customerName = WalkInName;
     private string contact = "";
     private string regNo = "";
+    private string selectedBedName = "";
+    private string ipdSearchQuery = "";
+    private bool showIpdSuggestions;
+    private int highlightedIpdIndex;
+
     private string posScanQuery = "";
     private string recentScanQuery = "";
+    private string rxQueueSearch = "";
     private string medSearchQuery = "";
+    private string[] medTokens = [];
+    private List<MedHit> medResults = [];
+    private int medMatchCount;
+    private bool inStockOnly;
     private bool showMedSuggestions;
     private int highlightedMedIndex;
     private Service? selectedMedObj;
     private Dictionary<int, string> genericNames = [];
     private Dictionary<int, string> typeNames = [];
     private decimal? tenderedAmount;
+    private ElementReference tenderInputRef;
+    private ElementReference newMethodInputRef;
+    private List<PharmacyPaymentMethod> paymentMethods = [];
+    private string paymentMethod = PharmacyPaymentMethod.Cash;
+    private string paymentRef = "";
+    private bool addingPaymentMethod;
+    private string newPaymentMethodName = "";
+    private SaveDialog? dialog;
+    private const string NewMethodOption = "__new__";
+    private bool IsCashPayment => string.Equals(paymentMethod, PharmacyPaymentMethod.Cash, StringComparison.OrdinalIgnoreCase);
+    private bool CollectsPayment => patientType == "1" || ipdPaymentMode == "cash";
     private decimal ChangeDue => Math.Max(0, (tenderedAmount ?? 0) - Net);
     private bool isThermalPrint = true;
     private bool showGenericAlternatives;
@@ -616,88 +887,385 @@
     private decimal lineRate;
     private decimal discount;
     private long? prescriptionId, loadedPrescriptionId;
-    private string prescriptionLabel = "—";
+    private string prescriptionLabel = "";
     private bool isSaving;
     private string message = "";
     private string messageClass = "success";
+    private string currentUserName = "User";
+
+    private const string WalkInName = "Walk-in Customer";
+
     private decimal Gross => lines.Sum(x => x.Total);
     private decimal Net => Math.Max(0, Gross - discount);
 
-    private List<Service> FilteredMedicines
+    private string[] ipdTokens => Tokenize(ipdSearchQuery);
+    private string[] recentTokens => Tokenize(recentScanQuery);
+    private string[] rxTokens => Tokenize(rxQueueSearch);
+
+    // ---------- Search helpers ----------
+    private static string[] Tokenize(string? q) => string.IsNullOrWhiteSpace(q)
+        ? []
+        : q.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private static bool MatchesAll(string[] tokens, params string?[] fields)
+    {
+        if (tokens.Length == 0) return true;
+        var hay = string.Join(' ', fields.Where(f => !string.IsNullOrWhiteSpace(f)));
+        return tokens.All(t => hay.Contains(t, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool WordStartsWith(string text, string token)
+    {
+        var idx = 0;
+        while ((idx = text.IndexOf(token, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            if (idx == 0 || !char.IsLetterOrDigit(text[idx - 1])) return true;
+            idx++;
+        }
+        return false;
+    }
+
+    /// <summary>Renders text with every search token highlighted.</summary>
+    private static RenderFragment Hl(string? text, string[] tokens) => builder =>
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (tokens.Length == 0) { builder.AddContent(0, text); return; }
+        var mask = new bool[text.Length];
+        foreach (var t in tokens)
+        {
+            var i = 0;
+            while ((i = text.IndexOf(t, i, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                for (var k = i; k < i + t.Length; k++) mask[k] = true;
+                i += Math.Max(1, t.Length);
+            }
+        }
+        var seq = 0;
+        var start = 0;
+        while (start < text.Length)
+        {
+            var hit = mask[start];
+            var end = start;
+            while (end < text.Length && mask[end] == hit) end++;
+            var part = text[start..end];
+            if (hit)
+            {
+                builder.OpenElement(seq++, "mark");
+                builder.AddContent(seq++, part);
+                builder.CloseElement();
+            }
+            else builder.AddContent(seq++, part);
+            start = end;
+        }
+    };
+
+    private static int ScoreMedicine(MedIndexEntry e, string q, string[] tokens)
+    {
+        if (!string.IsNullOrEmpty(e.Sku) && e.Sku.Equals(q, StringComparison.OrdinalIgnoreCase)) return 1000;
+        if (e.Name.Equals(q, StringComparison.OrdinalIgnoreCase)) return 900;
+        if (e.Name.StartsWith(q, StringComparison.OrdinalIgnoreCase)) return 800;
+        if (e.Name.StartsWith(tokens[0], StringComparison.OrdinalIgnoreCase)) return 700;
+        if (WordStartsWith(e.Name, tokens[0])) return 600;
+        if (e.Name.Contains(q, StringComparison.OrdinalIgnoreCase)) return 500;
+        if (e.Generic.StartsWith(q, StringComparison.OrdinalIgnoreCase)) return 400;
+        if (tokens.All(t => e.Name.Contains(t, StringComparison.OrdinalIgnoreCase))) return 300;
+        if (e.Generic.Contains(q, StringComparison.OrdinalIgnoreCase)) return 200;
+        return 100;
+    }
+
+    private void RefreshMedResults()
+    {
+        highlightedMedIndex = 0;
+        medTokens = Tokenize(medSearchQuery);
+        if (medTokens.Length == 0)
+        {
+            medResults = [];
+            medMatchCount = 0;
+            return;
+        }
+        var q = medSearchQuery.Trim();
+        var matches = new List<(MedIndexEntry Entry, int Score, decimal Stock)>();
+        foreach (var e in medIndex)
+        {
+            if (!medTokens.All(t => e.Haystack.Contains(t, StringComparison.OrdinalIgnoreCase))) continue;
+            var stock = Available(e.Med.ID);
+            if (inStockOnly && stock <= 0) continue;
+            matches.Add((e, ScoreMedicine(e, q, medTokens), stock));
+        }
+        medMatchCount = matches.Count;
+        medResults = matches
+            .OrderByDescending(x => x.Stock > 0)
+            .ThenByDescending(x => x.Score)
+            .ThenBy(x => x.Entry.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(40)
+            .Select(x => new MedHit(x.Entry.Med, x.Entry.Generic, x.Entry.Type, x.Stock))
+            .ToList();
+    }
+
+    private async Task OnMedSearchInput()
+    {
+        // Typing again after picking a medicine starts a fresh search.
+        if (selectedMedObj != null && !string.Equals(medSearchQuery, selectedMedObj.Name, StringComparison.Ordinal))
+        {
+            selectedMedObj = null;
+            lineMedicineId = 0;
+            showGenericAlternatives = false;
+        }
+        showMedSuggestions = true;
+        RefreshMedResults();
+        await Task.CompletedTask;
+    }
+
+    private void ToggleInStockOnly()
+    {
+        inStockOnly = !inStockOnly;
+        RefreshMedResults();
+    }
+
+    private List<InpatientLookupItem> FilteredInpatients
     {
         get
         {
-            if (string.IsNullOrWhiteSpace(medSearchQuery)) return [];
-            var q = medSearchQuery.Trim();
-            return medicines.Where(x =>
-                (x.Name?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (x.GenericID.HasValue && genericNames.TryGetValue(x.GenericID.Value, out var g) && g.Contains(q, StringComparison.OrdinalIgnoreCase))
-            ).Take(25).ToList();
+            var tokens = ipdTokens;
+            if (tokens.Length == 0) return admittedPatients.Take(20).ToList();
+            return admittedPatients
+                .Where(x => MatchesAll(tokens, x.PatientName, x.RegNo, x.BedName, x.Contact, x.PatientId))
+                .OrderByDescending(x => x.BedName.StartsWith(tokens[0], StringComparison.OrdinalIgnoreCase) || x.RegNo.StartsWith(tokens[0], StringComparison.OrdinalIgnoreCase))
+                .Take(20).ToList();
         }
     }
 
-    private IEnumerable<PharmacyCashMemo> FilteredRecent => string.IsNullOrWhiteSpace(recentScanQuery)
-        ? recent
-        : recent.Where(x => x.ID.ToString().Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
-                         || (x.Name?.Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
-                         || (x.RegNo?.Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
-                         || $"PH-{x.ID}".Contains(recentScanQuery.Trim(), StringComparison.OrdinalIgnoreCase));
-
-    private void ClearRecentScan() => recentScanQuery = "";
-    private void ClearMedSearch()
+    private IEnumerable<PharmacyCashMemo> FilteredRecent
     {
-        medSearchQuery = "";
-        showMedSuggestions = false;
-        selectedMedObj = null;
-        showGenericAlternatives = false;
+        get
+        {
+            var tokens = recentTokens.Select(t => t.StartsWith("PH-", StringComparison.OrdinalIgnoreCase) ? t[3..] : t.TrimStart('#')).Where(t => t.Length > 0).ToArray();
+            return tokens.Length == 0 ? recent : recent.Where(x => MatchesAll(tokens, x.ID.ToString(), x.Name, x.RegNo, x.Contact));
+        }
     }
 
-    private string currentUserName = "User";
+    private IEnumerable<PendingRxItem> FilteredPendingRx
+    {
+        get
+        {
+            var tokens = rxTokens.Select(t => t.StartsWith("RX-", StringComparison.OrdinalIgnoreCase) ? t[3..] : t).Where(t => t.Length > 0).ToArray();
+            return tokens.Length == 0 ? pendingPrescriptions : pendingPrescriptions.Where(x => MatchesAll(tokens, x.ID.ToString(), x.PatientName, x.PatientId));
+        }
+    }
 
+    // ---------- Lifecycle ----------
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-        var userId = int.TryParse(auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : 0;
+        currentUserId = int.TryParse(auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : 0;
+        preferredStoreId = WorkspacePrefs.GetInt(currentUserId, UserWorkspacePreferences.PharmacyStoreKey);
         await using var db = await DbFactory.CreateDbContextAsync();
-        var dbUser = userId > 0 ? await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId) : null;
+        var dbUser = currentUserId > 0 ? await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == currentUserId) : null;
         currentUserName = dbUser?.GetEffectiveName() ?? HPM.Web.Security.AppUser.GetEffectiveName(auth.User, "User");
         await LoadAsync();
+        storeId = ResolveStoreId();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        selfRef = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("hpm.attachPageHotkeys", selfRef, new[] { "F2", "F4", "F9", "Escape" });
+            if (savedMemo == null) await medSearchInputRef.FocusAsync();
+        }
+        catch { }
+    }
+
+    [JSInvokable]
+    public async Task OnPageHotkey(string key)
+    {
+        switch (key)
+        {
+            case "F2":
+                if (savedMemo == null) { try { await medSearchInputRef.FocusAsync(); } catch { } }
+                break;
+            case "F4":
+                if (savedMemo == null) { try { await scanInputRef.FocusAsync(); } catch { } }
+                break;
+            case "F9":
+                if (dialog == null && savedMemo == null && !isSaving && lines.Count > 0) await PostAsync(true);
+                break;
+            case "Escape":
+                dialog = null;
+                showMedSuggestions = false;
+                showIpdSuggestions = false;
+                break;
+        }
+        StateHasChanged();
     }
 
     protected override async Task OnParametersSetAsync()
     {
+        if (!string.IsNullOrWhiteSpace(QueryPatientType))
+        {
+            SetPatientType(QueryPatientType.Equals("IPD", StringComparison.OrdinalIgnoreCase) || QueryPatientType == "2" ? "2" : "1");
+        }
         if (QueryPrescriptionId.HasValue && QueryPrescriptionId.Value > 0 && loadedPrescriptionId != QueryPrescriptionId.Value)
         {
             prescriptionId = QueryPrescriptionId.Value;
             await LoadPrescriptionAsync();
         }
-        if (!string.IsNullOrWhiteSpace(QueryPatientType))
+    }
+
+    // ---------- Store (kept per user until sign-out) ----------
+    private int ResolveStoreId()
+    {
+        var active = stores.Where(x => x.IsActive).ToList();
+        if (preferredStoreId.HasValue && active.Any(x => x.ID == preferredStoreId.Value)) return preferredStoreId.Value;
+        return active.FirstOrDefault()?.ID ?? stores.FirstOrDefault()?.ID ?? 0;
+    }
+
+    private Task OnStoreChangedAsync()
+    {
+        preferredStoreId = storeId;
+        WorkspacePrefs.SetInt(currentUserId, UserWorkspacePreferences.PharmacyStoreKey, storeId);
+        RefreshMedResults();
+        if (selectedMedObj != null) CheckGenericAlternatives(selectedMedObj);
+        Success(I18n.IsBangla
+            ? $"স্টোর নির্বাচন করা হয়েছে: {stores.FirstOrDefault(x => x.ID == storeId)?.Name}"
+            : $"Store set to {stores.FirstOrDefault(x => x.ID == storeId)?.Name}. It stays selected until you sign out.");
+        return Task.CompletedTask;
+    }
+
+    // ---------- Patient ----------
+    private void SetPatientType(string type)
+    {
+        patientType = type;
+        if (type == "1" && string.IsNullOrWhiteSpace(customerName))
         {
-            if (QueryPatientType.Equals("IPD", StringComparison.OrdinalIgnoreCase) || QueryPatientType == "2")
-                patientType = "2";
-            else
-                patientType = "1";
+            customerName = WalkInName;
+            regNo = "";
+            selectedBedName = "";
         }
+        else if (type == "2" && customerName == WalkInName)
+        {
+            customerName = "";
+        }
+    }
+
+    private void SelectInpatient(InpatientLookupItem adm)
+    {
+        patientType = "2";
+        regNo = adm.RegNo;
+        customerName = adm.PatientName;
+        contact = adm.Contact;
+        selectedBedName = adm.BedName;
+        ipdSearchQuery = "";
+        showIpdSuggestions = false;
+    }
+
+    private void ClearIpdPatient()
+    {
+        regNo = "";
+        selectedBedName = "";
+        customerName = "";
+        contact = "";
+        ipdSearchQuery = "";
+        showIpdSuggestions = true;
+    }
+
+    private async Task HandleIpdKeyDown(KeyboardEventArgs e)
+    {
+        var list = FilteredInpatients;
+        if (e.Key == "ArrowDown" && highlightedIpdIndex < list.Count - 1) highlightedIpdIndex++;
+        else if (e.Key == "ArrowUp" && highlightedIpdIndex > 0) highlightedIpdIndex--;
+        else if (e.Key == "Enter" && list.Count > 0) { SelectInpatient(list[Math.Clamp(highlightedIpdIndex, 0, list.Count - 1)]); return; }
+        else if (e.Key == "Escape") { showIpdSuggestions = false; return; }
+        else return;
+        showIpdSuggestions = true;
+        await ScrollActiveAsync("#px-ipd-dd");
+    }
+
+    private async Task ScrollActiveAsync(string container)
+    {
+        StateHasChanged();
+        await Task.Yield();
+        try { await JS.InvokeVoidAsync("hpm.scrollActiveIntoView", container, ".is-active"); } catch { }
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
+    // ---------- Data ----------
     private async Task LoadAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+        medicineById = medicines.ToDictionary(x => x.ID);
         genericNames = await db.GenericGroups.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name ?? "");
         typeNames = await db.MedicineTypes.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Type ?? "");
-        stores = await db.MedicineStores.AsNoTracking().ToListAsync();
-        stocks = await db.MedicineStoreBalances.AsNoTracking().Where(x => x.Balance > 0).ToListAsync();
+        medIndex = medicines.Select(m =>
+        {
+            var generic = m.GenericID.HasValue && genericNames.TryGetValue(m.GenericID.Value, out var g) ? g : "";
+            var type = m.TypeID.HasValue && typeNames.TryGetValue(m.TypeID.Value, out var t) ? t : "";
+            var name = m.Name ?? "";
+            return new MedIndexEntry(m, name, generic, type, m.Sku ?? "", $"{name} {generic} {type} {m.Sku}");
+        }).ToList();
+
+        stores = await db.MedicineStores.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        paymentMethods = await db.PharmacyPaymentMethods.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToListAsync();
+        if (!paymentMethods.Any(x => x.Name == PharmacyPaymentMethod.Cash))
+            paymentMethods.Insert(0, new PharmacyPaymentMethod { Name = PharmacyPaymentMethod.Cash, IsSystem = true });
         var today = DateTime.Today;
-        recent = await db.PharmacyCashMemos.AsNoTracking().Where(x => x.TransDate >= today).OrderByDescending(x => x.ID).Take(100).ToListAsync();
+        var stocks = await db.MedicineStoreBalances.AsNoTracking()
+            .Where(x => x.Balance > 0 && (x.ExpireDate == null || x.ExpireDate >= today))
+            .Select(x => new { x.MedicineStoreID, x.ServiceID, x.Balance })
+            .ToListAsync();
+        stockMap = stocks.GroupBy(x => (x.MedicineStoreID, x.ServiceID)).ToDictionary(g => g.Key, g => g.Sum(y => y.Balance));
+        recent = await db.PharmacyCashMemos.AsNoTracking().Where(x => x.TransDate >= today).OrderByDescending(x => x.ID).Take(200).ToListAsync();
+
+        // Active IPD patients for quick bed / cabin / name search
+        var activeAdms = await db.PatientAdmissions.AsNoTracking().Where(x => x.IsAdmitted == true).OrderByDescending(x => x.ID).Take(300).ToListAsync();
+        var bedIds = activeAdms.Where(x => x.BedCabinID.HasValue).Select(x => x.BedCabinID!.Value).Distinct().ToList();
+        var pids = activeAdms.Where(x => !string.IsNullOrWhiteSpace(x.PatientID)).Select(x => x.PatientID!).Distinct().ToList();
+        var bedMap = bedIds.Count == 0 ? new Dictionary<int, string>() : await db.BedCabins.AsNoTracking().Where(x => bedIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.Name);
+        var patMap = pids.Count == 0 ? new Dictionary<string, Registration>() : await db.Registrations.AsNoTracking().Where(x => pids.Contains(x.PatientID)).ToDictionaryAsync(x => x.PatientID, x => x);
+
+        admittedPatients = activeAdms.Select(a =>
+        {
+            patMap.TryGetValue(a.PatientID ?? "", out var reg);
+            var bName = a.BedCabinID.HasValue && bedMap.TryGetValue(a.BedCabinID.Value, out var bn) ? bn : "IPD";
+            return new InpatientLookupItem(a.RegNo, reg?.Name ?? a.PatientID ?? a.RegNo, bName, reg?.Contact ?? "", a.PatientID ?? "");
+        }).ToList();
+
+        // Recent undispensed prescriptions & ward indents (last 7 days)
+        var recentRx = await db.Prescriptions.AsNoTracking()
+            .Include(x => x.Medicines)
+            .Where(x => x.VisitDate >= today.AddDays(-7) && x.Medicines.Any())
+            .OrderByDescending(x => x.ID)
+            .Take(60)
+            .ToListAsync();
+        var allRxMedIds = recentRx.SelectMany(x => x.Medicines.Select(m => m.ID)).ToList();
+        var dispensedMap = allRxMedIds.Count == 0
+            ? new Dictionary<int, decimal>()
+            : await db.PrescriptionDispenseItems.AsNoTracking()
+                .Where(x => allRxMedIds.Contains(x.PrescriptionMedicineID))
+                .GroupBy(x => x.PrescriptionMedicineID)
+                .ToDictionaryAsync(g => g.Key, g => g.Sum(y => y.Quantity));
+
+        pendingPrescriptions = recentRx
+            .Where(rx => rx.Medicines.Any(m => m.Quantity - dispensedMap.GetValueOrDefault(m.ID, 0m) > 0))
+            .Select(rx => new PendingRxItem(
+                rx.ID,
+                string.IsNullOrWhiteSpace(rx.Name) ? (rx.PatientID ?? $"RX-{rx.ID}") : rx.Name!,
+                rx.Medicines.Count(m => m.Quantity - dispensedMap.GetValueOrDefault(m.ID, 0m) > 0),
+                rx.VisitDate ?? today,
+                string.Equals(rx.Type, "IPD-Indent", StringComparison.OrdinalIgnoreCase),
+                rx.PatientID))
+            .ToList();
     }
 
-    private decimal Available(int id) => stocks.Where(x => x.ServiceID == id && x.MedicineStoreID == storeId && x.Balance > 0 && x.ExpireDate >= DateTime.Today).Sum(x => x.Balance) - lines.Where(x => x.ServiceID == id).Sum(x => x.Quantity);
+    private decimal Available(int id) => stockMap.GetValueOrDefault((storeId, id)) - lines.Where(x => x.ServiceID == id).Sum(x => x.Quantity);
 
-    private void SelectMedicine(Service m)
+    // ---------- Medicine entry ----------
+    private async Task SelectMedicineAsync(Service m)
     {
         selectedMedObj = m;
         lineMedicineId = m.ID;
@@ -707,6 +1275,8 @@
         showMedSuggestions = false;
         highlightedMedIndex = 0;
         CheckGenericAlternatives(m);
+        StateHasChanged();
+        try { await qtyInputRef.FocusAsync(); } catch { }
     }
 
     private void CheckGenericAlternatives(Service m)
@@ -727,99 +1297,263 @@
         }
     }
 
-    private void HandleMedSearchKeyDown(KeyboardEventArgs e)
+    private async Task HandleMedSearchKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "ArrowDown")
+        switch (e.Key)
         {
-            if (highlightedMedIndex < FilteredMedicines.Count - 1) highlightedMedIndex++;
+            case "ArrowDown":
+                showMedSuggestions = true;
+                if (highlightedMedIndex < medResults.Count - 1) highlightedMedIndex++;
+                await ScrollActiveAsync("#px-med-dd");
+                break;
+            case "ArrowUp":
+                if (highlightedMedIndex > 0) highlightedMedIndex--;
+                await ScrollActiveAsync("#px-med-dd");
+                break;
+            case "PageDown":
+                highlightedMedIndex = Math.Min(medResults.Count - 1, highlightedMedIndex + 8);
+                await ScrollActiveAsync("#px-med-dd");
+                break;
+            case "PageUp":
+                highlightedMedIndex = Math.Max(0, highlightedMedIndex - 8);
+                await ScrollActiveAsync("#px-med-dd");
+                break;
+            case "Enter":
+                if (selectedMedObj != null)
+                {
+                    try { await qtyInputRef.FocusAsync(); } catch { }
+                }
+                else if (medResults.Count > 0 && highlightedMedIndex >= 0 && highlightedMedIndex < medResults.Count)
+                {
+                    await SelectMedicineAsync(medResults[highlightedMedIndex].Med);
+                }
+                break;
+            case "Escape":
+                if (showMedSuggestions) showMedSuggestions = false;
+                else ClearMedSearch();
+                break;
         }
-        else if (e.Key == "ArrowUp")
+    }
+
+    private async Task HandleQtyKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
         {
-            if (highlightedMedIndex > 0) highlightedMedIndex--;
+            await AddLineAndRefocusAsync();
         }
-        else if (e.Key == "Enter")
-        {
-            if (FilteredMedicines.Count > 0 && highlightedMedIndex >= 0 && highlightedMedIndex < FilteredMedicines.Count)
-            {
-                SelectMedicine(FilteredMedicines[highlightedMedIndex]);
-            }
-        }
-        else if (e.Key == "Escape")
-        {
-            showMedSuggestions = false;
-        }
+    }
+
+    private void ClearMedSearch()
+    {
+        medSearchQuery = "";
+        medTokens = [];
+        medResults = [];
+        showMedSuggestions = false;
+        selectedMedObj = null;
+        lineMedicineId = 0;
+        showGenericAlternatives = false;
     }
 
     private void SetQuickCash(decimal amount) => tenderedAmount = amount;
     private void SetExactCash() => tenderedAmount = Net;
 
-    private void AddLine()
+    private async Task AddLineAndRefocusAsync()
+    {
+        if (AddLine())
+        {
+            try { await medSearchInputRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private bool AddLine()
     {
         if (lineMedicineId <= 0 || lineQuantity <= 0 || lineRate < 0)
         {
-            Fail(I18n.IsBangla ? "ঔষধ নির্বাচন করুন এবং সঠিক পরিমাণ/দর লিখুন।" : "Select medicine and enter valid quantity/rate.");
-            return;
+            Fail(I18n.IsBangla ? "ঔষধ এবং সঠিক পরিমাণ লিখুন।" : "Select a medicine and enter a valid quantity.");
+            return false;
         }
         if (lineQuantity > Available(lineMedicineId))
         {
-            Fail(I18n.IsBangla ? "উপলব্ধ স্টকের চেয়ে বেশি পরিমাণ দেওয়া যাবে না।" : "Requested quantity exceeds unexpired available stock.");
-            return;
+            var avail = Math.Max(0, Available(lineMedicineId));
+            Fail(I18n.IsBangla ? $"স্টকে পর্যাপ্ত ঔষধ নেই (আছে {avail:N0})।" : $"Only {avail:N0} in stock for {MedicineName(lineMedicineId)} at this store.");
+            return false;
         }
         var existing = lines.FirstOrDefault(x => x.ServiceID == lineMedicineId && x.Rate == lineRate && x.PrescriptionMedicineID == null);
         if (existing != null) existing.Quantity += lineQuantity;
         else lines.Add(new SaleLine { ServiceID = lineMedicineId, Quantity = lineQuantity, Rate = lineRate });
-        
+
         lineMedicineId = 0;
         lineQuantity = 1;
         lineRate = 0;
-        medSearchQuery = "";
-        selectedMedObj = null;
-        showGenericAlternatives = false;
+        ClearMedSearch();
         message = "";
+        return true;
+    }
+
+    private void StepLineQty(int index, decimal delta)
+    {
+        if (index < 0 || index >= lines.Count) return;
+        ApplyLineQty(index, lines[index].Quantity + delta);
+    }
+
+    private void SetLineQty(int index, string? raw)
+    {
+        if (index < 0 || index >= lines.Count) return;
+        if (!decimal.TryParse(raw, out var qty)) qty = lines[index].Quantity;
+        ApplyLineQty(index, qty);
+    }
+
+    private void ApplyLineQty(int index, decimal qty)
+    {
+        var line = lines[index];
+        if (qty <= 0) { RemoveLine(index); return; }
+        var max = Available(line.ServiceID) + line.Quantity;
+        if (line.PrescriptionMedicineID.HasValue && qty > line.Quantity)
+        {
+            Fail(I18n.IsBangla ? "প্রেসক্রিপশনের পরিমাণের বেশি দেওয়া যাবে না।" : "Prescription lines cannot exceed the prescribed quantity. Add extra as a separate item.");
+            return;
+        }
+        if (qty > max)
+        {
+            Fail(I18n.IsBangla ? $"স্টকে আছে মাত্র {max:N0}।" : $"Only {max:N0} in stock for {MedicineName(line.ServiceID)}.");
+            qty = max;
+        }
+        else message = "";
+        line.Quantity = qty;
+    }
+
+    private async Task LoadFromQueueAsync(long rxId)
+    {
+        if (savedMemo != null) Reset();
+        prescriptionId = rxId;
+        await LoadPrescriptionAsync();
     }
 
     private async Task LoadPrescriptionAsync()
     {
-        if ((prescriptionId ?? 0) <= 0)
-        {
-            Fail(I18n.IsBangla ? "প্রেসক্রিপশন নম্বর লিখুন।" : "Enter a valid prescription number.");
-            return;
-        }
+        if ((prescriptionId ?? 0) <= 0) return;
         await using var db = await DbFactory.CreateDbContextAsync();
         var rx = await db.Prescriptions.AsNoTracking().Include(x => x.Medicines).FirstOrDefaultAsync(x => x.ID == prescriptionId);
         if (rx == null)
         {
-            Fail(I18n.IsBangla ? "প্রেসক্রিপশন পাওয়া যায়নি।" : "Prescription was not found.");
+            Fail(I18n.IsBangla ? "প্রেসক্রিপশন পাওয়া যায়নি।" : "Prescription not found.");
             return;
         }
         var ids = rx.Medicines.Select(x => x.ID).ToArray();
         var used = ids.Length == 0 ? new Dictionary<int, decimal>() : await db.PrescriptionDispenseItems.AsNoTracking().Where(x => ids.Contains(x.PrescriptionMedicineID)).GroupBy(x => x.PrescriptionMedicineID).ToDictionaryAsync(x => x.Key, x => x.Sum(y => y.Quantity));
         lines = [];
+        rxShortages = [];
+        var shortItems = 0;
         foreach (var item in rx.Medicines.OrderBy(x => x.SLNO))
         {
             var remaining = item.Quantity - (used.TryGetValue(item.ID, out var value) ? value : 0);
             if (remaining <= 0) continue;
-            var take = Math.Min(remaining, Available(item.ServiceID));
-            if (take > 0) lines.Add(new SaleLine { ServiceID = item.ServiceID, Quantity = take, Rate = medicines.FirstOrDefault(x => x.ID == item.ServiceID)?.SaleRate ?? 0, PrescriptionMedicineID = item.ID });
+            var take = Math.Min(remaining, Math.Max(0, Available(item.ServiceID)));
+            if (take > 0) lines.Add(new SaleLine { ServiceID = item.ServiceID, Quantity = take, Rate = medicineById.GetValueOrDefault(item.ServiceID)?.SaleRate ?? 0, PrescriptionMedicineID = item.ID });
+            if (take < remaining)
+            {
+                shortItems++;
+                rxShortages.Add(new RxShortage { PrescriptionMedicineId = item.ID, ServiceId = item.ServiceID, Needed = remaining - take });
+            }
         }
         loadedPrescriptionId = rx.ID;
-        prescriptionLabel = $"#{rx.ID} · {rx.Name}";
+        prescriptionLabel = $"RX-{rx.ID} · {rx.Name}";
         customerName = rx.Name ?? customerName;
-        if (lines.Count == 0) Fail(I18n.IsBangla ? "প্রেসক্রিপশনকৃত কোনো ঔষধের বিক্রয়যোগ্য স্টক নেই।" : "No undispensed prescription medicine has saleable stock.");
-        else Success(I18n.IsBangla ? "প্রেসক্রিপশন থেকে ঔষধ লোড করা হয়েছে।" : "Prescription medicines loaded. Out-of-stock items were skipped; review quantities before sale.");
+
+        if (string.Equals(rx.Type, "IPD-Indent", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(rx.PatientID))
+        {
+            var admMatch = admittedPatients.FirstOrDefault(a => string.Equals(a.PatientId, rx.PatientID, StringComparison.OrdinalIgnoreCase));
+            if (admMatch != null) SelectInpatient(admMatch);
+        }
+
+        if (lines.Count == 0) Fail(I18n.IsBangla ? "প্রেসক্রিপশনের কোনো ঔষধ এই স্টোরে স্টকে নেই — নিচে বিকল্প ঔষধ দেখুন।" : "Prescribed items are out of stock at this store — see the alternatives below.");
+        else if (shortItems > 0) Fail(I18n.IsBangla ? $"প্রেসক্রিপশন লোড হয়েছে, তবে {shortItems}টি ঔষধ পর্যাপ্ত স্টকে নেই — নিচে বিকল্প দেখুন।" : $"Prescription loaded, but {shortItems} item(s) are short or out of stock — see the alternatives below.");
+        else Success(I18n.IsBangla ? "প্রেসক্রিপশন থেকে ঔষধ লোড হয়েছে।" : "Prescription items loaded into bill.");
     }
 
-    private void RemoveLine(int i) => lines.RemoveAt(i);
+    // ---------- Prescription shortages & same-generic alternatives ----------
+    private List<Service> AlternativesFor(int serviceId)
+    {
+        var med = medicineById.GetValueOrDefault(serviceId);
+        if (med?.GenericID is not int genericId || genericId <= 0) return [];
+        return medicines
+            .Where(x => x.ID != serviceId && x.GenericID == genericId && Available(x.ID) > 0)
+            .OrderByDescending(x => Available(x.ID))
+            .Take(6)
+            .ToList();
+    }
+
+    /// <summary>Other stores that hold the medicine, so the cashier knows where to switch / request from.</summary>
+    private List<(string Store, decimal Qty)> OtherStoreStock(int serviceId) => stores
+        .Where(s => s.IsActive && s.ID != storeId)
+        .Select(s => (s.Name, stockMap.GetValueOrDefault((s.ID, serviceId))))
+        .Where(x => x.Item2 > 0)
+        .OrderByDescending(x => x.Item2)
+        .Take(3)
+        .ToList();
+
+    private void UseAlternative(RxShortage shortage, Service alt)
+    {
+        var qty = Math.Min(shortage.Needed, Math.Max(0, Available(alt.ID)));
+        if (qty <= 0)
+        {
+            Fail(I18n.IsBangla ? "এই বিকল্প ঔষধটিও স্টকে নেই।" : $"{alt.Name} is also out of stock.");
+            return;
+        }
+        lines.Add(new SaleLine { ServiceID = alt.ID, Quantity = qty, Rate = alt.SaleRate ?? 0, PrescriptionMedicineID = shortage.PrescriptionMedicineId });
+        shortage.Needed -= qty;
+        if (shortage.Needed <= 0) rxShortages.Remove(shortage);
+        Success(I18n.IsBangla
+            ? $"{MedicineName(shortage.ServiceId)} এর বদলে {alt.Name} × {qty:0.##} যোগ করা হয়েছে।"
+            : $"Added {alt.Name} × {qty:0.##} in place of {MedicineName(shortage.ServiceId)}.");
+    }
+
+    private async Task SearchForShortageAsync(RxShortage shortage)
+    {
+        var med = medicineById.GetValueOrDefault(shortage.ServiceId);
+        var generic = med?.GenericID is int g && genericNames.TryGetValue(g, out var gn) ? gn : null;
+        ClearMedSearch();
+        medSearchQuery = string.IsNullOrWhiteSpace(generic) ? med?.Name ?? "" : generic;
+        showMedSuggestions = true;
+        RefreshMedResults();
+        try { await medSearchInputRef.FocusAsync(); } catch { }
+    }
+
+    private void ClearLoadedPrescription()
+    {
+        loadedPrescriptionId = null;
+        prescriptionId = null;
+        prescriptionLabel = string.Empty;
+        rxShortages = [];
+    }
+
+    private sealed class RxShortage
+    {
+        public int PrescriptionMedicineId { get; init; }
+        public int ServiceId { get; init; }
+        public decimal Needed { get; set; }
+    }
+
+    private void RemoveLine(int i)
+    {
+        if (i >= 0 && i < lines.Count) lines.RemoveAt(i);
+    }
 
     private async Task SelectMemoAsync(PharmacyCashMemo memo)
     {
         savedMemo = memo;
         patientType = memo.PatientType ?? "1";
+        ipdPaymentMode = memo.IsCredit == true ? "credit" : "cash";
         customerName = memo.Name ?? "";
         contact = memo.Contact ?? "";
         regNo = memo.RegNo ?? "";
         discount = memo.Discount ?? 0;
+        tenderedAmount = null;
+        paymentMethod = memo.PaymentMethod ?? PharmacyPaymentMethod.Cash;
+        paymentRef = memo.PaymentRef ?? "";
+        addingPaymentMethod = false;
         storeId = memo.BufferStore ?? storeId;
+        ClearMedSearch();
         await using var db = await DbFactory.CreateDbContextAsync();
         var items = await db.PharmacyCashMemoItems.AsNoTracking()
             .Include(x => x.BatchAllocations)
@@ -836,24 +1570,171 @@
         message = "";
     }
 
-    private async Task PostAsync()
+    // ---------- Payment method ----------
+    private static string PaymentIcon(string name) => name switch
     {
-        if (storeId <= 0 || string.IsNullOrWhiteSpace(customerName) || lines.Count == 0)
+        "Cash" => "💵",
+        "Bank" => "🏦",
+        "MFS" => "📱",
+        _ => "💳"
+    };
+
+    private async Task OnPaymentMethodChangedAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? PharmacyPaymentMethod.Cash;
+        if (value == NewMethodOption)
         {
-            Fail(I18n.IsBangla ? "স্টোর, গ্রাহকের নাম এবং অন্তত একটি ঔষধ নির্বাচন করুন।" : "Store, patient name and medicines are required.");
+            addingPaymentMethod = true;
+            newPaymentMethodName = "";
+            StateHasChanged();
+            await Task.Yield();
+            try { await newMethodInputRef.FocusAsync(); } catch { }
             return;
         }
-        if (discount < 0 || discount > Gross)
+        paymentMethod = value;
+        if (IsCashPayment)
         {
-            Fail(I18n.IsBangla ? "ছাড়ের পরিমাণ সঠিক নয়।" : "Invalid discount.");
+            tenderedAmount = null;
+            paymentRef = "";
+            StateHasChanged();
+            await Task.Yield();
+            try { await tenderInputRef.FocusAsync(); } catch { }
+        }
+        else
+        {
+            // Bank / MFS / card: the full net payable is received, no change.
+            tenderedAmount = Net;
+        }
+    }
+
+    private async Task HandleNewMethodKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await AddPaymentMethodAsync();
+        else if (e.Key == "Escape") CancelAddPaymentMethod();
+    }
+
+    private void CancelAddPaymentMethod()
+    {
+        addingPaymentMethod = false;
+        newPaymentMethodName = "";
+    }
+
+    private async Task AddPaymentMethodAsync()
+    {
+        var name = (newPaymentMethodName ?? "").Trim();
+        if (name.Length < 2 || name.Length > 40 || name == NewMethodOption)
+        {
+            ShowError(I18n.IsBangla ? "পেমেন্ট মেথড যোগ করা যায়নি" : "Cannot add payment method",
+                I18n.IsBangla ? "নাম ২ থেকে ৪০ অক্ষরের মধ্যে হতে হবে।" : "Name must be 2 to 40 characters.");
             return;
         }
-        if (patientType == "2" && string.IsNullOrWhiteSpace(regNo))
+        var existing = paymentMethods.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (existing == null)
         {
-            Fail(I18n.IsBangla ? "আইপিডি রেজি নং আবশ্যক।" : "IPD Reg No is required.");
+            try
+            {
+                await using var db = await DbFactory.CreateDbContextAsync();
+                var dbExisting = await db.PharmacyPaymentMethods.FirstOrDefaultAsync(x => x.Name == name);
+                if (dbExisting == null)
+                {
+                    var nextOrder = (await db.PharmacyPaymentMethods.MaxAsync(x => (int?)x.SortOrder) ?? 0) + 1;
+                    db.PharmacyPaymentMethods.Add(new PharmacyPaymentMethod { Name = name, IsActive = true, SortOrder = nextOrder });
+                }
+                else dbExisting.IsActive = true;
+                await db.SaveChangesAsync();
+                paymentMethods = await db.PharmacyPaymentMethods.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToListAsync();
+                existing = paymentMethods.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                ShowError(I18n.IsBangla ? "পেমেন্ট মেথড যোগ করা যায়নি" : "Cannot add payment method", RootMessage(ex));
+                return;
+            }
+        }
+        addingPaymentMethod = false;
+        newPaymentMethodName = "";
+        paymentMethod = existing?.Name ?? name;
+        tenderedAmount = IsCashPayment ? null : Net;
+        Success(I18n.IsBangla ? $"পেমেন্ট মেথড \"{paymentMethod}\" নির্বাচিত।" : $"Payment method \"{paymentMethod}\" added and selected.");
+    }
+
+    // ---------- Save dialog (validation popup) ----------
+    private sealed record SaveDialog(string Kind, string Title, IReadOnlyList<string> Messages, bool PrintAfterSave);
+
+    private void ShowError(string title, params string[] messages) => dialog = new SaveDialog("error", title, messages, false);
+
+    private void CloseDialog() => dialog = null;
+
+    private async Task FocusCashInputAsync()
+    {
+        dialog = null;
+        StateHasChanged();
+        await Task.Yield();
+        try { await tenderInputRef.FocusAsync(); } catch { }
+    }
+
+    private async Task ReceiveExactAndSaveAsync()
+    {
+        var print = dialog?.PrintAfterSave ?? false;
+        dialog = null;
+        tenderedAmount = Net;
+        await CommitSaleAsync(print);
+    }
+
+    private static string RootMessage(Exception ex)
+    {
+        while (ex.InnerException != null) ex = ex.InnerException;
+        return ex.Message;
+    }
+
+    /// <summary>
+    /// Legacy data has item rows in Cash_Memo_Sub whose header bill never existed. If the Cash_Memo identity
+    /// would hand out one of those bill numbers, move it past the highest used Bill_No (no rows are deleted).
+    /// </summary>
+    private async Task SkipCollidingBillNumbersAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        const string sql =
+            "DECLARE @maxSub bigint = (SELECT MAX([Bill_No]) FROM [Cash_Memo_Sub]); " +
+            "DECLARE @ident bigint = CONVERT(bigint, IDENT_CURRENT('Cash_Memo')); " +
+            "IF @maxSub IS NOT NULL AND @maxSub >= @ident DBCC CHECKIDENT ('Cash_Memo', RESEED, @maxSub) WITH NO_INFOMSGS;";
+        await db.Database.ExecuteSqlRawAsync(sql);
+    }
+
+    private sealed class BillNumberCollisionException(long billNo) : Exception($"Bill number {billNo} is already used by old item rows.");
+
+    private async Task PostAsync(bool printAfterSave)
+    {
+        var problems = new List<string>();
+        if (storeId <= 0) problems.Add(I18n.IsBangla ? "স্টোর নির্বাচন করুন।" : "Select a store.");
+        if (string.IsNullOrWhiteSpace(customerName)) problems.Add(I18n.IsBangla ? "রোগী / ক্রেতার নাম লিখুন।" : "Enter the customer name.");
+        if (lines.Count == 0) problems.Add(I18n.IsBangla ? "অন্তত একটি ঔষধ যোগ করুন।" : "Add at least one medicine.");
+        if (discount < 0 || discount > Gross) problems.Add(I18n.IsBangla ? "ছাড়ের পরিমাণ সঠিক নয়।" : $"Discount must be between 0 and {I18n.FormatCurrency(Gross)}.");
+        if (patientType == "2" && string.IsNullOrWhiteSpace(regNo)) problems.Add(I18n.IsBangla ? "ভর্তি রোগী (IPD) নির্বাচন করুন।" : "Select an admitted IPD patient.");
+        if (problems.Count > 0)
+        {
+            dialog = new SaveDialog("error", I18n.IsBangla ? "বিল সংরক্ষণ করা যাচ্ছে না" : "Cannot save the bill", problems, printAfterSave);
             return;
         }
 
+        if (CollectsPayment && IsCashPayment && Net > 0 && (tenderedAmount ?? 0) < Net)
+        {
+            var given = tenderedAmount ?? 0;
+            var msg = given <= 0
+                ? (I18n.IsBangla ? "Cash Given এর ঘরে টাকার পরিমাণ লেখা হয়নি।" : "Cash Given is empty. Enter the amount the customer paid.")
+                : (I18n.IsBangla ? $"প্রদত্ত টাকা ({I18n.FormatCurrency(given)}) মোট বিলের ({I18n.FormatCurrency(Net)}) চেয়ে কম। কম আছে {I18n.FormatCurrency(Net - given)}।"
+                                 : $"Cash given ({I18n.FormatCurrency(given)}) is less than the net payable ({I18n.FormatCurrency(Net)}). Short by {I18n.FormatCurrency(Net - given)}.");
+            dialog = new SaveDialog("cash", I18n.IsBangla ? "নগদ টাকার পরিমাণ দিন" : "Cash amount required", [msg], printAfterSave);
+            return;
+        }
+
+        if (CollectsPayment && !IsCashPayment) tenderedAmount = Net;
+        await CommitSaleAsync(printAfterSave);
+    }
+
+    private async Task CommitSaleAsync(bool printAfterSave)
+    {
+        if (isSaving || savedMemo != null) return;
         isSaving = true;
         try
         {
@@ -861,12 +1742,16 @@
             var curCustomerName = customerName.Trim();
             var curContact = contact.Trim();
             var curPatientType = patientType;
+            var curIsIpdCredit = curPatientType == "2" && ipdPaymentMode == "credit";
             var curRegNo = regNo.Trim();
             var curLines = lines.ToList();
             var curDiscount = discount;
             var curGross = Gross;
             var curNet = Net;
             var curLoadedPrescriptionId = loadedPrescriptionId;
+            var curPaymentMethod = curIsIpdCredit ? null : (string.IsNullOrWhiteSpace(paymentMethod) ? PharmacyPaymentMethod.Cash : paymentMethod.Trim());
+            var curIsNonCash = curPaymentMethod != null && !string.Equals(curPaymentMethod, PharmacyPaymentMethod.Cash, StringComparison.OrdinalIgnoreCase);
+            var curPaymentRef = curIsNonCash && !string.IsNullOrWhiteSpace(paymentRef) ? paymentRef.Trim()[..Math.Min(100, paymentRef.Trim().Length)] : null;
             var uid = await CurrentUserIdAsync();
             var now = DateTime.Now;
 
@@ -874,6 +1759,10 @@
             var strategy = strategyDb.Database.CreateExecutionStrategy();
             PharmacyCashMemo? createdMemo = null;
 
+            for (var attempt = 1; ; attempt++)
+            {
+            try
+            {
             await strategy.ExecuteAsync(async () =>
             {
                 await using var db = await DbFactory.CreateDbContextAsync();
@@ -897,18 +1786,23 @@
                     EnteredBy = uid,
                     TransDate = now,
                     IsPackage = admission?.IsPackage == true,
-                    IsCredit = false,
-                    BufferStore = curStoreId
+                    IsCredit = curIsIpdCredit,
+                    BufferStore = curStoreId,
+                    PaymentMethod = curPaymentMethod,
+                    PaymentRef = curPaymentRef
                 };
                 db.PharmacyCashMemos.Add(memo);
                 await db.SaveChangesAsync();
+                // Old orphan item rows may already carry this bill number; never mix them into a new bill.
+                if (await db.PharmacyCashMemoItems.AnyAsync(x => x.BillNo == memo.ID))
+                    throw new BillNumberCollisionException(memo.ID);
 
                 var sl = 1;
                 foreach (var line in curLines)
                 {
                     var med = await db.Services.FindAsync(line.ServiceID);
                     var batches = await db.MedicineStoreBalances
-                        .Where(x => x.MedicineStoreID == curStoreId && x.ServiceID == line.ServiceID && x.Balance > 0 && x.ExpireDate >= DateTime.Today)
+                        .Where(x => x.MedicineStoreID == curStoreId && x.ServiceID == line.ServiceID && x.Balance > 0 && (x.ExpireDate == null || x.ExpireDate >= DateTime.Today))
                         .OrderBy(x => x.ExpireDate).ThenBy(x => x.ID).ToListAsync();
                     var challanItemIds = batches.Where(x => x.MedicineReceivingChallanSubID.HasValue).Select(x => x.MedicineReceivingChallanSubID!.Value).Distinct().ToArray();
                     var batchCosts = challanItemIds.Length == 0 ? new Dictionary<long, decimal>() : await db.MedicineReceivingChallanItems
@@ -929,12 +1823,12 @@
                     }
                     if (remaining > 0) throw new InvalidOperationException($"Insufficient stock for {med?.Name}.");
                     soldItem.BuyRate = line.Quantity <= 0 ? 0 : Math.Round(totalCost / line.Quantity, 2);
-                    
+
                     line.BatchNo = string.Join(", ", soldItem.BatchAllocations.Select(b => b.BatchNo).Where(b => !string.IsNullOrEmpty(b)));
                     line.ExpireDate = soldItem.BatchAllocations.OrderBy(b => b.ExpireDate).FirstOrDefault()?.ExpireDate;
-                    
+
                     db.PharmacyCashMemoItems.Add(soldItem);
-                    if (admission != null)
+                    if (admission != null && curIsIpdCredit)
                     {
                         var dept = await (from b in db.BedCabins join c in db.BedCategories on b.CategoryID equals c.ID where b.ID == admission.BedCabinID select c.IpdDepartmentID).FirstOrDefaultAsync();
                         if (admission.IsPackage == true) db.PatientPackageTransactions.Add(new PatientPackageTransaction { RegNo = admission.RegNo, ServiceID = line.ServiceID, ServiceRate = line.Rate, Quantity = line.Quantity, IpdDepartmentID = dept, EnteredBy = uid, TransDate = now });
@@ -957,21 +1851,52 @@
                     db.PrescriptionDispenses.Add(dispense);
                 }
 
-                if (curPatientType == "1") db.CentralCashCollections.Add(new CentralCashCollection { Amount = curNet, ModuleFlag = 4, HeadID = 4, EnteredBy = uid, TransDate = now, TransDateCL = now, ReferenceID = memo.ID });
-                if (curNet > 0) AccountingPosting.AddPostedVoucher(db, curPatientType == "1" ? "Receipt" : "Journal", now, $"Pharmacy sale to {memo.Name}", $"PHARMACY-SALE:{memo.ID}", uid, (curPatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, curNet, 0), (AccountingPosting.PharmacySales, 0, curNet));
+                if (!curIsIpdCredit)
+                {
+                    db.CentralCashCollections.Add(new CentralCashCollection { Amount = curNet, ModuleFlag = 4, HeadID = 4, EnteredBy = uid, TransDate = now, TransDateCL = now, ReferenceID = memo.ID });
+                }
+                if (curNet > 0)
+                {
+                    AccountingPosting.AddPostedVoucher(
+                        db,
+                        !curIsIpdCredit ? "Receipt" : "Journal",
+                        now,
+                        curIsNonCash
+                            ? $"Pharmacy sale to {memo.Name} via {curPaymentMethod}{(curPaymentRef == null ? "" : $" (Ref: {curPaymentRef})")}"
+                            : $"Pharmacy sale to {memo.Name}",
+                        $"PHARMACY-SALE:{memo.ID}",
+                        uid,
+                        (!curIsIpdCredit ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, curNet, 0),
+                        (AccountingPosting.PharmacySales, 0, curNet));
+                }
 
                 await db.SaveChangesAsync();
                 await tx.CommitAsync();
                 createdMemo = memo;
             });
+            break;
+            }
+            catch (BillNumberCollisionException) when (attempt < 3)
+            {
+                // Transaction rolled back; move the bill counter past the old rows and try again.
+                await SkipCollidingBillNumbersAsync();
+            }
+            }
 
             savedMemo = createdMemo;
-            Success(I18n.IsBangla ? $"ফার্মাসি ক্যাশ মেমো #{createdMemo?.ID} সফলভাবে তৈরি ও সংরক্ষিত হয়েছে।" : $"Pharmacy cash memo #{createdMemo?.ID} completed with FEFO batch trace and posted to accounts.");
+            Success(I18n.IsBangla ? $"বিল #PH-{createdMemo?.ID} সফলভাবে সম্পন্ন হয়েছে।" : $"Bill #PH-{createdMemo?.ID} saved.");
             await LoadAsync();
+
+            if (printAfterSave)
+            {
+                StateHasChanged();
+                await Task.Yield();
+                await PrintAsync();
+            }
         }
         catch (Exception ex)
         {
-            Fail(I18n.IsBangla ? $"বিক্রয় সম্পন্ন করা যায়নি: {ex.Message}" : $"Sale failed: {ex.Message}");
+            ShowError(I18n.IsBangla ? "বিক্রয় সম্পন্ন করা যায়নি" : "Sale failed", I18n.IsBangla ? $"বিল সংরক্ষণ হয়নি: {RootMessage(ex)}" : $"The bill was not saved: {RootMessage(ex)}");
         }
         finally
         {
@@ -987,10 +1912,7 @@
 
     private async Task HandlePosScanKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
-        {
-            await ProcessPosScanAsync();
-        }
+        if (e.Key == "Enter") await ProcessPosScanAsync();
     }
 
     private async Task ProcessPosScanAsync()
@@ -998,13 +1920,11 @@
         if (string.IsNullOrWhiteSpace(posScanQuery)) return;
         var raw = posScanQuery.Trim();
 
-        // Case 1: Prescription QR / Barcode (HPM:RX|ID:123|... or RX-123)
         if (raw.StartsWith("HPM:RX|", StringComparison.OrdinalIgnoreCase))
         {
-            var parts = raw.Split('|');
-            foreach (var p in parts)
+            foreach (var p in raw.Split('|'))
             {
-                if (p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p.Substring(3), out var rxId))
+                if (p.StartsWith("ID:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p[3..], out var rxId))
                 {
                     prescriptionId = rxId;
                     await LoadPrescriptionAsync();
@@ -1013,7 +1933,7 @@
                 }
             }
         }
-        else if (raw.StartsWith("RX-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(3), out var rxId))
+        else if (raw.StartsWith("RX-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw[3..], out var rxId))
         {
             prescriptionId = rxId;
             await LoadPrescriptionAsync();
@@ -1021,116 +1941,117 @@
             return;
         }
 
-        // Case 2: Inpatient Wristband or IPD Admission Barcode (HPM:WB|ADM:...|REG:I26001|PAT:John... or HPM:IPD|... or I26...)
         if (raw.StartsWith("HPM:WB|", StringComparison.OrdinalIgnoreCase) || raw.StartsWith("HPM:IPD|", StringComparison.OrdinalIgnoreCase))
         {
-            var parts = raw.Split('|');
             string? scannedReg = null;
-            string? scannedName = null;
-            foreach (var p in parts)
+            foreach (var p in raw.Split('|'))
             {
-                if (p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase)) scannedReg = p.Substring(4).Trim();
-                if (p.StartsWith("PAT:", StringComparison.OrdinalIgnoreCase)) scannedName = p.Substring(4).Trim();
+                if (p.StartsWith("REG:", StringComparison.OrdinalIgnoreCase)) scannedReg = p[4..].Trim();
             }
-
             if (!string.IsNullOrWhiteSpace(scannedReg))
             {
-                patientType = "2";
-                regNo = scannedReg;
-                if (!string.IsNullOrWhiteSpace(scannedName)) customerName = scannedName;
+                var admMatch = admittedPatients.FirstOrDefault(x => string.Equals(x.RegNo, scannedReg, StringComparison.OrdinalIgnoreCase));
+                if (admMatch != null) SelectInpatient(admMatch);
+                else { patientType = "2"; regNo = scannedReg; }
                 posScanQuery = "";
-                Success(I18n.IsBangla ? $"আইপিডি রোগী {customerName} ({regNo}) লোড করা হয়েছে।" : $"IPD Patient {customerName} ({regNo}) selected from wristband.");
                 return;
             }
         }
         else if (raw.StartsWith("I", StringComparison.OrdinalIgnoreCase) && raw.Length >= 6 && char.IsDigit(raw[1]))
         {
-            patientType = "2";
-            regNo = raw;
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var adm = await db.PatientAdmissions.AsNoTracking().FirstOrDefaultAsync(x => x.RegNo == raw);
-            if (adm != null)
-            {
-                var pat = await db.Registrations.AsNoTracking().FirstOrDefaultAsync(x => x.PatientID == adm.PatientID);
-                if (pat != null) customerName = pat.Name;
-            }
+            var admMatch = admittedPatients.FirstOrDefault(x => string.Equals(x.RegNo, raw, StringComparison.OrdinalIgnoreCase));
+            if (admMatch != null) SelectInpatient(admMatch);
+            else { patientType = "2"; regNo = raw; }
             posScanQuery = "";
-            Success(I18n.IsBangla ? $"আইপিডি রেজি নং {regNo} লোড হয়েছে।" : $"IPD Reg #{regNo} loaded.");
             return;
         }
 
-        // Case 3: Patient Registration Card (HPM:PAT|ID:123|REG:P001|NAME:John|TEL:017...)
-        if (raw.StartsWith("HPM:PAT|", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = raw.Split('|');
-            foreach (var p in parts)
-            {
-                if (p.StartsWith("NAME:", StringComparison.OrdinalIgnoreCase)) customerName = p.Substring(5).Trim();
-                if (p.StartsWith("TEL:", StringComparison.OrdinalIgnoreCase)) contact = p.Substring(4).Trim();
-            }
-            posScanQuery = "";
-            Success(I18n.IsBangla ? $"রোগীর তথ্য লোড হয়েছে: {customerName}" : $"Patient loaded: {customerName}");
-            return;
-        }
-
-        // Case 4: Medicine Product / Box Barcode scan
-        var matchedMed = medicines.FirstOrDefault(x => x.ID.ToString() == raw || (x.Name?.Equals(raw, StringComparison.OrdinalIgnoreCase) ?? false) || (x.Name?.StartsWith(raw, StringComparison.OrdinalIgnoreCase) ?? false));
+        var matchedMed = medicines.FirstOrDefault(x =>
+            (x.Sku != null && x.Sku.Equals(raw, StringComparison.OrdinalIgnoreCase)) ||
+            x.ID.ToString() == raw ||
+            (x.Name?.Equals(raw, StringComparison.OrdinalIgnoreCase) ?? false));
         if (matchedMed != null)
         {
-            SelectMedicine(matchedMed);
+            await SelectMedicineAsync(matchedMed);
             lineQuantity = 1;
             AddLine();
             posScanQuery = "";
             return;
         }
 
-        Fail(I18n.IsBangla ? "স্ক্যান করা কোড বা ঔষধ পাওয়া যায়নি।" : $"No matching medicine, prescription or wristband for: {raw}");
+        Fail($"No match found for: {raw}");
     }
 
     private void ClearPosScan() => posScanQuery = "";
 
+    private async Task PrintWithFormatAsync(bool thermal)
+    {
+        isThermalPrint = thermal;
+        StateHasChanged();
+        await Task.Yield();
+        await PrintAsync();
+    }
+
     private async Task PrintAsync()
     {
         if (isThermalPrint)
-        {
-            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-thermal-print");
-        }
+            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-thermal-print", $"PH-{savedMemo?.ID}");
         else
-        {
-            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-sale-print");
-        }
+            await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-sale-print", $"PH-{savedMemo?.ID}");
     }
 
     private void Reset()
     {
         savedMemo = null;
         patientType = "1";
-        storeId = stores.FirstOrDefault(x => x.IsActive)?.ID ?? 1;
-        customerName = "Walk-in Customer";
+        ipdPaymentMode = "credit";
+        storeId = ResolveStoreId();
+        customerName = WalkInName;
         contact = "";
         regNo = "";
+        selectedBedName = "";
+        ipdSearchQuery = "";
         lines = [];
         discount = 0;
         tenderedAmount = null;
         prescriptionId = null;
         loadedPrescriptionId = null;
-        prescriptionLabel = "—";
-        medSearchQuery = "";
-        showMedSuggestions = false;
-        selectedMedObj = null;
-        showGenericAlternatives = false;
+        prescriptionLabel = "";
+        rxShortages = [];
+        paymentMethod = PharmacyPaymentMethod.Cash;
+        paymentRef = "";
+        addingPaymentMethod = false;
+        dialog = null;
+        lineMedicineId = 0;
+        lineQuantity = 1;
+        lineRate = 0;
+        ClearMedSearch();
         genericAlternatives = [];
         message = "";
+        _ = FocusSearchSoonAsync();
     }
 
-    private string MedicineName(int id) => medicines.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private async Task FocusSearchSoonAsync()
+    {
+        await Task.Yield();
+        try { await medSearchInputRef.FocusAsync(); } catch { }
+    }
+
+    private string MedicineName(int id) => medicineById.TryGetValue(id, out var m) ? m.Name ?? "—" : "—";
     private void Success(string x) { messageClass = "success"; message = x; }
     private void Fail(string x) { messageClass = "danger"; message = x; }
 
     public void Dispose()
     {
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+        try { _ = JS.InvokeVoidAsync("hpm.detachPageHotkeys"); } catch { }
+        selfRef?.Dispose();
     }
+
+    private sealed record MedIndexEntry(Service Med, string Name, string Generic, string Type, string Sku, string Haystack);
+    private sealed record MedHit(Service Med, string Generic, string Type, decimal Stock);
+    private sealed record InpatientLookupItem(string RegNo, string PatientName, string BedName, string Contact, string PatientId);
+    private sealed record PendingRxItem(long ID, string PatientName, int ItemCount, DateTime CreatedDate, bool IsIpdIndent, string? PatientId);
 
     private sealed class SaleLine
     {
@@ -1143,4 +2064,3 @@
         public decimal Total => Quantity * Rate;
     }
 }
-

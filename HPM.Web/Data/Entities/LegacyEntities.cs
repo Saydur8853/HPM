@@ -194,6 +194,7 @@ public sealed class ServiceCategory
 public sealed class Service
 {
     public int ID { get; set; }
+    public string? Sku { get; set; }
     public string? Name { get; set; }
     public decimal? SaleRate { get; set; }
     public decimal? BuyRate { get; set; }

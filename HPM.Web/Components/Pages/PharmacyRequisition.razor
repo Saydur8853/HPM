@@ -4,6 +4,7 @@
 @using HPM.Web.Data.Entities
 @using HPM.Web.Security
 @using HPM.Web.Localization
+@using HPM.Web.Components.Common
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
@@ -11,30 +12,37 @@
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
 @inject I18nService I18n
+@inject HospitalSetupService Branding
+@inject IJSRuntime JS
+@inject IBarcodeQrService BarcodeQr
 @implements IDisposable
 
 <PageTitle>@I18n.T("Purchase Requisition") | @Branding.HospitalName</PageTitle>
 
-@inject HospitalSetupService Branding
-
-<div class="page-heading">
-    <span class="eyebrow">@I18n.T("Pharmacy & Stock")</span>
-    <h1>@I18n.T("Purchase Requisition")</h1>
-    <p>@I18n.T("Request medicines for procurement approval.")</p>
+<div class="pharm-subnav-bar">
+    <div>
+        <h1 style="margin:0; font-size:20px; font-weight:800; color:#0f172a;">@I18n.T("Purchase Requisition")</h1>
+    </div>
+    <div style="display:flex; gap:6px; align-items:center;">
+        <NavLink class="btn btn-ghost btn-sm" href="/pharmacy/purchases">@I18n.T("Go to Purchase / Stock In") &rarr;</NavLink>
+        <button class="btn btn-secondary btn-sm" @onclick="ResetForm">@I18n.T("New Requisition")</button>
+    </div>
 </div>
 
 @if (!string.IsNullOrWhiteSpace(message))
 {
-    <div class="alert @messageClass" role="alert">@message</div>
+    <div class="alert @messageClass" style="margin-bottom:12px;">@message</div>
 }
 
 <div class="module-layout">
-    <div class="form-panel">
-        <div class="form-panel-header">
-            <h2>@(savedReq == null ? I18n.T("New Requisition") : $"{I18n.T("Requisition")} #{savedReq.ID}")</h2>
+    <div class="panel form-panel">
+        <div class="panel-heading" style="padding:12px 18px;">
+            <h2 style="font-size:15px; margin:0;">
+                @(savedReq == null ? I18n.T("Create Requisition") : $"{savedReq.RequisitionNo}")
+            </h2>
             @if (savedReq != null)
             {
-                <button class="btn btn-secondary" @onclick="ResetForm">@I18n.T("+ New")</button>
+                <span class="pill @(savedReq.Status == "Approved" ? "pill-success" : savedReq.Status == "Rejected" ? "pill-danger" : "pill-warning")">@savedReq.Status</span>
             }
         </div>
 
@@ -42,9 +50,8 @@
         {
             <div class="form-grid">
                 <label>
-                    <span>@I18n.T("Pharmacy / Store", "Store")*</span>
+                    <span>@I18n.T("Store") *</span>
                     <select @bind="storeId" disabled="@isSaving">
-                        <option value="0">@I18n.T("Select")</option>
                         @foreach (var s in stores)
                         {
                             <option value="@s.ID">@s.Name</option>
@@ -52,170 +59,249 @@
                     </select>
                 </label>
                 <label>
-                    <span>@I18n.T("Remarks / Purpose")</span>
-                    <input type="text" @bind="remarks" placeholder="@I18n.T("Optional note")" disabled="@isSaving" />
+                    <span>@I18n.T("Purpose / Note")</span>
+                    <input type="text" @bind="remarks" placeholder="@I18n.T("e.g. Weekly stock refill")" disabled="@isSaving" />
                 </label>
             </div>
 
-            <div class="form-section-title">@I18n.T("Medicine Items")</div>
-
-            <div class="form-grid three">
-                <label class="span-2">
-                    <span>@I18n.T("Medicine / Product")*</span>
-                    <select @bind="selectedServiceId" disabled="@isSaving">
-                        <option value="0">@I18n.T("Select Medicine...")</option>
-                        @foreach (var m in medicines)
-                        {
-                            <option value="@m.ID">@m.Name</option>
-                        }
-                    </select>
-                </label>
+            <div class="form-grid" style="grid-template-columns: 2fr 90px 100px 1.2fr auto; gap:8px; align-items:end;">
+                <div class="pos-typeahead-wrapper">
+                    <span style="font-size:12px; font-weight:600; color:#334155; display:block; margin-bottom:4px;">@I18n.T("Search Medicine") *</span>
+                    <input type="text"
+                           placeholder="@I18n.T("Type medicine name...")"
+                           @bind="medSearchQuery"
+                           @bind:event="oninput"
+                           @onfocus="() => showMedDropdown = true" />
+                    @if (showMedDropdown && FilteredMedicines.Any())
+                    {
+                        <div class="pos-med-dropdown" style="z-index:130;">
+                            @foreach (var m in FilteredMedicines)
+                            {
+                                <div class="pos-med-item" @onmousedown:preventDefault @onclick="() => SelectMedicine(m)">
+                                    <div class="pos-med-name">@m.Name</div>
+                                    <span style="font-size:11px; font-weight:700; color:#0369a1;">TP: @I18n.FormatCurrency(m.BuyRate ?? 0)</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
                 <label>
-                    <span>@I18n.T("Qty Needed")*</span>
+                    <span>@I18n.T("Qty") *</span>
                     <input type="number" @bind="selectedQty" min="1" step="1" disabled="@isSaving" />
                 </label>
                 <label>
-                    <span>@I18n.T("Est. Rate (Tk)")</span>
+                    <span>@I18n.T("Est. TP")</span>
                     <input type="number" @bind="selectedRate" min="0" step="0.01" disabled="@isSaving" />
                 </label>
                 <label>
-                    <span>@I18n.T("Item Remarks")</span>
+                    <span>@I18n.T("Note")</span>
                     <input type="text" @bind="selectedItemRemarks" placeholder="@I18n.T("Optional")" disabled="@isSaving" />
                 </label>
-                <label style="align-self:end">
-                    <span>&nbsp;</span>
-                    <button class="btn btn-secondary" @onclick="AddLine" disabled="@isSaving">+ @I18n.T("Add")</button>
-                </label>
+                <div>
+                    <button class="btn btn-secondary" type="button" @onclick="AddLine" disabled="@isSaving">+ @I18n.T("Add")</button>
+                </div>
             </div>
 
-            @if (lines.Count > 0)
-            {
-                <table class="data-table" style="margin-top:12px">
+            <div class="data-table-wrap">
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>#</th>
                             <th>@I18n.T("Medicine")</th>
-                            <th>@I18n.T("Qty")</th>
-                            <th>@I18n.T("Est. Rate")</th>
-                            <th>@I18n.T("Est. Total")</th>
+                            <th class="num">@I18n.T("Qty")</th>
+                            <th class="num">@I18n.T("Est. Rate")</th>
+                            <th class="num">@I18n.T("Est. Total")</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
+                        @if (lines.Count == 0)
+                        {
+                            <tr><td colspan="6"><div class="empty-state small">@I18n.T("Search and add medicines needed for purchase.")</div></td></tr>
+                        }
                         @foreach (var (line, idx) in lines.Select((l, i) => (l, i + 1)))
                         {
                             <tr>
                                 <td>@idx</td>
-                                <td>@line.MedicineName</td>
-                                <td>@line.Qty</td>
-                                <td>@(line.Rate.HasValue ? I18n.FormatCurrency(line.Rate.Value) : "—")</td>
-                                <td>@(line.Rate.HasValue ? I18n.FormatCurrency(line.Qty * line.Rate.Value) : "—")</td>
-                                <td><button class="btn-icon danger" @onclick="() => RemoveLine(line)" title="Remove">✕</button></td>
+                                <td><b>@line.MedicineName</b></td>
+                                <td class="num">@line.Qty</td>
+                                <td class="num">@(line.Rate.HasValue ? I18n.FormatCurrency(line.Rate.Value) : "—")</td>
+                                <td class="num">@(line.Rate.HasValue ? I18n.FormatCurrency(line.Qty * line.Rate.Value) : "—")</td>
+                                <td style="text-align:right;"><button class="icon-btn" type="button" @onclick="() => RemoveLine(line)">✕</button></td>
                             </tr>
                         }
                     </tbody>
                 </table>
-            }
+            </div>
 
-            <div class="form-actions" style="margin-top:16px">
-                <button class="btn btn-primary" @onclick="SubmitAsync" disabled="@isSaving">
-                    @(isSaving ? I18n.T("Submitting...") : I18n.T("Submit Requisition"))
+            <div class="form-actions">
+                <button class="btn btn-primary" @onclick="() => SubmitAsync(false)" disabled="@isSaving">
+                    @(isSaving ? I18n.T("Saving...") : I18n.T("Submit Requisition"))
+                </button>
+                <button class="btn btn-secondary" @onclick="() => SubmitAsync(true)" disabled="@isSaving">
+                    @I18n.T("Submit & Print A4")
                 </button>
             </div>
         }
         else
         {
-            <div class="status-banner @StatusClass(savedReq.Status)">
-                @I18n.T("Status"): <strong>@savedReq.Status</strong>
-                @if (!string.IsNullOrWhiteSpace(savedReq.ReviewNote))
+            <div style="margin:8px 18px; padding:10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; display:flex; flex-wrap:wrap; gap:8px 20px; font-size:12.5px;">
+                <div><span class="text-muted">@I18n.T("Store"):</span> <b>@(stores.FirstOrDefault(s => s.ID == savedReq.StoreID)?.Name ?? "—")</b></div>
+                <div><span class="text-muted">@I18n.T("Date"):</span> <b>@savedReq.TransDate.ToLocalTime().ToString("dd MMM yyyy hh:mm tt")</b></div>
+                @if (!string.IsNullOrWhiteSpace(savedReq.Remarks))
                 {
-                    <span> — @savedReq.ReviewNote</span>
+                    <div><span class="text-muted">@I18n.T("Note"):</span> <b>@savedReq.Remarks</b></div>
                 }
             </div>
 
-            <table class="data-table" style="margin-top:12px">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>@I18n.T("Medicine")</th>
-                        <th>@I18n.T("Qty")</th>
-                        <th>@I18n.T("Est. Rate")</th>
-                        <th>@I18n.T("Est. Total")</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var (item, idx) in savedReq.Items.Select((x, i) => (x, i + 1)))
-                    {
+            <div class="data-table-wrap">
+                <table class="data-table">
+                    <thead>
                         <tr>
-                            <td>@idx</td>
-                            <td>@(medicines.FirstOrDefault(m => m.ID == item.ServiceID)?.Name ?? item.ServiceID.ToString())</td>
-                            <td>@item.RequestedQty</td>
-                            <td>@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.EstimatedRate.Value) : "—")</td>
-                            <td>@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.RequestedQty * item.EstimatedRate.Value) : "—")</td>
+                            <th>#</th>
+                            <th>@I18n.T("Medicine")</th>
+                            <th class="num">@I18n.T("Requested Qty")</th>
+                            <th class="num">@I18n.T("Est. Rate")</th>
+                            <th class="num">@I18n.T("Est. Total")</th>
                         </tr>
-                    }
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        @foreach (var (item, idx) in savedReq.Items.Select((x, i) => (x, i + 1)))
+                        {
+                            <tr>
+                                <td>@idx</td>
+                                <td><b>@(medicines.FirstOrDefault(m => m.ID == item.ServiceID)?.Name ?? item.ServiceID.ToString())</b></td>
+                                <td class="num">@item.RequestedQty</td>
+                                <td class="num">@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.EstimatedRate.Value) : "—")</td>
+                                <td class="num">@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.RequestedQty * item.EstimatedRate.Value) : "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
 
             @if (isAdmin && savedReq.Status == "Pending")
             {
-                <div class="form-grid" style="margin-top:16px">
+                <div class="form-grid">
                     <label class="span-2">
-                        <span>@I18n.T("Review Note")</span>
-                        <input type="text" @bind="reviewNote" placeholder="@I18n.T("Optional note to requester")" />
+                        <span>@I18n.T("Approval / Review Note")</span>
+                        <input type="text" @bind="reviewNote" placeholder="@I18n.T("Optional note")" />
                     </label>
                 </div>
-                <div class="form-actions" style="margin-top:8px">
-                    <button class="btn btn-primary" @onclick="() => ReviewAsync(true)" disabled="@isSaving">
-                        ✓ @I18n.T("Approve")
-                    </button>
-                    <button class="btn btn-danger" @onclick="() => ReviewAsync(false)" disabled="@isSaving">
-                        ✕ @I18n.T("Reject")
-                    </button>
-                </div>
             }
+
+            <div class="form-actions">
+                @if (isAdmin && savedReq.Status == "Pending")
+                {
+                    <button class="btn btn-primary" @onclick="() => ReviewAsync(true)" disabled="@isSaving">@I18n.T("Approve")</button>
+                    <button class="btn btn-danger" @onclick="() => ReviewAsync(false)" disabled="@isSaving">@I18n.T("Reject")</button>
+                }
+                @if (savedReq.Status == "Approved")
+                {
+                    <NavLink class="btn btn-primary" href="@($"/pharmacy/purchases?reqId={savedReq.ID}")">@I18n.T("Receive Stock for This Requisition") &rarr;</NavLink>
+                }
+                <button class="btn btn-secondary" @onclick="PrintRequisitionAsync">@I18n.T("Print A4 Requisition")</button>
+            </div>
         }
     </div>
 
-    <div class="list-panel">
-        <div class="list-panel-header">
-            <h2>@I18n.T("Recent Requisitions")</h2>
-            <span class="badge">@recentList.Count @I18n.T("records")</span>
+    <div class="panel">
+        <div class="panel-heading" style="padding:12px 18px;">
+            <h2 style="font-size:15px; margin:0;">@I18n.T("Recent Requisitions") (@recentList.Count)</h2>
         </div>
-        <div class="scanner-search-group">
-            <input type="search" @bind="searchTerm" @bind:event="oninput" placeholder="@I18n.T("Search by ID or status...")" />
+        <div style="padding:0 18px 10px;">
+            <input type="search" @bind="searchTerm" @bind:event="oninput" placeholder="@I18n.T("Search REQ # or status...")" />
         </div>
+        <div class="data-table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>@I18n.T("Req #")</th>
+                        <th>@I18n.T("Date")</th>
+                        <th>@I18n.T("Store")</th>
+                        <th class="num">@I18n.T("Items")</th>
+                        <th>@I18n.T("Status")</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in FilteredList)
+                    {
+                        <tr>
+                            <td><b>@r.RequisitionNo</b></td>
+                            <td>@r.TransDate.ToLocalTime().ToString("dd MMM yy")</td>
+                            <td>@(stores.FirstOrDefault(s => s.ID == r.StoreID)?.Name ?? "—")</td>
+                            <td class="num">@r.Items.Count</td>
+                            <td><span class="pill @(r.Status == "Approved" ? "pill-success" : r.Status == "Rejected" ? "pill-danger" : "pill-warning")">@r.Status</span></td>
+                            <td style="text-align:right;"><button class="icon-btn" @onclick="() => LoadReq(r)">@I18n.T("View / Print")</button></td>
+                        </tr>
+                    }
+                    @if (!FilteredList.Any())
+                    {
+                        <tr><td colspan="6"><div class="empty-state small">@I18n.T("No requisitions found.")</div></td></tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (savedReq != null)
+{
+    <!-- Official Printable A4 Purchase Requisition -->
+    <div id="pharmacy-requisition-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@I18n.T("Pharmacy Purchase Requisition")"
+                             SubTitle="@I18n.T("Hospital Pharmacy Procurement")"
+                             DocumentNo="@savedReq.RequisitionNo"
+                             BarcodeCode="@savedReq.RequisitionNo" />
+
+        <div class="print-grid">
+            <div><span>@I18n.T("Requisition No"):</span> <b>@savedReq.RequisitionNo</b></div>
+            <div><span>@I18n.T("Status"):</span> <b>@savedReq.Status</b></div>
+            <div><span>@I18n.T("Store"):</span> <b>@(stores.FirstOrDefault(s => s.ID == savedReq.StoreID)?.Name ?? "—")</b></div>
+            <div><span>@I18n.T("Date"):</span> <b>@savedReq.TransDate.ToLocalTime().ToString("dd MMM yyyy hh:mm tt")</b></div>
+            @if (!string.IsNullOrWhiteSpace(savedReq.Remarks))
+            {
+                <div style="grid-column: span 2;"><span>@I18n.T("Purpose / Remarks"):</span> <b>@savedReq.Remarks</b></div>
+            }
+        </div>
+
         <table class="data-table">
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>@I18n.T("Date")</th>
-                    <th>@I18n.T("Store")</th>
-                    <th>@I18n.T("Items")</th>
-                    <th>@I18n.T("Status")</th>
-                    <th></th>
+                    <th>@I18n.T("Medicine Name")</th>
+                    <th>@I18n.T("Remarks")</th>
+                    <th class="num">@I18n.T("Requested Qty")</th>
+                    <th class="num">@I18n.T("Est. Unit Rate")</th>
+                    <th class="num">@I18n.T("Est. Amount")</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in FilteredList)
+                @foreach (var (item, idx) in savedReq.Items.Select((x, i) => (x, i + 1)))
                 {
-                    <tr class="@(savedReq?.ID == r.ID ? "row-selected" : "")">
-                        <td>@r.ID</td>
-                        <td>@r.TransDate.ToString("dd MMM")</td>
-                        <td>@(stores.FirstOrDefault(s => s.ID == r.StoreID)?.Name ?? "")</td>
-                        <td>@r.Items.Count</td>
-                        <td><span class="badge @StatusClass(r.Status)">@r.Status</span></td>
-                        <td><button class="btn-link" @onclick="() => LoadReq(r)">@I18n.T("View")</button></td>
+                    <tr>
+                        <td>@idx</td>
+                        <td><b>@(medicines.FirstOrDefault(m => m.ID == item.ServiceID)?.Name ?? item.ServiceID.ToString())</b></td>
+                        <td>@(string.IsNullOrWhiteSpace(item.Remarks) ? "—" : item.Remarks)</td>
+                        <td class="num"><b>@item.RequestedQty</b></td>
+                        <td class="num">@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.EstimatedRate.Value) : "—")</td>
+                        <td class="num">@(item.EstimatedRate.HasValue ? I18n.FormatCurrency(item.RequestedQty * item.EstimatedRate.Value) : "—")</td>
                     </tr>
-                }
-                @if (!FilteredList.Any())
-                {
-                    <tr><td colspan="6" class="empty-row">@I18n.T("No requisitions found.")</td></tr>
                 }
             </tbody>
         </table>
+
+        <div class="print-total">
+            <div class="grand">
+                <span>@I18n.T("Estimated Total")</span>
+                <b>@I18n.FormatCurrency(savedReq.Items.Sum(x => x.RequestedQty * (x.EstimatedRate ?? 0)))</b>
+            </div>
+        </div>
+
+        <PrintDocumentFooter Signatures='new string[] { I18n.T("Requested By"), I18n.T("Pharmacy In-Charge"), I18n.T("Approved By") }' />
     </div>
-</div>
+}
 
 @code {
     private record LineItem(int ServiceId, string MedicineName, decimal Qty, decimal? Rate, string? ItemRemarks);
@@ -227,6 +313,8 @@
     private int storeId;
     private string remarks = string.Empty;
     private int selectedServiceId;
+    private string medSearchQuery = string.Empty;
+    private bool showMedDropdown;
     private decimal selectedQty = 1;
     private decimal? selectedRate;
     private string selectedItemRemarks = string.Empty;
@@ -240,9 +328,14 @@
     private string messageClass = string.Empty;
     private string searchTerm = string.Empty;
 
+    private List<Service> FilteredMedicines => string.IsNullOrWhiteSpace(medSearchQuery)
+        ? medicines.Take(20).ToList()
+        : medicines.Where(x => x.Name?.Contains(medSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false).Take(25).ToList();
+
     private IEnumerable<PurchaseRequisition> FilteredList => string.IsNullOrWhiteSpace(searchTerm)
         ? recentList
-        : recentList.Where(r => r.ID.ToString().Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
+        : recentList.Where(r => r.RequisitionNo.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
+            || r.ID.ToString().Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
             || r.Status.Contains(searchTerm, StringComparison.OrdinalIgnoreCase));
 
     protected override async Task OnInitializedAsync()
@@ -255,8 +348,15 @@
         medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
 
         if (stores.Count > 0) storeId = stores[0].ID;
-
         await LoadListAsync(db);
+    }
+
+    private void SelectMedicine(Service m)
+    {
+        selectedServiceId = m.ID;
+        medSearchQuery = m.Name ?? "";
+        selectedRate = m.BuyRate > 0 ? m.BuyRate : null;
+        showMedDropdown = false;
     }
 
     private async Task LoadListAsync(HpmDbContext db)
@@ -276,13 +376,14 @@
 
     private void AddLine()
     {
-        if (selectedServiceId <= 0) { Fail(I18n.T("Select a medicine.")); return; }
-        if (selectedQty <= 0) { Fail(I18n.T("Quantity must be greater than zero.")); return; }
-        if (lines.Any(l => l.ServiceId == selectedServiceId)) { Fail(I18n.T("This medicine is already in the list.")); return; }
+        if (selectedServiceId <= 0) { Fail("Select a medicine."); return; }
+        if (selectedQty <= 0) { Fail("Quantity must be greater than zero."); return; }
+        if (lines.Any(l => l.ServiceId == selectedServiceId)) { Fail("This medicine is already in the list."); return; }
 
         var medicine = medicines.First(m => m.ID == selectedServiceId);
         lines.Add(new LineItem(selectedServiceId, medicine.Name ?? medicine.ID.ToString(), selectedQty, selectedRate > 0 ? selectedRate : null, selectedItemRemarks.Trim()));
         selectedServiceId = 0;
+        medSearchQuery = string.Empty;
         selectedQty = 1;
         selectedRate = null;
         selectedItemRemarks = string.Empty;
@@ -291,10 +392,10 @@
 
     private void RemoveLine(LineItem line) => lines.Remove(line);
 
-    private async Task SubmitAsync()
+    private async Task SubmitAsync(bool printAfterSave)
     {
-        if (storeId <= 0) { Fail(I18n.T("Select a store.")); return; }
-        if (lines.Count == 0) { Fail(I18n.T("Add at least one medicine.")); return; }
+        if (storeId <= 0) { Fail("Select a store."); return; }
+        if (lines.Count == 0) { Fail("Add at least one medicine."); return; }
 
         isSaving = true;
         try
@@ -318,7 +419,7 @@
                 };
                 db.PurchaseRequisitions.Add(req);
                 await db.SaveChangesAsync();
-                req.RequisitionNo = $"REQ-{req.ID:D8}";
+                req.RequisitionNo = $"REQ-{req.ID:D6}";
 
                 int slno = 1;
                 foreach (var line in lines)
@@ -334,20 +435,26 @@
                     });
                 }
                 await db.SaveChangesAsync();
-
                 return await db.PurchaseRequisitions.Include(x => x.Items).FirstAsync(x => x.ID == req.ID);
             });
 
             lines.Clear();
             remarks = string.Empty;
-            Success(I18n.T("Requisition submitted successfully."));
+            Success($"Requisition {savedReq.RequisitionNo} submitted.");
 
             await using var db2 = await DbFactory.CreateDbContextAsync();
             await LoadListAsync(db2);
+
+            if (printAfterSave)
+            {
+                StateHasChanged();
+                await Task.Yield();
+                await PrintRequisitionAsync();
+            }
         }
         catch (Exception ex)
         {
-            Fail($"{I18n.T("Failed to submit")}: {ex.GetBaseException().Message}");
+            Fail($"Failed: {ex.GetBaseException().Message}");
         }
         finally { isSaving = false; }
     }
@@ -379,12 +486,11 @@
             await using var db2 = await DbFactory.CreateDbContextAsync();
             savedReq = await db2.PurchaseRequisitions.Include(x => x.Items).FirstAsync(x => x.ID == reqId);
             await LoadListAsync(db2);
-
-            Success(approve ? I18n.T("Requisition approved.") : I18n.T("Requisition rejected."));
+            Success(approve ? "Requisition approved." : "Requisition rejected.");
         }
         catch (Exception ex)
         {
-            Fail($"{I18n.T("Failed")}: {ex.GetBaseException().Message}");
+            Fail($"Failed: {ex.GetBaseException().Message}");
         }
         finally { isSaving = false; }
     }
@@ -396,6 +502,8 @@
         message = string.Empty;
     }
 
+    private async Task PrintRequisitionAsync() => await JS.InvokeVoidAsync("hpm.printElement", "pharmacy-requisition-print", savedReq?.RequisitionNo ?? "Requisition");
+
     private void ResetForm()
     {
         savedReq = null;
@@ -404,19 +512,12 @@
         reviewNote = string.Empty;
         message = string.Empty;
         selectedServiceId = 0;
+        medSearchQuery = string.Empty;
         selectedQty = 1;
         selectedRate = null;
     }
 
-    private static string StatusClass(string status) => status switch
-    {
-        "Approved" => "success",
-        "Rejected" => "danger",
-        _ => "warning"
-    };
-
     private void Success(string x) { messageClass = "success"; message = x; }
     private void Fail(string x) { messageClass = "danger"; message = x; }
-
     public void Dispose() { }
 }

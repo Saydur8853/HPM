@@ -8,86 +8,128 @@
 @using System.Security.Claims
 @using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Stock Inward") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Purchase / Stock In") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
+<div class="pharm-subnav-bar">
     <div>
-        <span class="eyebrow">@I18n.T("Pharmacy & Stock")</span>
-        <h1>@I18n.T("Purchase Invoices & Stock Inward", "Purchase & Stock Inward")</h1>
-        <p>@I18n.T("Receive medicine shipments from suppliers with batch and expiry tracking.")</p>
+        <h1 style="margin:0; font-size:20px; font-weight:800; color:#0f172a;">@I18n.T("Purchase / Stock In (Challan)")</h1>
     </div>
-    <button class="btn btn-secondary" @onclick="Reset">@I18n.T("+ New Counter Sale", "+ New purchase")</button>
+    <div style="display:flex; gap:6px; align-items:center;">
+        <NavLink class="btn btn-ghost btn-sm" href="/pharmacy/requisition">@I18n.T("Requisitions")</NavLink>
+        <NavLink class="btn btn-ghost btn-sm" href="/pharmacy/returns-payments">@I18n.T("Supplier Due & Return")</NavLink>
+        <button class="btn btn-secondary btn-sm" @onclick="Reset">@I18n.T("New Challan")</button>
+    </div>
 </div>
 
-@if (!string.IsNullOrWhiteSpace(message)) { <div class="alert @messageClass">@message</div> }
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert @messageClass" style="margin-bottom:12px;">@message</div>
+}
 
 <div class="module-layout">
     <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(savedChallan == null ? I18n.T("Purchase Invoices", "Receiving Challan") : $"{I18n.T("Purchase Invoices")} #{savedChallan.ID}")</h2>
-                <p>@I18n.T("Stock inward challan and purchase invoice entry.", "Stock inward challan and purchase invoice entry.")</p>
-            </div>
-            @if(savedChallan != null){<span class="badge">@I18n.T("POSTED")</span>}
+        <div class="panel-heading" style="padding:12px 18px;">
+            <h2 style="font-size:15px; margin:0;">
+                @(savedChallan == null ? I18n.T("Receive Supplier Challan") : $"{I18n.T("Purchase Challan")} #PUR-{savedChallan.ID}")
+            </h2>
+            @if (savedChallan != null)
+            {
+                <span class="pill pill-success">@I18n.T("POSTED")</span>
+            }
         </div>
-        <div class="form-grid">
+
+        @if (savedChallan == null && approvedRequisitions.Count > 0)
+        {
+            <div style="margin:0 18px 10px; padding:8px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span style="font-size:12px; font-weight:700; color:#334155;">@I18n.T("Load Approved Requisition"):</span>
+                <select style="flex:1; min-width:180px; height:30px;" @bind="selectedReqToLoad">
+                    <option value="0">@I18n.T("Select requisition...")</option>
+                    @foreach (var r in approvedRequisitions)
+                    {
+                        <option value="@r.ID">@r.RequisitionNo (@r.Items.Count items · @r.TransDate.ToLocalTime().ToString("dd MMM"))</option>
+                    }
+                </select>
+                <button type="button" class="btn btn-secondary btn-sm" @onclick="LoadSelectedRequisition">@I18n.T("Load Items")</button>
+            </div>
+        }
+
+        <div class="form-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
             <label>
-                <span>@I18n.T("Supplier Name", "Supplier *")</span>
-                <select @bind="supplierId">
-                    <option value="0">@I18n.T("Select")</option>
-                    @foreach(var x in suppliers){<option value="@x.ID">@x.Name</option>}
+                <span>@I18n.T("Supplier / Company") *</span>
+                <select @bind="supplierId" disabled="@(savedChallan != null)">
+                    <option value="0">@I18n.T("Select Supplier")</option>
+                    @foreach (var x in suppliers)
+                    {
+                        <option value="@x.ID">@x.Name</option>
+                    }
                 </select>
             </label>
             <label>
-                <span>@I18n.T("Pharmacy & Stock", "Store *")</span>
-                <select @bind="storeId">
-                    <option value="0">@I18n.T("Select")</option>
-                    @foreach(var x in stores.Where(x=>x.IsActive)){<option value="@x.ID">@x.Name</option>}
+                <span>@I18n.T("Receiving Store") *</span>
+                <select @bind="storeId" disabled="@(savedChallan != null)">
+                    @foreach (var x in stores.Where(x => x.IsActive))
+                    {
+                        <option value="@x.ID">@x.Name</option>
+                    }
                 </select>
             </label>
             <label>
-                <span>@I18n.T("Supplier Invoice No", "Invoice number *")</span>
-                <input @bind="invoiceNo" maxlength="20" />
+                <span>@I18n.T("Supplier Invoice No") *</span>
+                <input @bind="invoiceNo" maxlength="20" placeholder="@I18n.T("e.g. INV-2045")" disabled="@(savedChallan != null)" />
             </label>
             <label>
-                <span>@I18n.T("Purchase Date", "Invoice date *")</span>
-                <InputDate Type="InputDateType.Date" @bind-Value="invoiceDate" />
+                <span>@I18n.T("Invoice Date") *</span>
+                <InputDate Type="InputDateType.Date" @bind-Value="invoiceDate" disabled="@(savedChallan != null)" />
             </label>
         </div>
 
         @if (savedChallan == null)
         {
-            <div class="form-section-title">@I18n.T("Item / Strength", "Add batch item")</div>
-            <div class="form-grid three">
-                <label class="span-2">
-                    <span>@I18n.T("Medicine / Product Name", "Medicine *")</span>
-                    <select @bind="lineMedicineId">
-                        <option value="0">@I18n.T("Select")</option>
-                        @foreach(var x in medicines){<option value="@x.ID">@x.Name</option>}
-                    </select>
+            <div class="form-grid" style="grid-template-columns: 2fr 1fr 1.1fr 80px 95px 95px auto; gap:8px; align-items:end;">
+                <div class="pos-typeahead-wrapper">
+                    <span style="font-size:12px; font-weight:600; color:#334155; display:block; margin-bottom:4px;">@I18n.T("Search Medicine") *</span>
+                    <input type="text"
+                           placeholder="@I18n.T("Type brand name...")"
+                           @bind="medSearchQuery"
+                           @bind:event="oninput"
+                           @onfocus="() => showMedDropdown = true" />
+                    @if (showMedDropdown && FilteredMedicines.Any())
+                    {
+                        <div class="pos-med-dropdown" style="z-index:130;">
+                            @foreach (var m in FilteredMedicines)
+                            {
+                                <div class="pos-med-item" @onmousedown:preventDefault @onclick="() => SelectMedicine(m)">
+                                    <div class="pos-med-name">@m.Name</div>
+                                    <span style="font-size:11px; color:#0369a1; font-weight:700;">TP: @I18n.FormatCurrency(m.BuyRate ?? 0) · MRP: @I18n.FormatCurrency(m.SaleRate ?? 0)</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+                <label>
+                    <span>@I18n.T("Batch No") *</span>
+                    <input @bind="lineBatch" maxlength="50" placeholder="B-01" />
                 </label>
                 <label>
-                    <span>@I18n.T("Batch", "Batch number *")</span>
-                    <input @bind="lineBatch" maxlength="50" />
-                </label>
-                <label>
-                    <span>@I18n.T("Expiry Date", "Expiry date *")</span>
+                    <span>@I18n.T("Expiry") *</span>
                     <InputDate Type="InputDateType.Date" @bind-Value="lineExpiry" />
                 </label>
                 <label>
-                    <span>@I18n.T("Quantity *")</span>
+                    <span>@I18n.T("Qty") *</span>
                     <InputNumber @bind-Value="lineQuantity" />
                 </label>
                 <label>
-                    <span>@I18n.T("Trade Price (TP)", "Buy rate *")</span>
+                    <span>@I18n.T("Buy (TP)") *</span>
                     <InputNumber @bind-Value="lineBuyRate" />
                 </label>
                 <label>
-                    <span>@I18n.T("MRP / Sale Price", "Sale rate *")</span>
+                    <span>@I18n.T("Sale (MRP)") *</span>
                     <InputNumber @bind-Value="lineSaleRate" />
                 </label>
+                <div>
+                    <button type="button" class="btn btn-secondary" @onclick="AddLine">+ @I18n.T("Add")</button>
+                </div>
             </div>
-            <div class="form-actions"><button type="button" class="btn btn-secondary" @onclick="AddLine">+ @I18n.T("Add")</button></div>
         }
 
         <div class="data-table-wrap">
@@ -95,95 +137,134 @@
                 <thead>
                     <tr>
                         <th>#</th>
-                        <th>@I18n.T("Medicine / Product Name", "Medicine / Batch")</th>
-                        <th>@I18n.T("Expiry Date", "Expiry")</th>
+                        <th>@I18n.T("Medicine")</th>
+                        <th>@I18n.T("Batch")</th>
+                        <th>@I18n.T("Expiry")</th>
                         <th class="num">@I18n.T("Qty")</th>
-                        <th class="num">@I18n.T("Trade Price (TP)", "Buy")</th>
-                        <th class="num">@I18n.T("MRP / Sale Price", "Sale")</th>
+                        <th class="num">@I18n.T("Buy (TP)")</th>
+                        <th class="num">@I18n.T("Sale (MRP)")</th>
                         <th class="num">@I18n.T("Total")</th>
                         <th></th>
                     </tr>
                 </thead>
                 <tbody>
-                    @if(lines.Count==0){
-                        <tr><td colspan="8"><div class="empty-state small">@I18n.T("No records found.", "Add at least one batch item.")</div></td></tr>
+                    @if (lines.Count == 0)
+                    {
+                        <tr><td colspan="9"><div class="empty-state small">@I18n.T("Search a medicine above and enter batch, expiry & quantity.")</div></td></tr>
                     }
-                    @for(var i=0;i<lines.Count;i++){
-                        var index=i;
-                        var x=lines[i];
+                    @for (var i = 0; i < lines.Count; i++)
+                    {
+                        var index = i;
+                        var x = lines[i];
                         <tr>
-                            <td>@(i+1)</td>
-                            <td><b>@MedicineName(x.ServiceID)</b><br/><small>@x.BatchNo</small></td>
-                            <td>@x.ExpireDate.ToString("dd MMM yyyy")</td>
-                            <td class="num">@x.Quantity</td>
+                            <td>@(i + 1)</td>
+                            <td><b>@MedicineName(x.ServiceID)</b></td>
+                            <td>
+                                @if (savedChallan == null)
+                                {
+                                    <input style="width:90px; height:28px;" @bind="x.BatchNo" placeholder="Batch *" />
+                                }
+                                else
+                                {
+                                    @x.BatchNo
+                                }
+                            </td>
+                            <td>
+                                @if (savedChallan == null)
+                                {
+                                    <InputDate Type="InputDateType.Date" style="width:128px; height:28px;" @bind-Value="x.ExpireDate" />
+                                }
+                                else
+                                {
+                                    @x.ExpireDate.ToString("dd MMM yyyy")
+                                }
+                            </td>
+                            <td class="num">
+                                @if (savedChallan == null)
+                                {
+                                    <InputNumber style="width:70px; height:28px; text-align:right;" @bind-Value="x.Quantity" />
+                                }
+                                else
+                                {
+                                    @x.Quantity
+                                }
+                            </td>
                             <td class="num">@I18n.FormatCurrency(x.BuyRate)</td>
                             <td class="num">@I18n.FormatCurrency(x.SaleRate)</td>
                             <td class="num"><b>@I18n.FormatCurrency(x.Total)</b></td>
-                            <td>@if(savedChallan==null){<button class="icon-btn" @onclick="()=>RemoveLine(index)">✕</button>}</td>
+                            <td style="text-align:right;">
+                                @if (savedChallan == null)
+                                {
+                                    <button class="icon-btn" type="button" @onclick="() => RemoveLine(index)">✕</button>
+                                }
+                            </td>
                         </tr>
                     }
                 </tbody>
             </table>
         </div>
-        <div class="form-grid three" style="padding-top:16px;">
-            <label><span>@I18n.T("Gross Total", "Gross total")</span><input value="@I18n.FormatCurrency(GrossTotal)" disabled /></label>
-            <label><span>@I18n.T("Discount", "Header discount")</span><InputNumber @bind-Value="discount" /></label>
-            <label><span>VAT</span><InputNumber @bind-Value="vat" /></label>
+
+        <div class="form-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); padding-top:12px;">
+            <label><span>@I18n.T("Sub Total")</span><input value="@I18n.FormatCurrency(GrossTotal)" disabled /></label>
+            <label><span>@I18n.T("Discount")</span><InputNumber @bind-Value="discount" disabled="@(savedChallan != null)" /></label>
+            <label><span>VAT</span><InputNumber @bind-Value="vat" disabled="@(savedChallan != null)" /></label>
+            <label><span>@I18n.T("Net Payable")</span><input style="font-weight:800; color:#0f172a;" value="@I18n.FormatCurrency(NetTotal)" disabled /></label>
         </div>
+
         <div class="form-actions">
-            @if(savedChallan==null){
-                <button class="btn btn-primary" @onclick="PostAsync" disabled="@isSaving">
-                    @(isSaving?I18n.T("Saving…"):I18n.T("Save Purchase Invoice", "Post purchase & stock"))
+            @if (savedChallan == null)
+            {
+                <button class="btn btn-primary" @onclick="() => PostAsync(false)" disabled="@isSaving">
+                    @(isSaving ? I18n.T("Saving…") : I18n.T("Save Challan & Add Stock"))
+                </button>
+                <button class="btn btn-secondary" @onclick="() => PostAsync(true)" disabled="@isSaving">
+                    @I18n.T("Save & Print A4 Challan")
                 </button>
             }
-            else {
-                <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print")</button>
+            else
+            {
+                <button class="btn btn-primary" @onclick="PrintAsync">@I18n.T("Print A4 Challan")</button>
+                <button class="btn btn-secondary" @onclick="Reset">@I18n.T("New Challan")</button>
             }
         </div>
     </div>
 
     <div class="panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@I18n.T("Purchase Invoices", "Recent purchases")</h2>
-                <p>@recent.Count @I18n.T("transaction(s)")</p>
-            </div>
+        <div class="panel-heading" style="padding:12px 18px;">
+            <h2 style="font-size:15px; margin:0;">@I18n.T("Recent Purchases") (@recent.Count)</h2>
         </div>
 
-        <div class="scanner-search-group" style="margin: 0 1.25rem 0.75rem 1.25rem;">
-            <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
+        <div style="padding:0 18px 10px;">
             <input type="text"
-                   class="scanner-input"
-                   placeholder="@I18n.T("Scan / Search Challan # (PUR-XXXX) or Invoice No...", "Scan / Search Challan # (PUR-XXXX) or Invoice No...")"
+                   placeholder="@I18n.T("Search PUR #, Invoice or Supplier...")"
                    @bind="purchaseScanQuery"
                    @bind:event="oninput" />
-            @if (!string.IsNullOrWhiteSpace(purchaseScanQuery))
-            {
-                <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearPurchaseScan">✕</button>
-            }
         </div>
 
         <div class="data-table-wrap">
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>@I18n.T("Invoice No", "Challan / Invoice")</th>
-                        <th>@I18n.T("Supplier Name", "Supplier")</th>
+                        <th>@I18n.T("Challan")</th>
+                        <th>@I18n.T("Supplier")</th>
                         <th>@I18n.T("Date")</th>
-                        <th class="num">@I18n.T("Net Total", "Net")</th>
+                        <th class="num">@I18n.T("Net")</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
                     @if (!FilteredRecent.Any())
                     {
-                        <tr><td colspan="4"><div class="empty-state small">@I18n.T("No matching purchase records.")</div></td></tr>
+                        <tr><td colspan="5"><div class="empty-state small">@I18n.T("No purchase records found.")</div></td></tr>
                     }
-                    @foreach(var x in FilteredRecent){
+                    @foreach (var x in FilteredRecent)
+                    {
                         <tr>
-                            <td><b>#@x.ID</b><br/><small>@x.InvoiceNo</small></td>
+                            <td><b>PUR-@x.ID</b><br /><small class="text-muted">@x.InvoiceNo</small></td>
                             <td>@SupplierName(x.Supplier)</td>
-                            <td>@x.InvoiceDate.ToString("dd MMM yyyy")</td>
-                            <td class="num">@I18n.FormatCurrency(x.Total-x.Discount+x.VAT)</td>
+                            <td>@x.InvoiceDate.ToString("dd MMM yy")</td>
+                            <td class="num"><b>@I18n.FormatCurrency(x.Total - x.Discount + x.VAT)</b></td>
+                            <td style="text-align:right;"><button class="icon-btn" @onclick="() => OpenChallanAsync(x.ID)">@I18n.T("View / Print")</button></td>
                         </tr>
                     }
                 </tbody>
@@ -192,100 +273,121 @@
     </div>
 </div>
 
-@if(savedChallan!=null)
+@if (savedChallan != null)
 {
-    <div id="purchase-print" class="print-sheet panel print-document">
-        <div class="print-brand">
-            <div>
-                <h1>@Branding.HospitalName</h1>
-                <p>@I18n.T("Pharmacy & Stock")</p>
-            </div>
-            <div style="text-align: right;">
-                <b style="font-size: 15px;">@I18n.T("Purchase Invoices"): #@savedChallan.ID</b>
-                <br/><small>@savedChallan.InvoiceDate.ToString("dd MMM yyyy")</small>
-            </div>
-        </div>
-        <h2 class="print-title">@I18n.T("Purchase Invoices & Stock Inward", "Medicine Receiving Challan")</h2>
-
-        <BarcodeQrView Code="@($"PUR-{savedChallan.ID}")"
-                       QrPayload="@BarcodeQr.GenerateVoucherQrPayload(savedChallan.ID, "PURCHASE", savedChallan.Total - savedChallan.Discount + savedChallan.VAT, savedChallan.InvoiceDate)"
-                       Layout="side-by-side"
-                       BarHeight="30"
-                       QrPixelsPerModule="3" />
+    <!-- Official Printable A4 Medicine Receiving Challan / Purchase Bill -->
+    <div id="purchase-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@I18n.T("Medicine Receiving Challan (GRN)")"
+                             SubTitle="@I18n.T("Hospital Pharmacy & Store")"
+                             DocumentNo="@($"PUR-{savedChallan.ID}")"
+                             BarcodeCode="@($"PUR-{savedChallan.ID}")"
+                             QrPayload="@BarcodeQr.GenerateVoucherQrPayload(savedChallan.ID, "PURCHASE", savedChallan.Total - savedChallan.Discount + savedChallan.VAT, savedChallan.InvoiceDate)" />
 
         <div class="print-grid">
-            <div><span>@I18n.T("Supplier Name"):</span> <b>@SupplierName(savedChallan.Supplier)</b></div>
-            <div><span>@I18n.T("Invoice No"):</span> <b>@savedChallan.InvoiceNo</b></div>
-            <div><span>@I18n.T("Pharmacy & Stock"):</span> <b>@StoreName(savedChallan.StoreID)</b></div>
+            <div><span>@I18n.T("Supplier"):</span> <b>@SupplierName(savedChallan.Supplier)</b></div>
+            <div><span>@I18n.T("Supplier Invoice No"):</span> <b>@savedChallan.InvoiceNo</b></div>
+            <div><span>@I18n.T("Receiving Store"):</span> <b>@StoreName(savedChallan.StoreID)</b></div>
+            <div><span>@I18n.T("Invoice Date"):</span> <b>@savedChallan.InvoiceDate.ToString("dd MMM yyyy")</b></div>
         </div>
+
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
+                    <th>#</th>
+                    <th>@I18n.T("Medicine Name")</th>
                     <th>@I18n.T("Batch")</th>
-                    <th>@I18n.T("Expiry Date")</th>
+                    <th>@I18n.T("Expiry")</th>
                     <th class="num">@I18n.T("Qty")</th>
+                    <th class="num">@I18n.T("Buy Rate (TP)")</th>
+                    <th class="num">@I18n.T("Sale Rate (MRP)")</th>
                     <th class="num">@I18n.T("Amount")</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach(var x in lines){
+                @for (var i = 0; i < lines.Count; i++)
+                {
+                    var x = lines[i];
                     <tr>
-                        <td>@MedicineName(x.ServiceID)</td>
+                        <td>@(i + 1)</td>
+                        <td><b>@MedicineName(x.ServiceID)</b></td>
                         <td>@x.BatchNo</td>
                         <td>@x.ExpireDate.ToString("dd MMM yyyy")</td>
                         <td class="num">@x.Quantity</td>
+                        <td class="num">@I18n.FormatCurrency(x.BuyRate)</td>
+                        <td class="num">@I18n.FormatCurrency(x.SaleRate)</td>
                         <td class="num">@I18n.FormatCurrency(x.Total)</td>
                     </tr>
                 }
             </tbody>
         </table>
+
         <div class="print-total">
+            <div><span>@I18n.T("Sub Total")</span><b>@I18n.FormatCurrency(savedChallan.Total)</b></div>
+            @if (savedChallan.Discount > 0)
+            {
+                <div><span>@I18n.T("Discount")</span><b>-@I18n.FormatCurrency(savedChallan.Discount)</b></div>
+            }
+            @if (savedChallan.VAT > 0)
+            {
+                <div><span>VAT</span><b>+@I18n.FormatCurrency(savedChallan.VAT)</b></div>
+            }
             <div class="grand">
-                <span>@I18n.T("Net Total")</span>
-                <b>@I18n.FormatCurrency(savedChallan.Total-savedChallan.Discount+savedChallan.VAT)</b>
+                <span>@I18n.T("Net Payable")</span>
+                <b>@I18n.FormatCurrency(savedChallan.Total - savedChallan.Discount + savedChallan.VAT)</b>
             </div>
         </div>
-        <div class="print-footer">
-            <span class="print-sign">@I18n.T("Admission Officer", "Received By")</span>
-            <span class="print-sign">@I18n.T("Discharge Authority", "Authorized By")</span>
-        </div>
+
+        <PrintDocumentFooter Signatures='new string[] { I18n.T("Received By"), I18n.T("Pharmacy In-Charge"), I18n.T("Authorized By") }' />
     </div>
 }
 
-@code{
-    private List<Service> medicines=[];
-    private List<SupplierPharmacy> suppliers=[];
-    private List<MedicineStore> stores=[];
-    private List<MedicineReceivingChallan> recent=[];
-    private List<PurchaseLine> lines=[];
+@code {
+    [SupplyParameterFromQuery(Name = "reqId")]
+    public long? QueryReqId { get; set; }
+
+    private List<Service> medicines = [];
+    private List<SupplierPharmacy> suppliers = [];
+    private List<MedicineStore> stores = [];
+    private List<MedicineReceivingChallan> recent = [];
+    private List<PurchaseRequisition> approvedRequisitions = [];
+    private List<PurchaseLine> lines = [];
     private MedicineReceivingChallan? savedChallan;
+
+    private long selectedReqToLoad;
+    private long loadedQueryReqId;
     private int supplierId;
-    private int storeId=1;
-    private string invoiceNo="";
-    private DateTime invoiceDate=DateTime.Today;
+    private int storeId = 1;
+    private string invoiceNo = "";
+    private DateTime invoiceDate = DateTime.Today;
     private decimal discount;
     private decimal vat;
+
     private int lineMedicineId;
-    private string lineBatch="";
-    private DateTime lineExpiry=DateTime.Today.AddYears(1);
-    private decimal lineQuantity=1;
+    private string medSearchQuery = "";
+    private bool showMedDropdown;
+    private string lineBatch = "";
+    private DateTime lineExpiry = DateTime.Today.AddYears(1);
+    private decimal lineQuantity = 1;
     private decimal lineBuyRate;
     private decimal lineSaleRate;
-    private string purchaseScanQuery="";
+    private string purchaseScanQuery = "";
     private bool isSaving;
-    private string message="";
-    private string messageClass="success";
-    private decimal GrossTotal=>lines.Sum(x=>x.Total);
+    private string message = "";
+    private string messageClass = "success";
+
+    private decimal GrossTotal => lines.Sum(x => x.Total);
+    private decimal NetTotal => Math.Max(0, GrossTotal - discount + vat);
+
+    private List<Service> FilteredMedicines => string.IsNullOrWhiteSpace(medSearchQuery)
+        ? medicines.Take(20).ToList()
+        : medicines.Where(x => x.Name?.Contains(medSearchQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false).Take(25).ToList();
 
     private IEnumerable<MedicineReceivingChallan> FilteredRecent => string.IsNullOrWhiteSpace(purchaseScanQuery)
         ? recent
         : recent.Where(x => x.ID.ToString().Contains(purchaseScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
                          || (x.InvoiceNo?.Contains(purchaseScanQuery.Trim(), StringComparison.OrdinalIgnoreCase) ?? false)
-                         || (SupplierName(x.Supplier).Contains(purchaseScanQuery.Trim(), StringComparison.OrdinalIgnoreCase))
+                         || SupplierName(x.Supplier).Contains(purchaseScanQuery.Trim(), StringComparison.OrdinalIgnoreCase)
                          || $"PUR-{x.ID}".Contains(purchaseScanQuery.Trim(), StringComparison.OrdinalIgnoreCase));
-
-    private void ClearPurchaseScan() => purchaseScanQuery = "";
 
     protected override async Task OnInitializedAsync()
     {
@@ -293,120 +395,231 @@
         await LoadAsync();
     }
 
+    protected override void OnParametersSet()
+    {
+        if (QueryReqId.HasValue && QueryReqId.Value > 0 && loadedQueryReqId != QueryReqId.Value && approvedRequisitions.Count > 0)
+        {
+            selectedReqToLoad = QueryReqId.Value;
+            loadedQueryReqId = QueryReqId.Value;
+            LoadSelectedRequisition();
+        }
+    }
+
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
     private async Task LoadAsync()
     {
-        await using var db=await DbFactory.CreateDbContextAsync();
-        medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).OrderBy(x=>x.Name).ToListAsync();
-        suppliers=await db.PharmacySuppliers.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
-        stores=await db.MedicineStores.AsNoTracking().OrderBy(x=>x.Name).ToListAsync();
-        recent=await db.MedicineReceivingChallans.AsNoTracking().OrderByDescending(x=>x.ID).Take(100).ToListAsync();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        medicines = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).OrderBy(x => x.Name).ToListAsync();
+        suppliers = await db.PharmacySuppliers.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        stores = await db.MedicineStores.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        if (stores.Count > 0 && !stores.Any(x => x.ID == storeId && x.IsActive))
+            storeId = stores.FirstOrDefault(x => x.IsActive)?.ID ?? stores[0].ID;
+        recent = await db.MedicineReceivingChallans.AsNoTracking().OrderByDescending(x => x.ID).Take(100).ToListAsync();
+        approvedRequisitions = await db.PurchaseRequisitions.AsNoTracking()
+            .Include(x => x.Items)
+            .Where(x => x.Status == "Approved")
+            .OrderByDescending(x => x.ID)
+            .Take(25)
+            .ToListAsync();
+    }
+
+    private void SelectMedicine(Service m)
+    {
+        lineMedicineId = m.ID;
+        medSearchQuery = m.Name ?? "";
+        lineBuyRate = m.BuyRate ?? 0;
+        lineSaleRate = m.SaleRate ?? 0;
+        if (supplierId == 0 && m.SupplierID.HasValue && m.SupplierID.Value > 0)
+            supplierId = m.SupplierID.Value;
+        showMedDropdown = false;
+    }
+
+    private void LoadSelectedRequisition()
+    {
+        var req = approvedRequisitions.FirstOrDefault(x => x.ID == selectedReqToLoad);
+        if (req == null) return;
+        storeId = req.StoreID;
+        lines = req.Items.Select(item =>
+        {
+            var med = medicines.FirstOrDefault(m => m.ID == item.ServiceID);
+            if (supplierId == 0 && med?.SupplierID > 0) supplierId = med.SupplierID.Value;
+            return new PurchaseLine
+            {
+                ServiceID = item.ServiceID,
+                BatchNo = "",
+                ExpireDate = DateTime.Today.AddYears(1),
+                Quantity = item.RequestedQty,
+                BuyRate = item.EstimatedRate ?? med?.BuyRate ?? 0,
+                SaleRate = med?.SaleRate ?? 0
+            };
+        }).ToList();
+        Success($"Loaded {lines.Count} items from {req.RequisitionNo}. Fill Batch No & Supplier Invoice No before saving.");
     }
 
     private void AddLine()
     {
-        if(lineMedicineId<=0||string.IsNullOrWhiteSpace(lineBatch)||lineExpiry<=DateTime.Today||lineQuantity<=0||lineBuyRate<0||lineSaleRate<0){
-            Fail(I18n.IsBangla ? "ঔষধ, ব্যাচ, ভবিষ্যৎ মেয়াদ, পরিমাণ এবং দর আবশ্যক।" : "Medicine, batch, future expiry, quantity and valid rates are required.");
+        if (lineMedicineId <= 0 || string.IsNullOrWhiteSpace(lineBatch) || lineExpiry <= DateTime.Today || lineQuantity <= 0 || lineBuyRate < 0 || lineSaleRate < 0)
+        {
+            Fail("Medicine, batch no, future expiry date, quantity and valid prices are required.");
             return;
         }
-        lines.Add(new(lineMedicineId,lineBatch.Trim(),lineExpiry.Date,lineQuantity,lineBuyRate,lineSaleRate));
-        lineMedicineId=0;
-        lineBatch="";
-        lineQuantity=1;
-        lineBuyRate=0;
-        lineSaleRate=0;
-        message="";
+        lines.Add(new PurchaseLine
+        {
+            ServiceID = lineMedicineId,
+            BatchNo = lineBatch.Trim(),
+            ExpireDate = lineExpiry.Date,
+            Quantity = lineQuantity,
+            BuyRate = lineBuyRate,
+            SaleRate = lineSaleRate
+        });
+        lineMedicineId = 0;
+        medSearchQuery = "";
+        lineBatch = "";
+        lineQuantity = 1;
+        lineBuyRate = 0;
+        lineSaleRate = 0;
+        message = "";
     }
 
-    private void RemoveLine(int i)=>lines.RemoveAt(i);
+    private void RemoveLine(int i) => lines.RemoveAt(i);
 
-    private async Task PostAsync()
+    private async Task OpenChallanAsync(long id)
     {
-        if(supplierId<=0||storeId<=0||string.IsNullOrWhiteSpace(invoiceNo)||lines.Count==0){
-            Fail(I18n.IsBangla ? "সরবরাহকারী, স্টোর, ইনভয়েস নং এবং অন্তত একটি আইটেম আবশ্যক।" : "Supplier, store, invoice and at least one item are required.");
+        await using var db = await DbFactory.CreateDbContextAsync();
+        savedChallan = await db.MedicineReceivingChallans.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == id);
+        if (savedChallan == null) return;
+        supplierId = savedChallan.Supplier;
+        storeId = savedChallan.StoreID ?? 1;
+        invoiceNo = savedChallan.InvoiceNo ?? "";
+        invoiceDate = savedChallan.InvoiceDate;
+        discount = savedChallan.Discount;
+        vat = savedChallan.VAT;
+        lines = savedChallan.Items.OrderBy(x => x.SLNO).Select(x => new PurchaseLine
+        {
+            ServiceID = x.ServiceID,
+            BatchNo = x.BatchNo ?? "",
+            ExpireDate = x.ExpireDate ?? DateTime.Today,
+            Quantity = x.Quantity,
+            BuyRate = x.BuyRate,
+            SaleRate = x.SaleRate ?? 0
+        }).ToList();
+        message = "";
+    }
+
+    private async Task PostAsync(bool printAfterSave)
+    {
+        if (supplierId <= 0 || storeId <= 0 || string.IsNullOrWhiteSpace(invoiceNo) || lines.Count == 0)
+        {
+            Fail("Supplier, store, invoice no and at least one medicine are required.");
             return;
         }
-        if(discount<0||vat<0||discount>GrossTotal){
-            Fail(I18n.IsBangla ? "ছাড় বা ভ্যাট সঠিক নয়।" : "Invalid discount or VAT.");
+        if (lines.Any(x => string.IsNullOrWhiteSpace(x.BatchNo) || x.ExpireDate <= DateTime.Today || x.Quantity <= 0))
+        {
+            Fail("Every row must have a Batch No, future Expiry Date, and Quantity > 0.");
             return;
         }
-        isSaving=true;
+        if (discount < 0 || vat < 0 || discount > GrossTotal)
+        {
+            Fail("Invalid discount or VAT.");
+            return;
+        }
+
+        isSaving = true;
         try
         {
             var h = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
-            if(await db.MedicineReceivingChallans.AnyAsync(x=>x.Supplier==supplierId&&x.InvoiceNo==invoiceNo.Trim()))
-                throw new InvalidOperationException(I18n.IsBangla ? "এই সরবরাহকারীর এই ইনভয়েস নম্বরটি ইতিমধ্যে বিদ্যমান।" : "This supplier invoice already exists.");
-            var uid=await CurrentUserIdAsync();
-            var now=DateTime.Now;
-            var header=new MedicineReceivingChallan{Supplier=supplierId,InvoiceNo=invoiceNo.Trim(),InvoiceDate=invoiceDate,IsPosted=true,Total=GrossTotal,Discount=discount,VAT=vat,StoreID=storeId,EnteredBy=uid,TransDate=now};
-            db.MedicineReceivingChallans.Add(header);
-            await db.SaveChangesAsync();
-            var sl=1;
-            foreach(var x in lines)
-            {
-                var item=new MedicineReceivingChallanItem{ChallanNo=header.ID,ServiceID=x.ServiceID,SLNO=sl++,Total=x.Total,BuyRate=x.BuyRate,SaleRate=x.SaleRate,Quantity=x.Quantity,Discount=0,VAT=0,ExpireDate=x.ExpireDate,BatchNo=x.BatchNo};
-                db.MedicineReceivingChallanItems.Add(item);
+                if (await db.MedicineReceivingChallans.AnyAsync(x => x.Supplier == supplierId && x.InvoiceNo == invoiceNo.Trim()))
+                    throw new InvalidOperationException("This supplier invoice no already exists.");
+                var uid = await CurrentUserIdAsync();
+                var now = DateTime.Now;
+                var header = new MedicineReceivingChallan { Supplier = supplierId, InvoiceNo = invoiceNo.Trim(), InvoiceDate = invoiceDate, IsPosted = true, Total = GrossTotal, Discount = discount, VAT = vat, StoreID = storeId, EnteredBy = uid, TransDate = now };
+                db.MedicineReceivingChallans.Add(header);
                 await db.SaveChangesAsync();
-                var stock=await db.MedicineStoreBalances.FirstOrDefaultAsync(b=>b.MedicineStoreID==storeId&&b.ServiceID==x.ServiceID&&b.BatchNo==x.BatchNo&&b.ExpireDate==x.ExpireDate);
-                if(stock==null)db.MedicineStoreBalances.Add(new MedicineStoreBalance{ServiceID=x.ServiceID,MedicineStoreID=storeId,Balance=x.Quantity,ExpireDate=x.ExpireDate,MedicineReceivingChallanSubID=item.ID,BatchNo=x.BatchNo});
-                else stock.Balance+=x.Quantity;
-                var med=await db.Services.FindAsync(x.ServiceID);
-                if(med!=null&&x.SaleRate>0){
-                    med.BuyRate=x.BuyRate;
-                    med.SaleRate=x.SaleRate;
+                var sl = 1;
+                foreach (var x in lines)
+                {
+                    var bNo = x.BatchNo.Trim();
+                    var item = new MedicineReceivingChallanItem { ChallanNo = header.ID, ServiceID = x.ServiceID, SLNO = sl++, Total = x.Total, BuyRate = x.BuyRate, SaleRate = x.SaleRate, Quantity = x.Quantity, Discount = 0, VAT = 0, ExpireDate = x.ExpireDate, BatchNo = bNo };
+                    db.MedicineReceivingChallanItems.Add(item);
+                    await db.SaveChangesAsync();
+                    var stock = await db.MedicineStoreBalances.FirstOrDefaultAsync(b => b.MedicineStoreID == storeId && b.ServiceID == x.ServiceID && b.BatchNo == bNo && b.ExpireDate == x.ExpireDate);
+                    if (stock == null) db.MedicineStoreBalances.Add(new MedicineStoreBalance { ServiceID = x.ServiceID, MedicineStoreID = storeId, Balance = x.Quantity, ExpireDate = x.ExpireDate, MedicineReceivingChallanSubID = item.ID, BatchNo = bNo });
+                    else stock.Balance += x.Quantity;
+                    var med = await db.Services.FindAsync(x.ServiceID);
+                    if (med != null && x.SaleRate > 0)
+                    {
+                        med.BuyRate = x.BuyRate;
+                        med.SaleRate = x.SaleRate;
+                    }
                 }
-            }
-            var net=GrossTotal-discount+vat;
-            var previous=await db.SupplierLedgers.Where(x=>x.SupplierID==supplierId).OrderByDescending(x=>x.ID).Select(x=>(decimal?)x.Balance).FirstOrDefaultAsync()??0;
-            db.SupplierLedgers.Add(new SupplierLedger{SupplierID=supplierId,ChallanNo=header.ID,Debit=0,Credit=net,Balance=previous+net,TransDate=now});
-            if(net>0)
-                AccountingPosting.AddPostedVoucher(db,"Purchase",invoiceDate,$"Medicine purchase from {SupplierName(supplierId)}",$"PHARMACY-PURCHASE:{header.ID}",uid,(AccountingPosting.MedicinePurchase,net,0),(AccountingPosting.SupplierPayable,0,net));
-            await db.SaveChangesAsync();
-            return header;
+                var net = GrossTotal - discount + vat;
+                var previous = await db.SupplierLedgers.Where(x => x.SupplierID == supplierId).OrderByDescending(x => x.ID).Select(x => (decimal?)x.Balance).FirstOrDefaultAsync() ?? 0;
+                db.SupplierLedgers.Add(new SupplierLedger { SupplierID = supplierId, ChallanNo = header.ID, Debit = 0, Credit = net, Balance = previous + net, TransDate = now });
+                if (net > 0)
+                    AccountingPosting.AddPostedVoucher(db, "Purchase", invoiceDate, $"Medicine purchase from {SupplierName(supplierId)}", $"PHARMACY-PURCHASE:{header.ID}", uid, (AccountingPosting.MedicinePurchase, net, 0), (AccountingPosting.SupplierPayable, 0, net));
+                await db.SaveChangesAsync();
+                return header;
             });
-            savedChallan=h;
-            Success(I18n.IsBangla ? $"ক্রয় চালান #{h.ID} সফলভাবে সংরক্ষিত ও স্টক আপডেট হয়েছে।" : $"Purchase challan #{h.ID} posted, stock and accounts updated.");
+
+            savedChallan = h;
+            Success($"Challan #PUR-{h.ID} saved and stock updated.");
             await LoadAsync();
+
+            if (printAfterSave)
+            {
+                StateHasChanged();
+                await Task.Yield();
+                await PrintAsync();
+            }
         }
-        catch(Exception ex){
-            Fail(I18n.IsBangla ? $"ক্রয় চালান সংরক্ষণ করা যায়নি: {ex.Message}" : $"Purchase posting failed: {ex.Message}");
+        catch (Exception ex)
+        {
+            Fail($"Failed: {ex.Message}");
         }
-        finally{isSaving=false;}
+        finally { isSaving = false; }
     }
 
     private async Task<int> CurrentUserIdAsync()
     {
-        var u=(await AuthStateProvider.GetAuthenticationStateAsync()).User;
-        return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;
+        var u = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
     }
 
-    private async Task PrintAsync()=>await JS.InvokeVoidAsync("hpm.printElement","purchase-print");
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("hpm.printElement", "purchase-print", $"PUR-{savedChallan?.ID}");
 
     private void Reset()
     {
-        savedChallan=null;
-        supplierId=0;
-        storeId=stores.FirstOrDefault(x=>x.IsActive)?.ID??1;
-        invoiceNo="";
-        invoiceDate=DateTime.Today;
-        discount=0;
-        vat=0;
-        lines=[];
-        message="";
+        savedChallan = null;
+        selectedReqToLoad = 0;
+        supplierId = 0;
+        storeId = stores.FirstOrDefault(x => x.IsActive)?.ID ?? 1;
+        invoiceNo = "";
+        invoiceDate = DateTime.Today;
+        discount = 0;
+        vat = 0;
+        medSearchQuery = "";
+        lines = [];
+        message = "";
     }
 
-    private string MedicineName(int id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private string SupplierName(int id)=>suppliers.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private string StoreName(int? id)=>stores.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private void Success(string x){messageClass="success";message=x;}
-    private void Fail(string x){messageClass="danger";message=x;}
+    private string MedicineName(int id) => medicines.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string SupplierName(int id) => suppliers.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private string StoreName(int? id) => stores.FirstOrDefault(x => x.ID == id)?.Name ?? "—";
+    private void Success(string x) { messageClass = "success"; message = x; }
+    private void Fail(string x) { messageClass = "danger"; message = x; }
 
-    public void Dispose()
+    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
+
+    private sealed class PurchaseLine
     {
-        I18n.OnLanguageChanged -= HandleLanguageChanged;
+        public int ServiceID { get; set; }
+        public string BatchNo { get; set; } = "";
+        public DateTime ExpireDate { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal BuyRate { get; set; }
+        public decimal SaleRate { get; set; }
+        public decimal Total => Quantity * BuyRate;
     }
-
-    private sealed record PurchaseLine(int ServiceID,string BatchNo,DateTime ExpireDate,decimal Quantity,decimal BuyRate,decimal SaleRate){public decimal Total=>Quantity*BuyRate;}
 }

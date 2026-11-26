@@ -90,53 +90,18 @@
 
                                     @if (isOpen && group.Href is null)
                                     {
-                                        var hasSections = group.Items.Any(x => !string.IsNullOrEmpty(x.Section));
+                                        var visibleItems = group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)).ToList();
+                                        var meta = HeaderGroupMeta(group.Label);
+                                        var isLastGroup = BackOfficeGroups.LastOrDefault(g => CanViewGroup(backOfficeAuth.User, g)) == group;
                                         <div class="header-backoffice-backdrop" @onclick="CloseHeaderModule"></div>
-                                        <div class="header-backoffice-dropdown @(hasSections ? "header-backoffice-mega" : string.Empty)">
-                                            <div class="header-backoffice-heading">
-                                                <div>
-                                                    <strong>@I18n.T(group.Label)</strong>
-                                                    <small>@(group.Label == "Doctor Desk" ? I18n.T("Queue, patient records, follow-ups & clinical orders") : group.Label == "Pharmacy" ? I18n.T("Dispensary, Stock Movement & Procurement") : group.Label == "Accounts" ? I18n.T("Vouchers, General Ledger, Financial & MIS Reports") : I18n.T("Operational Modules"))</small>
-                                                </div>
-                                                <button type="button" class="btn-clear" style="margin-left:auto; border:none; background:transparent; font-size:16px; color:#64748b; cursor:pointer; padding:2px 8px; border-radius:4px;" @onclick="CloseHeaderModule" title="@I18n.T("Close")">✕</button>
-                                            </div>
-                                            @if (hasSections)
-                                            {
-                                                <div class="header-backoffice-sections-grid">
-                                                    @foreach (var section in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)).GroupBy(x => x.Section))
-                                                    {
-                                                        <div class="header-backoffice-group">
-                                                            <h3>@I18n.T(section.Key)</h3>
-                                                            @foreach (var item in section)
-                                                            {
-                                                                <NavLink class="header-backoffice-item" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseHeaderModule">
-                                                                    @if (!string.IsNullOrEmpty(item.Icon))
-                                                                    {
-                                                                        <span class="header-backoffice-item-icon">@item.Icon</span>
-                                                                    }
-                                                                    <div class="header-backoffice-item-text">
-                                                                        <div class="header-backoffice-item-title">@I18n.T(item.Label)</div>
-                                                                        @if (!string.IsNullOrEmpty(item.Subtitle))
-                                                                        {
-                                                                            <small class="header-backoffice-item-sub">@I18n.T(item.Subtitle)</small>
-                                                                        }
-                                                                    </div>
-                                                                </NavLink>
-                                                            }
-                                                        </div>
-                                                    }
-                                                </div>
-                                            }
-                                            else
-                                            {
-                                                <div class="header-backoffice-list">
-                                                    @foreach (var item in group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)))
-                                                    {
-                                                        <NavLink class="header-backoffice-item" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseHeaderModule">@I18n.T(item.Label)</NavLink>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
+                                        <MegaMenuPanel PositionClass="header-backoffice-dropdown"
+                                                       Icon="@meta.Icon"
+                                                       Title="@meta.Title"
+                                                       Subtitle="@meta.Subtitle"
+                                                       Sections="@BuildHeaderSections(visibleItems)"
+                                                       Footer="@HeaderGroupFooter(group.Label, backOfficeAuth.User)"
+                                                       AlignEnd="@isLastGroup"
+                                                       OnClose="CloseHeaderModule" />
                                     }
                                 </div>
                             }
@@ -835,53 +800,72 @@
             new("Doctor Commission", "/masters/doctor-commissions", "💳", "Referral shares & commission percentages"),
             new("Bed & Cabin", "/masters/ipd", "🛏️", "Wards, cabins, ICU beds & tariff rates"),
             new("Services", "/masters/services", "⚡", "Clinical services catalogue, OPD & IPD fees")
-        ]),
-        new("Diagnostic & Laboratory", "🔬", "diagnostic",
-        [
-            new("Investigations Setup", "/diagnostic/investigations", "🧪", "Pathology, imaging & special investigations, parameters & categories")
-        ]),
-        new("Pharmacy & Medicine", "💊", "pharmacy",
-        [
-            new("Medicine Store", "/pharmacy/masters?section=store", "🏪", "Dispensary stores, sub-stores & rack bins"),
-            new("Medicine Type", "/pharmacy/masters?section=type", "💊", "Dosage categories (Tablet, Syrup, Injection)"),
-            new("Generic", "/pharmacy/masters?section=generic", "🧬", "Therapeutic chemical compounds & formulas"),
-            new("Supplier Medicine", "/pharmacy/masters?section=supplier", "🚚", "Pharma vendor ledgers & distributor setup"),
-            new("Customer Medicine", "/pharmacy/masters?section=customer", "🛒", "Customer sales returns, POS dispensing & memos"),
-            new("Services (Medicine)", "/pharmacy/masters?section=services", "🏷️", "Medicine catalogue, brands, buy & sale rates")
         ])
     ];
 
     private static readonly IReadOnlyList<HeaderSettingItem> HeaderSettings = SettingCategories.SelectMany(c => c.Items).ToList();
+
+
+    // ---------- Header mega-menu metadata ----------
+    private static (string Icon, string Title, string Subtitle) HeaderGroupMeta(string label) => label switch
+    {
+        "Pharmacy" => ("💊", "Hospital Pharmacy", "Sales, stock control & supplier purchases"),
+        "Canteen" => ("🍽️", "Hospital Canteen", "Cafeteria POS, kitchen stock & menu"),
+        "Store" => ("📦", "Hospital Store", "General & laboratory inventory"),
+        "Accounts" => ("💼", "Accounts & Finance", "Vouchers, ledger, financial & MIS reports"),
+        _ => ("📁", label, "Operational modules")
+    };
+
+    private static string HeaderSectionIcon(string section) => section switch
+    {
+        "Daily Sales" => "🧾",
+        "Stock & Store" => "🏬",
+        "Purchase & Suppliers" => "🚚",
+        "Cafeteria Operations" => "🍽️",
+        "General Store" => "📦",
+        "Laboratory Store" => "🧪",
+        "Accounting & Ledger" => "📒",
+        "Financial & MIS Reports" => "📊",
+        _ => "📁"
+    };
+
+    private static IReadOnlyList<MegaMenuSection> BuildHeaderSections(IEnumerable<BackOfficeItem> items) => items
+        .GroupBy(x => x.Section)
+        .Select(g => new MegaMenuSection(g.Key, HeaderSectionIcon(g.Key),
+            g.Select(x => new MegaMenuLink(x.Label, x.Href, string.IsNullOrEmpty(x.Icon) ? "•" : x.Icon, x.Subtitle)).ToList()))
+        .ToList();
+
+    private static MegaMenuLink? HeaderGroupFooter(string label, System.Security.Claims.ClaimsPrincipal user) => label switch
+    {
+        "Pharmacy" when user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.PharmacyOperator)
+            => new MegaMenuLink("Medicine List & Setup", "/pharmacy/masters", "⚙️", "Medicines, generics, dosage types, suppliers & stores"),
+        "Canteen" when user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.Cashier)
+            => new MegaMenuLink("Products & Menu", "/canteen/products", "📋", "Food items, pricing & menu catalogue"),
+        _ => null
+    };
 
     private static readonly IReadOnlyList<BackOfficeGroup> BackOfficeGroups =
     [
         new("Doctor Desk", "Dr", ModuleAccess.DoctorGroup, [], "/doctor"),
         new("Pharmacy", "Rx", ModuleAccess.PharmacyGroup,
         [
-            // 1. Counter Sales & Patients
-            new("OPD Counter POS", "/pharmacy/pos?patientType=OPD", ModuleAccess.PharmacyPos, "Dispensary & Sales", "🛒", "Walk-in & OPD counter sales"),
-            new("IPD Medicine Billing", "/pharmacy/pos?patientType=IPD", ModuleAccess.PharmacyPos, "Dispensary & Sales", "🏥", "Inpatient indoor medication billing"),
-            new("Sales Returns (Customer)", "/pharmacy/sales-returns", ModuleAccess.PharmacyPos, "Dispensary & Sales", "🔄", "Customer medication refunds & restock"),
-            new("IPD Ward Indent", "/doctor/prescriptions?view=ipd-indent", ModuleAccess.PharmacyPrescriptions, "Dispensary & Sales", "📋", "Admitted patient ward requisitions"),
-            new("Dispense Prescription", "/doctor/prescriptions", ModuleAccess.PharmacyPrescriptions, "Dispensary & Sales", "💊", "Dispense medications from doctor orders"),
+            // 1. Daily Sales
+            new("Medicine Sale (POS)", "/pharmacy/pos", ModuleAccess.PharmacyPos, "Daily Sales", "🛒", "OPD / IPD billing & Rx dispense"),
+            new("Customer Return", "/pharmacy/sales-returns", ModuleAccess.PharmacyPos, "Daily Sales", "↩️", "Refund & restock sold medicine"),
 
-            // 2. Stock & Inventory Control
-            new("Live Stock & Expiry", "/pharmacy/stock", ModuleAccess.PharmacyStock, "Inventory & Stock", "📊", "Stock balance & expiry alert monitor"),
-            new("Inter-Store Transfer", "/pharmacy/stock-control?view=transfer", ModuleAccess.PharmacyStock, "Inventory & Stock", "🔁", "Dispensary & sub-store movement"),
-            new("Issue to Ward / Dept", "/pharmacy/stock-control?view=department-issue", ModuleAccess.PharmacyStock, "Inventory & Stock", "📦", "Issue to OT, ICU & emergency"),
-            new("Stock Adjustment & Audit", "/pharmacy/stock-control", ModuleAccess.PharmacyStock, "Inventory & Stock", "⚖️", "Physical audit, damage & disposal"),
+            // 2. Stock & Store
+            new("Stock & Expiry", "/pharmacy/stock", ModuleAccess.PharmacyStock, "Stock & Store", "📦", "Batch balance, low stock & expiry"),
+            new("Transfer, Issue & Audit", "/pharmacy/stock-control", ModuleAccess.PharmacyStock, "Stock & Store", "🔄", "Store transfer, ward issue & count"),
 
-            // 3. Procurement & Vendors
-            new("Purchase Requisition", "/pharmacy/requisition", ModuleAccess.PharmacyPurchases, "Procurement & Suppliers", "📋", "Request medicines for procurement approval"),
-            new("Receiving Challan (Stock In)", "/pharmacy/purchases", ModuleAccess.PharmacyPurchases, "Procurement & Suppliers", "📥", "Supplier purchase inward challan"),
-            new("Return to Supplier", "/pharmacy/returns-payments", ModuleAccess.PharmacyReturns, "Procurement & Suppliers", "↩️", "Damaged / expired supplier return"),
-            new("Supplier Payment", "/pharmacy/returns-payments?view=payments", ModuleAccess.PharmacyReturns, "Procurement & Suppliers", "💳", "Vendor ledger & payment settlement")
+            // 3. Purchase & Suppliers
+            new("Purchase Requisition", "/pharmacy/requisition", ModuleAccess.PharmacyPurchases, "Purchase & Suppliers", "📝", "Raise & approve purchase requests"),
+            new("Purchase / Stock In", "/pharmacy/purchases", ModuleAccess.PharmacyPurchases, "Purchase & Suppliers", "📥", "Receive challan & add stock"),
+            new("Supplier Due & Return", "/pharmacy/returns-payments", ModuleAccess.PharmacyReturns, "Purchase & Suppliers", "💳", "Supplier payment & purchase return")
         ]),
         new("Canteen", "C", ModuleAccess.Canteen,
         [
             new("Canteen Sales (POS)", "/canteen/sales", ModuleAccess.Canteen, "Cafeteria Operations", "🍽️", "Walk-in food, beverage & staff POS billing"),
-            new("Stock Challan", "/canteen/challan", ModuleAccess.Canteen, "Cafeteria Operations", "📥", "Kitchen raw materials & stock inward challan"),
-            new("Products & Menu", "/canteen/products", ModuleAccess.Canteen, "Cafeteria Operations", "📋", "Food items, pricing & menu catalogue")
+            new("Stock Challan", "/canteen/challan", ModuleAccess.Canteen, "Cafeteria Operations", "📥", "Kitchen raw materials & stock inward challan")
         ]),
         new("Store", "S", ModuleAccess.AdministratorOnly,
         [

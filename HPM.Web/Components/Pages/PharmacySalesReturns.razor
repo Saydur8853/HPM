@@ -9,587 +9,1036 @@
 @using System.Security.Claims
 @using HPM.Web.Components.Common
 
-<PageTitle>@I18n.T("Sales Returns") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Customer Return") | @Branding.HospitalName</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">@I18n.T("Pharmacy Operations")</span>
-        <h1>@I18n.T("Sales Returns & Refunds", "Customer Sales Return / Reversal")</h1>
-        <p>@I18n.T("Process customer medicine returns with original batch lookup and cash refund.")</p>
-    </div>
-    <button class="btn btn-secondary" @onclick="Reset">+ @I18n.T("+ New Counter Sale", "+ New return")</button>
-</div>
-
-@if(!string.IsNullOrWhiteSpace(message)){<div class="alert @messageClass">@message</div>}
-
-<div class="module-layout">
-    <div class="panel form-panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@(savedReturn==null?I18n.T("Find original cash memo", "Find original cash memo"):$"{I18n.T("Sales Returns")} #{savedReturn.ID}")</h2>
-                <p>@I18n.T("Customer medicine return and refund processing.", "Customer medicine return and refund processing.")</p>
-            </div>
-            @if(savedReturn!=null){<span class="badge">@I18n.T("POSTED")</span>}
+<div class="pharmacy-classic-fit px-root">
+    <!-- Topbar -->
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">@I18n.T("Customer Medicine Return & Refund")</h1>
         </div>
-        @if(savedReturn==null)
-        {
-            <div class="scanner-search-group" style="margin: 0 1.25rem 0.75rem 1.25rem;">
-                <span class="scanner-icon" title="Barcode / QR Scanner active">📷</span>
-                <input type="text"
-                       class="scanner-input"
-                       placeholder="@I18n.T("Scan Original Cash Memo Barcode / QR (PH-XXXX) or Memo #...", "Scan Original Cash Memo Barcode / QR (PH-XXXX) or Memo #...")"
-                       @bind="returnScanQuery"
-                       @bind:event="oninput"
-                       @onkeydown="HandleReturnScanKeyDown" />
-                @if (!string.IsNullOrWhiteSpace(returnScanQuery))
-                {
-                    <button type="button" class="btn btn-ghost" style="padding: 0 8px; font-size: 11px;" @onclick="ClearReturnScan">✕</button>
-                }
-            </div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Today's Returns")</span><b>@TodayReturns.Count()</b></div>
+            <div class="px-metric"><span>@I18n.T("Today's Refund")</span><b class="bad">@I18n.FormatCurrency(TodayReturns.Sum(x => x.RefundAmount))</b></div>
+            <NavLink class="px-btn ghost" href="/pharmacy/pos">← @I18n.T("Back to POS")</NavLink>
+            <button type="button" class="px-btn" @onclick="Reset">+ @I18n.T("New Return")</button>
+        </div>
+    </div>
 
-            <div class="form-grid" style="grid-template-columns: minmax(130px, 1.2fr) minmax(220px, 2.5fr) auto; gap: 8px;">
-                <label>
-                    <span>@I18n.T("Bill No", "Cash memo number *")</span>
-                    <InputNumber @bind-Value="memoId"/>
-                </label>
-                <label>
-                    <span>@I18n.T("Or Search Patient / Mobile / IPD Reg")</span>
-                    <div style="position:relative;">
-                        <input type="text"
-                               placeholder="@I18n.T("Type Mobile (017...), Name, or IPD Reg...")"
-                               @bind="customerLookupQuery"
-                               @bind:event="oninput"
-                               @onkeyup="LookupMemosAsync" />
-                        @if (memoSuggestions.Any())
-                        {
-                            <div class="pos-med-dropdown" style="z-index: 120;">
-                                @foreach (var s in memoSuggestions)
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="px-alert @messageClass">
+            <span>@message</span>
+            <button type="button" @onclick='() => message = ""'>✕</button>
+        </div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <!-- Left: return form -->
+        <section class="px-card">
+            <header class="px-card-head">
+                <div class="px-card-title">
+                    <h2>@(savedReturn != null ? $"{I18n.T("Return Voucher")} #RET-{savedReturn.ID}" : memo != null ? $"{I18n.T("Return against Bill")} #PH-{memo.ID}" : I18n.T("Find Original Bill"))</h2>
+                    @if (savedReturn != null)
+                    {
+                        <span class="px-badge paid">@I18n.T("POSTED")</span>
+                    }
+                    else if (memo != null)
+                    {
+                        <span class="px-badge new">@I18n.T("DRAFT")</span>
+                    }
+                </div>
+            </header>
+
+            <div class="px-card-body">
+                @if (savedReturn == null)
+                {
+                    <!-- Smart finder -->
+                    <div class="px-field">
+                        <span>
+                            @I18n.T("Find Bill")
+                            <em>@I18n.T("scan bill QR, or type Bill # (1025 / PH-1025), customer name, mobile or IPD reg")</em>
+                        </span>
+                        <div class="px-typeahead">
+                            <div class="px-search-box">
+                                <span class="px-search-icon">🔍</span>
+                                <input type="text"
+                                       @ref="findInputRef"
+                                       placeholder="@I18n.T("Scan or type to search bills...")"
+                                       @bind="findQuery"
+                                       @bind:event="oninput"
+                                       @bind:after="OnFindInputAsync"
+                                       @onkeydown="HandleFindKeyDown"
+                                       @onfocus="() => showFindSuggestions = true"
+                                       @onblur="() => showFindSuggestions = false"
+                                       autocomplete="off" />
+                                @if (!string.IsNullOrWhiteSpace(findQuery))
                                 {
-                                    <div class="pos-med-item" @onclick="() => SelectLookupMemo(s.ID)">
-                                        <div>
-                                            <strong style="color:#0369a1;">#PH-@s.ID</strong>
-                                            <span style="margin-left:6px; font-weight:700;">@s.Name</span>
-                                            <small style="margin-left:4px; color:#64748b;">(@s.Contact • @(s.PatientType == "2" ? $"IPD {s.RegNo}" : "OPD"))</small>
+                                    <button type="button" class="px-x" @onclick="ClearFind">✕</button>
+                                }
+                            </div>
+                            @if (showFindSuggestions && !string.IsNullOrWhiteSpace(findQuery))
+                            {
+                                <div class="px-dropdown wide" id="px-find-dd">
+                                    @if (isSearching && memoSuggestions.Count == 0)
+                                    {
+                                        <div class="px-loading">@I18n.T("Searching…")</div>
+                                    }
+                                    else if (memoSuggestions.Count == 0)
+                                    {
+                                        <div class="px-dd-empty">@I18n.T("No bill found for") “@findQuery”</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="px-dd-head">
+                                            <span>@memoSuggestions.Count @I18n.T("bill(s)")</span>
+                                            <span class="px-dd-keys">↑↓ @I18n.T("move") · Enter @I18n.T("open")</span>
                                         </div>
-                                        <div style="text-align:right;">
-                                            <span style="font-weight:700; color:#0f172a;">@I18n.FormatCurrency((s.Total ?? 0) - (s.Discount ?? 0))</span>
-                                            <small style="display:block; color:#94a3b8; font-size:10px;">@s.TransDate.ToString("dd MMM hh:mm tt")</small>
+                                    }
+                                    @for (var i = 0; i < memoSuggestions.Count; i++)
+                                    {
+                                        var s = memoSuggestions[i];
+                                        var idx = i;
+                                        <div class="px-dd-item @(i == highlightedFindIndex ? "is-active" : "")"
+                                             @onmousedown:preventDefault
+                                             @onmouseover="() => highlightedFindIndex = idx"
+                                             @onclick="() => OpenMemoAsync(s.ID)">
+                                            <div class="px-dd-main">
+                                                <div class="px-dd-name">
+                                                    <span class="px-code" style="color:#0369a1;">#PH-@Hl(s.ID.ToString(), findTokens)</span>
+                                                    @Hl(s.Name, findTokens)
+                                                    @if (s.PatientType == "2")
+                                                    {
+                                                        <span class="px-tag @(s.IsCredit == true ? "violet" : "blue")">@(s.IsCredit == true ? "IPD Bill" : "IPD Cash")</span>
+                                                    }
+                                                </div>
+                                                <div class="px-dd-sub">
+                                                    <span>@s.TransDate.ToString("dd MMM yyyy, hh:mm tt")</span>
+                                                    @if (!string.IsNullOrWhiteSpace(s.Contact)) { <span>📞 @Hl(s.Contact, findTokens)</span> }
+                                                    @if (!string.IsNullOrWhiteSpace(s.RegNo)) { <span>@I18n.T("Reg") @Hl(s.RegNo, findTokens)</span> }
+                                                </div>
+                                            </div>
+                                            <div class="px-dd-side">
+                                                <b>@I18n.FormatCurrency((s.Total ?? 0) - (s.Discount ?? 0))</b>
+                                            </div>
                                         </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (memo == null)
+                {
+                    <div class="px-finder-empty">
+                        <div class="icon">🧾</div>
+                        <h3>@I18n.T("Find the original bill to start a return")</h3>
+                        <ul>
+                            <li>📷 @I18n.T("Scan the QR / barcode printed on the customer's receipt")</li>
+                            <li>⌨️ @I18n.T("Type the bill number, customer name, mobile or IPD reg #")</li>
+                            <li>👉 @I18n.T("Or pick a bill from the Recent Bills list on the right")</li>
+                        </ul>
+                    </div>
+                }
+                else
+                {
+                    <div class="px-bill-strip">
+                        <div><span>@I18n.T("Original Bill")</span><b>#PH-@memo.ID</b></div>
+                        <div><span>@I18n.T("Customer")</span><b title="@memo.Name">@memo.Name</b></div>
+                        <div><span>@I18n.T("Date")</span><b>@memo.TransDate.ToString("dd MMM yyyy")</b></div>
+                        <div><span>@I18n.T("Mode")</span><b>@(memo.PatientType == "2" ? (memo.IsCredit == true ? $"IPD Bed Bill ({memo.RegNo})" : $"IPD Cash ({memo.RegNo})") : "OPD Cash")</b></div>
+                        <div><span>@I18n.T("Bill Net")</span><b>@I18n.FormatCurrency(OriginalNet)</b></div>
+                        @if (priorRefund > 0)
+                        {
+                            <div><span>@I18n.T("Already Refunded")</span><b class="bad">@I18n.FormatCurrency(priorRefund)</b></div>
+                        }
+                    </div>
+
+                    @if (savedReturn == null)
+                    {
+                        <div class="px-table-tools">
+                            <h3>@I18n.T("Select items & quantity to return")</h3>
+                            <div>
+                                <button type="button" class="px-btn" @onclick="ReturnAll" disabled="@(!drafts.Any(d => d.Max > 0))">@I18n.T("Return All")</button>
+                                <button type="button" class="px-btn" @onclick="ClearDrafts" disabled="@(!drafts.Any(d => d.Qty > 0))">@I18n.T("Clear")</button>
+                            </div>
+                        </div>
+
+                        <div class="px-cart px-ret-table">
+                            <div class="px-cart-head">
+                                <div>#</div>
+                                <div>@I18n.T("Medicine")</div>
+                                <div class="r">@I18n.T("Sold")</div>
+                                <div class="r">@I18n.T("Returned")</div>
+                                <div class="r">@I18n.T("Rate")</div>
+                                <div class="c">@I18n.T("Return Qty")</div>
+                                <div class="c">@I18n.T("Restock")</div>
+                                <div class="r">@I18n.T("Amount")</div>
+                            </div>
+                            <div class="px-cart-rows">
+                                @for (var i = 0; i < drafts.Count; i++)
+                                {
+                                    var d = drafts[i];
+                                    <div class="px-cart-row @(d.Max <= 0 ? "done" : d.Qty > 0 ? "picked" : "")">
+                                        <div class="muted">@(i + 1)</div>
+                                        <div class="px-cart-name">
+                                            <b title="@MedicineName(d.Item.ServiceID)">@MedicineName(d.Item.ServiceID)</b>
+                                            @if (!string.IsNullOrWhiteSpace(d.BatchText))
+                                            {
+                                                <small>B: @d.BatchText</small>
+                                            }
+                                        </div>
+                                        <div class="r">@((d.Item.Quantity ?? 0).ToString("0.##"))</div>
+                                        <div class="r muted">@(d.AlreadyReturned > 0 ? d.AlreadyReturned.ToString("0.##") : "—")</div>
+                                        <div class="r">@I18n.FormatCurrency(d.Item.Rate ?? 0)</div>
+                                        <div class="c">
+                                            @if (d.Max > 0)
+                                            {
+                                                <div class="px-stepper">
+                                                    <button type="button" @onclick="() => StepDraft(d, -1)" disabled="@(d.Qty <= 0)">−</button>
+                                                    <input type="number" min="0" max="@d.Max" value="@d.Qty.ToString("0.##")" @onchange="e => SetDraft(d, e.Value?.ToString())" />
+                                                    <button type="button" @onclick="() => StepDraft(d, 1)" disabled="@(d.Qty >= d.Max)">+</button>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <span class="px-tag gray">@I18n.T("Fully returned")</span>
+                                            }
+                                        </div>
+                                        <div class="c">
+                                            @if (d.Max > 0)
+                                            {
+                                                @if (d.CanRestock)
+                                                {
+                                                    <label class="px-toggle" title="@(d.Restock ? I18n.T("Goes back to sellable stock") : I18n.T("Damaged / quarantine - not restocked"))">
+                                                        <input type="checkbox" checked="@d.Restock" @onchange="e => d.Restock = e.Value is true" />
+                                                        @(d.Restock ? I18n.T("Yes") : I18n.T("Damaged"))
+                                                    </label>
+                                                }
+                                                else
+                                                {
+                                                    <span class="px-tag gray" title="@I18n.T("Original batch not found - will be recorded as damaged")">@I18n.T("No batch")</span>
+                                                }
+                                            }
+                                        </div>
+                                        <div class="r strong">@(d.Qty > 0 ? I18n.FormatCurrency(d.Qty * (d.Item.Rate ?? 0)) : "—")</div>
                                     </div>
                                 }
                             </div>
-                        }
-                    </div>
-                </label>
-                <label>
-                    <span>&nbsp;</span>
-                    <button class="btn btn-secondary" @onclick="FindMemoAsync">@I18n.T("Find", "Load cash memo")</button>
-                </label>
-            </div>
-        }
-        @if(memo!=null)
-        {
-            <div class="print-grid">
-                <div><span>@I18n.T("Bill No"):</span> <b>#@memo.ID</b></div>
-                <div><span>@I18n.T("Patient Name"):</span> <b>@memo.Name</b></div>
-                <div><span>@I18n.T("Date"):</span> <b>@memo.TransDate.ToString("dd MMM yyyy")</b></div>
-                <div><span>@I18n.T("Patient Category"):</span> <b>@(memo.PatientType=="2"?"IPD":"OPD")</b></div>
-                <div><span>@I18n.T("Net Total"):</span> <b>@I18n.FormatCurrency(OriginalNet)</b></div>
-                <div><span>@I18n.T("Refund Amount"):</span> <b>@I18n.FormatCurrency(priorRefund)</b></div>
-            </div>
-            @if(savedReturn==null)
-            {
-                <div class="form-section-title">@I18n.T("Item / Strength", "Add return medicine")</div>
-                <div class="form-grid three">
-                    <label class="span-2">
-                        <span>@I18n.T("Medicine / Product Name", "Sold medicine *")</span>
-                        <select @bind="cashMemoSubId" @bind:after="SoldItemChanged">
-                            <option value="0">@I18n.T("Select")</option>
-                            @foreach(var x in ReturnableItems){
-                                <option value="@x.ID">@MedicineName(x.ServiceID) · @I18n.T("Qty") @x.Quantity · returnable @Returnable(x)</option>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="px-cart px-ret-table view">
+                            <div class="px-cart-head">
+                                <div>#</div>
+                                <div>@I18n.T("Medicine")</div>
+                                <div class="r">@I18n.T("Qty")</div>
+                                <div class="r">@I18n.T("Rate")</div>
+                                <div>@I18n.T("Stock Action")</div>
+                                <div class="r">@I18n.T("Amount")</div>
+                            </div>
+                            <div class="px-cart-rows">
+                                @for (var i = 0; i < lines.Count; i++)
+                                {
+                                    var x = lines[i];
+                                    <div class="px-cart-row">
+                                        <div class="muted">@(i + 1)</div>
+                                        <div class="px-cart-name"><b>@MedicineName(x.ServiceID)</b></div>
+                                        <div class="r">@x.Quantity.ToString("0.##")</div>
+                                        <div class="r">@I18n.FormatCurrency(x.Rate)</div>
+                                        <div><span class="px-tag @(x.StockBalanceID > 0 ? "green" : "gray")">@(x.StockBalanceID > 0 ? I18n.T("Restocked") : I18n.T("Damaged / Quarantine"))</span></div>
+                                        <div class="r strong">@I18n.FormatCurrency(x.Gross)</div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+
+                    <div class="px-reason-row">
+                        <div class="px-panel" style="display:flex; flex-direction:column; gap:6px;">
+                            <div class="px-field">
+                                <span>@I18n.T("Return Reason") <i>*</i></span>
+                                <input type="text" @bind="reason" @bind:event="oninput" maxlength="500" placeholder="@I18n.T("Why is the customer returning?")" disabled="@(savedReturn != null)" />
+                            </div>
+                            @if (savedReturn == null)
+                            {
+                                <div class="px-reason-chips">
+                                    @foreach (var r in QuickReasons)
+                                    {
+                                        var text = r.Value;
+                                        <button type="button" class="@(reason == text ? "on" : "")" @onclick="() => reason = text">@I18n.T(r.Key)</button>
+                                    }
+                                </div>
                             }
-                        </select>
-                    </label>
-                    <label><span>@I18n.T("Quantity *")</span><InputNumber @bind-Value="returnQuantity"/></label>
-                    <label class="span-2">
-                        <span>@I18n.T("Batch", "Restock batch")</span>
-                        <select @bind="stockBalanceId">
-                            <option value="0">@I18n.T("Quarantine", "Do not restock / quarantine")</option>
-                            @foreach(var x in RestockBatches){
-                                <option value="@x.ID">@x.BatchNo · exp @x.ExpireDate?.ToString("MMM yy") · @I18n.T("Stock") @x.Balance</option>
+                        </div>
+                        <div class="px-totals">
+                            <div><span>@I18n.T("Items")</span><b>@ReturnItemCount (@ReturnUnits.ToString("0.##") @I18n.T("units"))</b></div>
+                            <div><span>@I18n.T("Return Value")</span><b>@I18n.FormatCurrency(ReturnGross)</b></div>
+                            @if ((memo.Discount ?? 0) > 0)
+                            {
+                                <div><span>@I18n.T("Less bill discount share")</span><b>-@I18n.FormatCurrency(Math.Max(0, ReturnGross - (savedReturn?.RefundAmount ?? EstimatedRefund)))</b></div>
                             }
-                        </select>
-                    </label>
-                </div>
-                <div class="form-actions"><button class="btn btn-secondary" @onclick="AddLine">+ @I18n.T("Add")</button></div>
-            }
-            <div class="data-table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
-                            <th class="num">@I18n.T("Qty")</th>
-                            <th class="num">@I18n.T("Rate")</th>
-                            <th>@I18n.T("Status", "Disposition")</th>
-                            <th class="num">@I18n.T("Total")</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @if(lines.Count==0){
-                            <tr><td colspan="6"><div class="empty-state small">@I18n.T("No records found.", "No return item added.")</div></td></tr>
-                        }
-                        @for(var i=0;i<lines.Count;i++){
-                            var index=i;
-                            var x=lines[i];
-                            <tr>
-                                <td>@MedicineName(x.ServiceID)</td>
-                                <td class="num">@x.Quantity</td>
-                                <td class="num">@I18n.FormatCurrency(x.Rate)</td>
-                                <td>@(x.StockBalanceID>0?I18n.T("Restock", "Restock"):I18n.T("Quarantine", "Quarantine"))</td>
-                                <td class="num">@I18n.FormatCurrency(x.Gross)</td>
-                                <td>@if(savedReturn==null){<button class="icon-btn" @onclick="()=>lines.RemoveAt(index)">✕</button>}</td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
-            <div class="form-grid">
-                <label class="span-2">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                        <span>@I18n.T("Adjustment Reason", "Return reason *")</span>
-                        <div style="display:flex; gap:4px; flex-wrap:wrap;">
-                            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10.5px; padding:1px 6px; border:1px solid #cbd5e1;" @onclick='() => reason = I18n.IsBangla ? "চিকিৎসক প্রেসক্রিপশন পরিবর্তন করেছেন।" : "Doctor changed prescription medication."'>
-                                🩺 @I18n.T("Rx Changed")
-                            </button>
-                            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10.5px; padding:1px 6px; border:1px solid #cbd5e1;" @onclick='() => reason = I18n.IsBangla ? "রোগী ছাড়পত্র পেয়েছেন, অতিরিক্ত ওষুধ ফেরত।" : "Patient discharged; returning unconsumed medicine."'>
-                                🚪 @I18n.T("Discharged / Excess")
-                            </button>
-                            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10.5px; padding:1px 6px; border:1px solid #cbd5e1;" @onclick='() => reason = I18n.IsBangla ? "ওষুধের পার্শ্বপ্রতিক্রিয়া বা অ্যালার্জি দেখা দিয়েছে।" : "Adverse drug reaction / intolerance."'>
-                                ⚠️ @I18n.T("Adverse Reaction")
-                            </button>
-                            <button type="button" class="btn btn-ghost btn-sm" style="font-size:10.5px; padding:1px 6px; border:1px solid #cbd5e1;" @onclick='() => reason = I18n.IsBangla ? "প্যাকেজিং বা স্ট্রিপ ক্ষতিগ্রস্ত।" : "Damaged strip packaging."'>
-                                📦 @I18n.T("Damaged Packaging")
-                            </button>
+                            <div class="grand refund">
+                                <span>@(IsCreditMemo ? I18n.T("Bed Bill Credit") : I18n.T("Cash Refund"))</span>
+                                <b>@I18n.FormatCurrency(savedReturn?.RefundAmount ?? EstimatedRefund)</b>
+                            </div>
                         </div>
                     </div>
-                    <textarea @bind="reason" maxlength="500" disabled="@(savedReturn!=null)"></textarea>
-                </label>
-                <label>
-                    <span>@I18n.T("Refund Amount", "Calculated refund")</span>
-                    <input value="@I18n.FormatCurrency(EstimatedRefund)" disabled/>
-                </label>
-            </div>
-            <div class="form-actions">
-                @if(savedReturn==null){
-                    <button class="btn btn-primary" @onclick="PostAsync" disabled="@isSaving">
-                        @(isSaving?I18n.T("Saving…"):I18n.T("Refund Amount", "Post return & refund"))
-                    </button>
-                }
-                else{
-                    <button class="btn btn-secondary" @onclick="PrintAsync">@I18n.T("Print")</button>
                 }
             </div>
-        }
-    </div>
-    <div class="panel">
-        <div class="panel-heading">
-            <div>
-                <h2>@I18n.T("Sales Returns", "Recent sales returns")</h2>
-                <p>@recent.Count @I18n.T("transaction(s)")</p>
-            </div>
-        </div>
-        <div class="data-table-wrap">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>@I18n.T("Bill No", "Return")</th>
-                        <th>@I18n.T("Invoice No", "Original memo")</th>
-                        <th>@I18n.T("Date")</th>
-                        <th>@I18n.T("Adjustment Reason", "Reason")</th>
-                        <th class="num">@I18n.T("Refund Amount", "Refund")</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach(var x in recent){
-                        <tr>
-                            <td><b>#@x.ID</b></td>
-                            <td>#@x.CashMemoID</td>
-                            <td>@x.TransDate.ToString("dd MMM yy")</td>
-                            <td>@x.Reason</td>
-                            <td class="num">@I18n.FormatCurrency(x.RefundAmount)</td>
-                            <td><button class="icon-btn" @onclick="()=>OpenReturnAsync(x.ID)">@I18n.T("View")</button></td>
-                        </tr>
+
+            @if (memo != null)
+            {
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt">
+                        @if (savedReturn == null)
+                        {
+                            @(ReturnItemCount == 0 ? I18n.T("Set a return quantity on at least one item.") : string.IsNullOrWhiteSpace(reason) ? I18n.T("Enter a return reason to continue.") : I18n.T("Ready to post."))
+                        }
+                        else
+                        {
+                            @($"{I18n.T("Posted on")} {savedReturn.TransDate:dd MMM yyyy, hh:mm tt}")
+                        }
+                    </span>
+                    <div class="px-foot-actions">
+                        @if (savedReturn == null)
+                        {
+                            <button type="button" class="px-btn" @onclick="Reset">@I18n.T("Cancel")</button>
+                            <button type="button" class="px-btn" @onclick="() => PostAsync(false)" disabled="@(!CanPost)">@I18n.T("Confirm Return")</button>
+                            <button type="button" class="px-btn danger lg" @onclick="() => PostAsync(true)" disabled="@(!CanPost)">
+                                @(isSaving ? I18n.T("Saving…") : $"{I18n.T("Confirm & Print")} · {I18n.FormatCurrency(EstimatedRefund)}")
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" class="px-btn" @onclick="PrintThermalAsync">🖨 @I18n.T("Print 80mm Slip")</button>
+                            <button type="button" class="px-btn" @onclick="PrintA4Async">🖨 @I18n.T("Print A4 Voucher")</button>
+                            <button type="button" class="px-btn primary lg" @onclick="Reset">+ @I18n.T("New Return")</button>
+                        }
+                    </div>
+                </footer>
+            }
+        </section>
+
+        <!-- Right: recent bills / returns -->
+        <aside class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-seg full">
+                    <button type="button" class="@(rightTab == "bills" ? "on" : "")" @onclick='() => rightTab = "bills"'>@I18n.T("Recent Bills") <span class="px-count">@recentBills.Count</span></button>
+                    <button type="button" class="@(rightTab == "returns" ? "on" : "")" @onclick='() => rightTab = "returns"'>@I18n.T("Returns") <span class="px-count warn">@recent.Count</span></button>
+                </div>
+                <div class="px-search-box sm">
+                    <span class="px-search-icon">🔍</span>
+                    <input type="text"
+                           placeholder="@(rightTab == "bills" ? I18n.T("Bill #, name, mobile or reg...") : I18n.T("RET #, bill #, customer or reason..."))"
+                           @bind="rightSearch" @bind:event="oninput" autocomplete="off" />
+                    @if (!string.IsNullOrWhiteSpace(rightSearch))
+                    {
+                        <button type="button" class="px-x" @onclick='() => rightSearch = ""'>✕</button>
                     }
-                </tbody>
-            </table>
-        </div>
+                </div>
+            </header>
+
+            <div class="px-queue">
+                @if (rightTab == "bills")
+                {
+                    var bills = FilteredBills.ToList();
+                    @if (bills.Count == 0)
+                    {
+                        <div class="px-empty sm">@(string.IsNullOrWhiteSpace(rightSearch) ? I18n.T("No bills in the last 7 days.") : I18n.T("No bill matches. Use the Find Bill box for older bills."))</div>
+                    }
+                    @foreach (var x in bills)
+                    {
+                        <button type="button" class="px-q-item @(memo?.ID == x.ID ? "active" : "")" @onclick="() => OpenMemoAsync(x.ID)">
+                            <span class="px-q-id">#@Hl(x.ID.ToString(), rightTokens)</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">
+                                    @Hl(x.Name, rightTokens)
+                                    @if (x.PatientType == "2")
+                                    {
+                                        <span class="px-tag @(x.IsCredit == true ? "violet" : "blue")">@(x.IsCredit == true ? "IPD Bill" : "IPD Cash")</span>
+                                    }
+                                    @if (returnedMemoIds.Contains(x.ID))
+                                    {
+                                        <span class="px-tag gray">@I18n.T("returned")</span>
+                                    }
+                                </span>
+                                <span class="px-q-meta">
+                                    @x.TransDate.ToString("dd MMM, hh:mm tt")
+                                    @if (!string.IsNullOrWhiteSpace(x.Contact)) { <text> · @Hl(x.Contact, rightTokens)</text> }
+                                    @if (!string.IsNullOrWhiteSpace(x.RegNo)) { <text> · @Hl(x.RegNo, rightTokens)</text> }
+                                </span>
+                            </span>
+                            <span class="px-q-amt">@I18n.FormatCurrency((x.Total ?? 0) - (x.Discount ?? 0))</span>
+                        </button>
+                    }
+                }
+                else
+                {
+                    var rets = FilteredReturns.ToList();
+                    @if (rets.Count == 0)
+                    {
+                        <div class="px-empty sm">@(string.IsNullOrWhiteSpace(rightSearch) ? I18n.T("No return records yet.") : I18n.T("No return matches your search."))</div>
+                    }
+                    @foreach (var x in rets)
+                    {
+                        <button type="button" class="px-q-item @(savedReturn?.ID == x.ID ? "active" : "")" @onclick="() => OpenReturnAsync(x.ID)">
+                            <span class="px-q-id">RET-@Hl(x.ID.ToString(), rightTokens)</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">@Hl(memoNames.GetValueOrDefault(x.CashMemoID, "—"), rightTokens)</span>
+                                <span class="px-q-meta">#PH-@Hl(x.CashMemoID.ToString(), rightTokens) · @x.TransDate.ToString("dd MMM, hh:mm tt") · @Hl(x.Reason, rightTokens)</span>
+                            </span>
+                            <span class="px-q-amt bad">-@I18n.FormatCurrency(x.RefundAmount)</span>
+                        </button>
+                    }
+                }
+            </div>
+        </aside>
     </div>
 </div>
 
-@if(savedReturn!=null&&memo!=null)
+@if (savedReturn != null && memo != null)
 {
-    <div id="sales-return-print" class="print-sheet panel print-document">
-        <div class="print-brand">
-            <div>
-                <h1>@Branding.HospitalName</h1>
-                <p>@I18n.T("Pharmacy & Stock")</p>
-            </div>
-            <div style="text-align: right;">
-                <b style="font-size: 15px;">@I18n.T("Sales Returns"): #@savedReturn!.ID</b>
-                <br/><small>@savedReturn!.TransDate.ToString("dd MMM yyyy hh:mm tt")</small>
-            </div>
-        </div>
-        <h2 class="print-title">@I18n.T("Sales Returns & Refunds", "Sales Return / Refund Voucher")</h2>
-
-        <BarcodeQrView Code="@($"RET-{savedReturn!.ID}")"
-                       QrPayload="@BarcodeQr.GeneratePharmacyQrPayload(savedReturn!.ID, memo!.Name, savedReturn!.RefundAmount)"
-                       Layout="side-by-side"
-                       BarHeight="30"
-                       QrPixelsPerModule="3" />
+    <!-- Official A4 Sales Return / Refund Voucher -->
+    <div id="sales-return-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@I18n.T("Pharmacy Sales Return & Refund Voucher")"
+                             SubTitle="@I18n.T("Hospital Pharmacy")"
+                             DocumentNo="@($"RET-{savedReturn.ID}")"
+                             BarcodeCode="@($"RET-{savedReturn.ID}")"
+                             QrPayload="@BarcodeQr.GeneratePharmacyQrPayload(savedReturn.ID, memo.Name, savedReturn.RefundAmount)" />
 
         <div class="print-grid">
-            <div><span>@I18n.T("Bill No"):</span> <b>#@memo!.ID</b></div>
-            <div><span>@I18n.T("Patient Name"):</span> <b>@memo!.Name</b></div>
-            <div><span>@I18n.T("Adjustment Reason"):</span> <b>@savedReturn!.Reason</b></div>
+            <div><span>@I18n.T("Original Bill No"):</span> <b>#PH-@memo.ID</b></div>
+            <div><span>@I18n.T("Customer / Patient"):</span> <b>@memo.Name</b></div>
+            <div><span>@I18n.T("Return Date"):</span> <b>@savedReturn.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+            <div><span>@I18n.T("Reason"):</span> <b>@savedReturn.Reason</b></div>
         </div>
+
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>@I18n.T("Medicine / Product Name", "Medicine")</th>
-                    <th class="num">@I18n.T("Qty")</th>
-                    <th class="num">@I18n.T("Rate")</th>
-                    <th class="num">@I18n.T("Total")</th>
+                    <th>#</th>
+                    <th>@I18n.T("Medicine")</th>
+                    <th class="num">@I18n.T("Returned Qty")</th>
+                    <th class="num">@I18n.T("Unit Rate")</th>
+                    <th>@I18n.T("Stock Action")</th>
+                    <th class="num">@I18n.T("Amount")</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach(var x in lines){
+                @for (var i = 0; i < lines.Count; i++)
+                {
+                    var x = lines[i];
                     <tr>
-                        <td>@MedicineName(x.ServiceID)</td>
+                        <td>@(i + 1)</td>
+                        <td><b>@MedicineName(x.ServiceID)</b></td>
                         <td class="num">@x.Quantity</td>
                         <td class="num">@I18n.FormatCurrency(x.Rate)</td>
+                        <td>@(x.StockBalanceID > 0 ? I18n.T("Restocked") : I18n.T("Quarantined"))</td>
                         <td class="num">@I18n.FormatCurrency(x.Gross)</td>
                     </tr>
                 }
             </tbody>
         </table>
+
         <div class="print-total">
             <div class="grand">
-                <span>@I18n.T("Refund Amount", "Refund")</span>
+                <span>@(memo.IsCredit == true ? I18n.T("IPD Bed Bill Credit") : I18n.T("Total Cash Refund"))</span>
                 <b>@I18n.FormatCurrency(savedReturn.RefundAmount)</b>
             </div>
         </div>
-        <div class="print-footer">
-            <span class="print-sign">@I18n.T("Patient / Attendant", "Customer")</span>
-            <span class="print-sign">@I18n.T("Pharmacist", "Pharmacist")</span>
-            <span class="print-sign">@I18n.T("Cashier")</span>
+
+        <PrintDocumentFooter Signatures='new string[] { I18n.T("Customer Signature"), I18n.T("Pharmacist"), I18n.T("Cashier") }' />
+    </div>
+
+    <!-- 80mm Thermal Refund Slip -->
+    <div id="sales-return-thermal-print" class="pos-receipt-80mm pharm-print-only">
+        <div class="pos-thermal-header">
+            <div class="pos-thermal-title">@Branding.HospitalName</div>
+            <div style="font-size:10px; font-weight:700;">@I18n.T("PHARMACY RETURN SLIP")</div>
+            <div class="pos-thermal-meta">
+                <div><b>@($"VOUCHER: #RET-{savedReturn.ID}")</b> (Bill #PH-@memo.ID)</div>
+                <div>@savedReturn.TransDate.ToString("dd/MM/yyyy hh:mm tt")</div>
+                <div>@I18n.T("Customer"): @memo.Name</div>
+            </div>
         </div>
+        <table class="pos-thermal-table">
+            <thead>
+                <tr>
+                    <th>@I18n.T("Medicine")</th>
+                    <th style="text-align:right;">@I18n.T("Qty")</th>
+                    <th style="text-align:right;">@I18n.T("Total")</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var x in lines)
+                {
+                    <tr>
+                        <td><b>@MedicineName(x.ServiceID)</b></td>
+                        <td style="text-align:right;">@x.Quantity</td>
+                        <td style="text-align:right;">@I18n.FormatCurrency(x.Gross)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div class="pos-thermal-summary">
+            <div class="pos-thermal-row grand">
+                <span>@I18n.T("Refund"):</span>
+                <span>@I18n.FormatCurrency(savedReturn.RefundAmount)</span>
+            </div>
+        </div>
+        <PrintDeveloperFooter Compact="true" />
     </div>
 }
 
-@code{
-    private List<Service> medicines=[];
-    private List<MedicineStoreBalance> stocks=[];
-    private List<PharmacySalesReturn> recent=[];
-    private List<ReturnLine> lines=[];
-    private Dictionary<long,decimal> returnedByItem=[];
-    private Dictionary<(long ItemId,int StockId),decimal> returnedByBatch=[];
+@code {
+    private ElementReference findInputRef;
+
+    private Dictionary<int, string> medicineNames = [];
+    private List<MedicineStoreBalance> stocks = [];
+    private List<PharmacySalesReturn> recent = [];
+    private List<PharmacyCashMemo> recentBills = [];
+    private HashSet<long> returnedMemoIds = [];
+    private Dictionary<long, string> memoNames = [];
+    private List<ReturnLine> lines = [];
+    private List<ReturnDraft> drafts = [];
+    private Dictionary<long, decimal> returnedByItem = [];
+    private Dictionary<(long ItemId, int StockId), decimal> returnedByBatch = [];
     private PharmacyCashMemo? memo;
     private PharmacySalesReturn? savedReturn;
-    private long? memoId;
-    private string returnScanQuery = "";
-    private long cashMemoSubId;
-    private int stockBalanceId;
-    private decimal returnQuantity=1,priorRefund;
-    private string reason="",message="",messageClass="success";
+    private decimal priorRefund;
+    private string reason = "", message = "", messageClass = "success";
     private bool isSaving;
 
-    private async Task HandleReturnScanKeyDown(KeyboardEventArgs e)
+    private string rightTab = "bills";
+    private string rightSearch = "";
+    private string findQuery = "";
+    private string[] findTokens = [];
+    private List<PharmacyCashMemo> memoSuggestions = [];
+    private bool showFindSuggestions;
+    private bool isSearching;
+    private int highlightedFindIndex;
+    private CancellationTokenSource? findCts;
+
+    private static readonly Dictionary<string, string> QuickReasons = new()
     {
-        if (e.Key == "Enter")
-        {
-            await ProcessReturnScanAsync();
-        }
+        ["Rx Changed"] = "Doctor changed prescription",
+        ["Excess / Discharged"] = "Patient discharged / excess medicine",
+        ["Wrong Item"] = "Wrong medicine dispensed",
+        ["Damaged"] = "Damaged strip / packaging",
+        ["Side Effect"] = "Adverse reaction / side effect",
+    };
+
+    private IEnumerable<PharmacySalesReturn> TodayReturns => recent.Where(x => x.TransDate.Date == DateTime.Today);
+    private bool IsCreditMemo => memo?.IsCredit == true;
+    private decimal OriginalGross => memo?.Items.Sum(x => (x.Rate ?? 0) * (x.Quantity ?? 0)) ?? 0;
+    private decimal OriginalNet => Math.Max(0, (memo?.Total ?? OriginalGross) - (memo?.Discount ?? 0));
+    private decimal ReturnGross => savedReturn != null ? lines.Sum(x => x.Gross) : drafts.Sum(d => d.Qty * (d.Item.Rate ?? 0));
+    private int ReturnItemCount => savedReturn != null ? lines.Select(x => x.CashMemoSubID).Distinct().Count() : drafts.Count(d => d.Qty > 0);
+    private decimal ReturnUnits => savedReturn != null ? lines.Sum(x => x.Quantity) : drafts.Sum(d => d.Qty);
+    private decimal EstimatedRefund => OriginalGross <= 0 ? 0 : Math.Min(Math.Max(0, OriginalNet - priorRefund), Math.Round(OriginalNet * ReturnGross / OriginalGross, 2));
+    private bool CanPost => !isSaving && memo != null && savedReturn == null && ReturnItemCount > 0 && !string.IsNullOrWhiteSpace(reason);
+
+    // ---------- Search helpers ----------
+    private string[] rightTokens => Tokenize(rightSearch).Select(StripPrefix).Where(t => t.Length > 0).ToArray();
+
+    private static string StripPrefix(string t)
+    {
+        foreach (var p in new[] { "PH-", "RET-", "#" })
+            if (t.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return t[p.Length..];
+        return t;
     }
 
-    private async Task ProcessReturnScanAsync()
-    {
-        if (string.IsNullOrWhiteSpace(returnScanQuery)) return;
-        var raw = returnScanQuery.Trim();
+    private static string[] Tokenize(string? q) => string.IsNullOrWhiteSpace(q)
+        ? []
+        : q.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-        long parsedId = 0;
-        if (raw.StartsWith("HPM:PHARM|", StringComparison.OrdinalIgnoreCase))
+    private static bool MatchesAll(string[] tokens, params string?[] fields)
+    {
+        if (tokens.Length == 0) return true;
+        var hay = string.Join(' ', fields.Where(f => !string.IsNullOrWhiteSpace(f)));
+        return tokens.All(t => hay.Contains(t, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static RenderFragment Hl(string? text, string[] tokens) => builder =>
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (tokens.Length == 0) { builder.AddContent(0, text); return; }
+        var mask = new bool[text.Length];
+        foreach (var t in tokens)
         {
-            var parts = raw.Split('|');
-            foreach (var p in parts)
+            var i = 0;
+            while ((i = text.IndexOf(t, i, StringComparison.OrdinalIgnoreCase)) >= 0)
             {
-                if (p.StartsWith("MEMO:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p.Substring(5), out var mId))
-                {
-                    parsedId = mId;
-                    break;
-                }
+                for (var k = i; k < i + t.Length; k++) mask[k] = true;
+                i += Math.Max(1, t.Length);
             }
         }
-        else if (raw.StartsWith("PH-", StringComparison.OrdinalIgnoreCase) && long.TryParse(raw.Substring(3), out var mId))
+        var seq = 0;
+        var start = 0;
+        while (start < text.Length)
         {
-            parsedId = mId;
+            var hit = mask[start];
+            var end = start;
+            while (end < text.Length && mask[end] == hit) end++;
+            if (hit)
+            {
+                builder.OpenElement(seq++, "mark");
+                builder.AddContent(seq++, text[start..end]);
+                builder.CloseElement();
+            }
+            else builder.AddContent(seq++, text[start..end]);
+            start = end;
         }
-        else if (long.TryParse(raw, out var numId))
-        {
-            parsedId = numId;
-        }
+    };
 
-        if (parsedId > 0)
-        {
-            memoId = parsedId;
-            returnScanQuery = "";
-            await FindMemoAsync();
-        }
-        else
-        {
-            Fail(I18n.IsBangla ? "ক্যাশ মেমো নম্বর বা বারকোড সঠিক নয়।" : "Invalid cash memo barcode or ID.");
-        }
-    }
-
-    private void ClearReturnScan() => returnScanQuery = "";
-    private string customerLookupQuery = "";
-    private List<PharmacyCashMemo> memoSuggestions = [];
-
-    private async Task LookupMemosAsync()
+    private IEnumerable<PharmacyCashMemo> FilteredBills
     {
-        if (string.IsNullOrWhiteSpace(customerLookupQuery) || customerLookupQuery.Trim().Length < 2)
+        get
         {
-            memoSuggestions = [];
-            return;
+            var tokens = rightTokens;
+            return tokens.Length == 0 ? recentBills : recentBills.Where(x => MatchesAll(tokens, x.ID.ToString(), x.Name, x.Contact, x.RegNo));
         }
-        var q = customerLookupQuery.Trim();
-        await using var db = await DbFactory.CreateDbContextAsync();
-        memoSuggestions = await db.PharmacyCashMemos.AsNoTracking()
-            .Where(x => (x.Contact != null && x.Contact.Contains(q))
-                     || (x.Name != null && x.Name.Contains(q))
-                     || (x.RegNo != null && x.RegNo.Contains(q)))
-            .OrderByDescending(x => x.ID)
-            .Take(8)
-            .ToListAsync();
     }
 
-    private async Task SelectLookupMemo(long id)
+    private IEnumerable<PharmacySalesReturn> FilteredReturns
     {
-        memoId = id;
-        memoSuggestions = [];
-        customerLookupQuery = "";
-        await FindMemoAsync();
-    }
-
-    private decimal OriginalGross=>memo?.Items.Sum(x=>(x.Rate??0)*(x.Quantity??0))??0;
-    private decimal OriginalNet=>Math.Max(0,(memo?.Total??OriginalGross)-(memo?.Discount??0));
-    private decimal ReturnGross=>lines.Sum(x=>x.Gross);
-    private decimal EstimatedRefund=>OriginalGross<=0?0:Math.Min(Math.Max(0,OriginalNet-priorRefund),Math.Round(OriginalNet*ReturnGross/OriginalGross,2));
-    private IEnumerable<PharmacyCashMemoItem> ReturnableItems=>memo?.Items.Where(x=>Returnable(x)>0)??[];
-    private IEnumerable<MedicineStoreBalance> RestockBatches{
-        get{
-            var item=memo?.Items.FirstOrDefault(x=>x.ID==cashMemoSubId);
-            if(item?.ServiceID==null)return [];
-            var originalIds=item.BatchAllocations.Select(x=>x.StockBalanceID).ToHashSet();
-            return stocks.Where(x=>originalIds.Contains(x.ID)&&BatchReturnable(item.ID,x.ID)>0).OrderBy(x=>x.ExpireDate).ThenBy(x=>x.ID);
+        get
+        {
+            var tokens = rightTokens;
+            return tokens.Length == 0 ? recent : recent.Where(x => MatchesAll(tokens, x.ID.ToString(), x.CashMemoID.ToString(), x.Reason, memoNames.GetValueOrDefault(x.CashMemoID)));
         }
     }
 
+    /// <summary>Extracts a bill id from a QR payload (HPM:PHARM|MEMO:123), "PH-123", "#123" or "123".</summary>
+    private static long ParseBillId(string raw)
+    {
+        raw = raw.Trim();
+        if (raw.StartsWith("HPM:PHARM|", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var p in raw.Split('|'))
+                if (p.StartsWith("MEMO:", StringComparison.OrdinalIgnoreCase) && long.TryParse(p[5..], out var qrId)) return qrId;
+            return 0;
+        }
+        var s = StripPrefix(raw);
+        return long.TryParse(s, out var id) && id > 0 ? id : 0;
+    }
+
+    // ---------- Lifecycle ----------
     protected override async Task OnInitializedAsync()
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
-        await using var db=await DbFactory.CreateDbContextAsync();
-        medicines=await db.Services.AsNoTracking().Where(x=>x.CategoryID==3).OrderBy(x=>x.Name).ToListAsync();
-        recent=await db.PharmacySalesReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(100).ToListAsync();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        medicineNames = await db.Services.AsNoTracking().Where(x => x.CategoryID == 3).ToDictionaryAsync(x => x.ID, x => x.Name ?? "—");
+        await LoadSideListsAsync(db);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try { await findInputRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private async Task LoadSideListsAsync(HpmDbContext db)
+    {
+        var since = DateTime.Today.AddDays(-7);
+        recentBills = await db.PharmacyCashMemos.AsNoTracking().Where(x => x.TransDate >= since).OrderByDescending(x => x.ID).Take(300).ToListAsync();
+        recent = await db.PharmacySalesReturns.AsNoTracking().OrderByDescending(x => x.ID).Take(150).ToListAsync();
+        var memoIds = recent.Select(x => x.CashMemoID).Distinct().ToList();
+        memoNames = recentBills.ToDictionary(x => x.ID, x => x.Name ?? "—");
+        var missing = memoIds.Where(id => !memoNames.ContainsKey(id)).ToList();
+        if (missing.Count > 0)
+        {
+            foreach (var m in await db.PharmacyCashMemos.AsNoTracking().Where(x => missing.Contains(x.ID)).Select(x => new { x.ID, x.Name }).ToListAsync())
+                memoNames[m.ID] = m.Name ?? "—";
+        }
+        returnedMemoIds = memoIds.ToHashSet();
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
 
-    private async Task FindMemoAsync()
+    // ---------- Finder ----------
+    private async Task OnFindInputAsync()
     {
-        if((memoId??0)<=0){
-            Fail(I18n.IsBangla ? "ক্যাশ মেমো নম্বর লিখুন।" : "Enter a valid cash memo number.");
+        findCts?.Cancel();
+        highlightedFindIndex = 0;
+        showFindSuggestions = true;
+        findTokens = Tokenize(findQuery).Select(StripPrefix).Where(t => t.Length > 0).ToArray();
+        if (string.IsNullOrWhiteSpace(findQuery) || findQuery.StartsWith("HPM:", StringComparison.OrdinalIgnoreCase))
+        {
+            memoSuggestions = [];
+            isSearching = false;
             return;
         }
-        await using var db=await DbFactory.CreateDbContextAsync();
-        memo=await db.PharmacyCashMemos.AsNoTracking().Include(x=>x.Items).ThenInclude(x=>x.BatchAllocations).FirstOrDefaultAsync(x=>x.ID==memoId);
-        if(memo==null){
-            Fail(I18n.IsBangla ? "ফার্মাসি ক্যাশ মেমো পাওয়া যায়নি।" : "Pharmacy cash memo was not found.");
-            return;
+        var cts = findCts = new CancellationTokenSource();
+        isSearching = true;
+        try
+        {
+            await Task.Delay(220, cts.Token);
+            var results = await SearchMemosAsync(findQuery, cts.Token);
+            if (cts.IsCancellationRequested) return;
+            memoSuggestions = results;
         }
-        stocks=await db.MedicineStoreBalances.AsNoTracking().Where(x=>x.MedicineStoreID==(memo.BufferStore??0)).ToListAsync();
-        var ids=memo.Items.Select(x=>x.ID).ToArray();
-        returnedByItem=ids.Length==0?[]:await db.PharmacySalesReturnItems.AsNoTracking().Where(x=>ids.Contains(x.CashMemoSubID)).GroupBy(x=>x.CashMemoSubID).ToDictionaryAsync(x=>x.Key,x=>x.Sum(y=>y.Quantity));
-        var batchReturns=ids.Length==0?[]:await db.PharmacySalesReturnItems.AsNoTracking().Where(x=>ids.Contains(x.CashMemoSubID)&&x.IsRestocked&&x.StockBalanceID.HasValue).Select(x=>new{x.CashMemoSubID,StockId=x.StockBalanceID!.Value,x.Quantity}).ToListAsync();
-        returnedByBatch=batchReturns.GroupBy(x=>(x.CashMemoSubID,x.StockId)).ToDictionary(x=>x.Key,x=>x.Sum(y=>y.Quantity));
-        priorRefund=await db.PharmacySalesReturns.Where(x=>x.CashMemoID==memo.ID&&x.IsPosted).SumAsync(x=>(decimal?)x.RefundAmount)??0;
-        lines=[];
-        savedReturn=null;
-        reason="";
-        if(!ReturnableItems.Any()) Fail(I18n.IsBangla ? "এই মেমোর সব আইটেম ইতিমধ্যে ফেরত নেওয়া হয়েছে।" : "All items from this cash memo have already been returned.");
-        else Success(I18n.IsBangla ? "ক্যাশ মেমো লোড হয়েছে।" : "Cash memo loaded. Restocking is restricted to the exact batch originally sold; legacy sales can be quarantined only.");
+        catch (OperationCanceledException) { return; }
+        finally
+        {
+            if (!cts.IsCancellationRequested) isSearching = false;
+        }
     }
 
-    private decimal Returnable(PharmacyCashMemoItem x)=>(x.Quantity??0)-(returnedByItem.TryGetValue(x.ID,out var qty)?qty:0)-lines.Where(y=>y.CashMemoSubID==x.ID).Sum(y=>y.Quantity);
-    private decimal BatchReturnable(long itemId,int stockId)
+    private async Task<List<PharmacyCashMemo>> SearchMemosAsync(string raw, CancellationToken ct)
     {
-        var allocated=memo?.Items.FirstOrDefault(x=>x.ID==itemId)?.BatchAllocations.FirstOrDefault(x=>x.StockBalanceID==stockId)?.Quantity??0;
-        var prior=returnedByBatch.TryGetValue((itemId,stockId),out var qty)?qty:0;
-        var pending=lines.Where(x=>x.CashMemoSubID==itemId&&x.StockBalanceID==stockId).Sum(x=>x.Quantity);
-        return Math.Max(0,allocated-prior-pending);
+        var tokens = Tokenize(raw).Select(StripPrefix).Where(t => t.Length > 0).ToArray();
+        if (tokens.Length == 0) return [];
+        var billId = tokens.Length == 1 ? ParseBillId(raw) : 0;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = db.PharmacyCashMemos.AsNoTracking();
+        if (billId > 0)
+        {
+            var t = tokens[0];
+            query = query.Where(x => x.ID == billId || (x.Contact != null && x.Contact.Contains(t)) || (x.RegNo != null && x.RegNo.Contains(t)));
+        }
+        else
+        {
+            foreach (var token in tokens)
+            {
+                var t = token;
+                query = query.Where(x => (x.Name != null && x.Name.Contains(t)) || (x.Contact != null && x.Contact.Contains(t)) || (x.RegNo != null && x.RegNo.Contains(t)));
+            }
+        }
+        var list = await query.OrderByDescending(x => x.ID).Take(20).ToListAsync(ct);
+        return billId > 0 ? list.OrderByDescending(x => x.ID == billId).ToList() : list;
     }
 
-    private void SoldItemChanged(){stockBalanceId=0;returnQuantity=1;}
-
-    private void AddLine()
+    private async Task HandleFindKeyDown(KeyboardEventArgs e)
     {
-        var item=memo?.Items.FirstOrDefault(x=>x.ID==cashMemoSubId);
-        if(item?.ServiceID==null||returnQuantity<=0){
-            Fail(I18n.IsBangla ? "বিক্রিত ঔষধ ও সঠিক পরিমাণ নির্বাচন করুন।" : "Select a sold medicine and valid quantity.");
-            return;
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                showFindSuggestions = true;
+                if (highlightedFindIndex < memoSuggestions.Count - 1) highlightedFindIndex++;
+                await ScrollActiveAsync("#px-find-dd");
+                break;
+            case "ArrowUp":
+                if (highlightedFindIndex > 0) highlightedFindIndex--;
+                await ScrollActiveAsync("#px-find-dd");
+                break;
+            case "Escape":
+                showFindSuggestions = false;
+                break;
+            case "Enter":
+                var raw = findQuery.Trim();
+                if (string.IsNullOrWhiteSpace(raw)) return;
+                // Scanner input / explicit bill number opens directly (no need to wait for the dropdown).
+                var id = Tokenize(raw).Length == 1 ? ParseBillId(raw) : 0;
+                var highlighted = highlightedFindIndex >= 0 && highlightedFindIndex < memoSuggestions.Count ? memoSuggestions[highlightedFindIndex] : null;
+                if (highlighted != null && (id == 0 || highlighted.ID == id)) await OpenMemoAsync(highlighted.ID);
+                else if (id > 0) await OpenMemoAsync(id);
+                else
+                {
+                    findCts?.Cancel();
+                    memoSuggestions = await SearchMemosAsync(raw, CancellationToken.None);
+                    isSearching = false;
+                    if (memoSuggestions.Count == 1) await OpenMemoAsync(memoSuggestions[0].ID);
+                    else showFindSuggestions = true;
+                }
+                break;
         }
-        if(returnQuantity>Returnable(item)){
-            Fail(I18n.IsBangla ? "ফেরত পরিমাণ বিক্রিত পরিমাণের চেয়ে বেশি।" : "Return quantity exceeds the remaining sold quantity.");
-            return;
-        }
-        var stock=stockBalanceId==0?null:stocks.FirstOrDefault(x=>x.ID==stockBalanceId);
-        var allocation=stockBalanceId==0?null:item.BatchAllocations.FirstOrDefault(x=>x.StockBalanceID==stockBalanceId);
-        if(stockBalanceId>0&&(stock==null||stock.ServiceID!=item.ServiceID||allocation==null)){
-            Fail(I18n.IsBangla ? "মূল চালানে ব্যবহৃত ব্যাচেই শুধুমাত্র রিস্টক করা যাবে।" : "Only a batch used in the original sale can be restocked.");
-            return;
-        }
-        if(stockBalanceId>0&&returnQuantity>BatchReturnable(item.ID,stockBalanceId)){
-            Fail(I18n.IsBangla ? "এই ব্যাচ থেকে বিক্রিত পরিমাণের চেয়ে বেশি ফেরত দেওয়া যাবে না।" : "Return quantity exceeds the quantity originally sold from this batch.");
-            return;
-        }
-        lines.Add(new ReturnLine(item.ID,item.ServiceID.Value,stockBalanceId,returnQuantity,item.Rate??0,allocation?.BuyRate??item.BuyRate??0));
-        cashMemoSubId=0;
-        stockBalanceId=0;
-        returnQuantity=1;
-        message="";
     }
 
-    private async Task PostAsync()
+    private async Task ScrollActiveAsync(string container)
     {
-        if(memo==null||lines.Count==0||string.IsNullOrWhiteSpace(reason)){
-            Fail(I18n.IsBangla ? "ক্যাশ মেমো, ফেরত আইটেম এবং কারণ আবশ্যক।" : "Cash memo, return items and reason are required.");
+        StateHasChanged();
+        await Task.Yield();
+        try { await JS.InvokeVoidAsync("hpm.scrollActiveIntoView", container, ".is-active"); } catch { }
+    }
+
+    private void ClearFind()
+    {
+        findCts?.Cancel();
+        findQuery = "";
+        findTokens = [];
+        memoSuggestions = [];
+        isSearching = false;
+    }
+
+    // ---------- Load bill ----------
+    private async Task OpenMemoAsync(long id)
+    {
+        ClearFind();
+        showFindSuggestions = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var found = await db.PharmacyCashMemos.AsNoTracking().Include(x => x.Items).ThenInclude(x => x.BatchAllocations).FirstOrDefaultAsync(x => x.ID == id);
+        if (found == null)
+        {
+            Fail(I18n.IsBangla ? $"বিল #PH-{id} পাওয়া যায়নি।" : $"Bill #PH-{id} was not found.");
             return;
         }
-        isSaving=true;
+        memo = found;
+        savedReturn = null;
+        lines = [];
+        reason = "";
+        stocks = await db.MedicineStoreBalances.AsNoTracking().Where(x => x.MedicineStoreID == (memo.BufferStore ?? 0)).ToListAsync();
+        var ids = memo.Items.Select(x => x.ID).ToArray();
+        returnedByItem = ids.Length == 0 ? [] : await db.PharmacySalesReturnItems.AsNoTracking().Where(x => ids.Contains(x.CashMemoSubID)).GroupBy(x => x.CashMemoSubID).ToDictionaryAsync(x => x.Key, x => x.Sum(y => y.Quantity));
+        var batchReturns = ids.Length == 0 ? [] : await db.PharmacySalesReturnItems.AsNoTracking().Where(x => ids.Contains(x.CashMemoSubID) && x.IsRestocked && x.StockBalanceID.HasValue).Select(x => new { x.CashMemoSubID, StockId = x.StockBalanceID!.Value, x.Quantity }).ToListAsync();
+        returnedByBatch = batchReturns.GroupBy(x => (x.CashMemoSubID, x.StockId)).ToDictionary(x => x.Key, x => x.Sum(y => y.Quantity));
+        priorRefund = await db.PharmacySalesReturns.Where(x => x.CashMemoID == memo.ID && x.IsPosted).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+
+        var stockIds = stocks.Select(s => s.ID).ToHashSet();
+        drafts = memo.Items.OrderBy(x => x.SLNO).Select(item =>
+        {
+            var already = returnedByItem.GetValueOrDefault(item.ID);
+            var max = Math.Max(0, (item.Quantity ?? 0) - already);
+            var canRestock = item.BatchAllocations.Any(a => stockIds.Contains(a.StockBalanceID));
+            var batchText = string.Join(", ", item.BatchAllocations.Select(a => a.BatchNo).Where(b => !string.IsNullOrWhiteSpace(b)).Distinct());
+            return new ReturnDraft { Item = item, AlreadyReturned = already, Max = max, CanRestock = canRestock, Restock = canRestock, BatchText = batchText };
+        }).ToList();
+
+        if (drafts.All(d => d.Max <= 0)) Fail(I18n.IsBangla ? "এই বিলের সব ঔষধ ইতিমধ্যে ফেরত হয়েছে।" : "All items from this bill have already been returned.");
+        else if (memo.TransDate < DateTime.Today.AddDays(-30)) Fail(I18n.IsBangla ? "সতর্কতা: বিলটি ৩০ দিনের বেশি পুরনো।" : "Note: this bill is more than 30 days old.");
+        else message = "";
+    }
+
+    private void StepDraft(ReturnDraft d, decimal delta) => d.Qty = Math.Clamp(d.Qty + delta, 0, d.Max);
+
+    private void SetDraft(ReturnDraft d, string? raw)
+    {
+        if (!decimal.TryParse(raw, out var qty)) qty = 0;
+        if (qty > d.Max) Fail(I18n.IsBangla ? $"সর্বোচ্চ {d.Max:0.##} ফেরত দেওয়া যাবে।" : $"Only {d.Max:0.##} can be returned for {MedicineName(d.Item.ServiceID)}.");
+        d.Qty = Math.Clamp(qty, 0, d.Max);
+    }
+
+    private void ReturnAll()
+    {
+        foreach (var d in drafts) d.Qty = d.Max;
+    }
+
+    private void ClearDrafts()
+    {
+        foreach (var d in drafts) d.Qty = 0;
+    }
+
+    private decimal BatchReturnable(long itemId, int stockId, IEnumerable<ReturnLine> pendingLines)
+    {
+        var allocated = memo?.Items.FirstOrDefault(x => x.ID == itemId)?.BatchAllocations.Where(x => x.StockBalanceID == stockId).Sum(x => x.Quantity) ?? 0;
+        var prior = returnedByBatch.TryGetValue((itemId, stockId), out var qty) ? qty : 0;
+        var pending = pendingLines.Where(x => x.CashMemoSubID == itemId && x.StockBalanceID == stockId).Sum(x => x.Quantity);
+        return Math.Max(0, allocated - prior - pending);
+    }
+
+    /// <summary>Turns the per-item draft quantities into return lines, restocking into the original sale batches (earliest expiry first).</summary>
+    private List<ReturnLine>? BuildLines()
+    {
+        var result = new List<ReturnLine>();
+        var stockIds = stocks.Select(s => s.ID).ToHashSet();
+        foreach (var d in drafts.Where(d => d.Qty > 0))
+        {
+            var item = d.Item;
+            if (item.ServiceID == null) continue;
+            if (d.Qty > d.Max)
+            {
+                Fail($"Return quantity exceeds remaining sold quantity for {MedicineName(item.ServiceID)}.");
+                return null;
+            }
+            var rate = item.Rate ?? 0;
+            if (!d.Restock || !d.CanRestock)
+            {
+                result.Add(new ReturnLine(item.ID, item.ServiceID.Value, 0, d.Qty, rate, item.BuyRate ?? 0));
+                continue;
+            }
+            var remaining = d.Qty;
+            foreach (var alloc in item.BatchAllocations.Where(a => stockIds.Contains(a.StockBalanceID)).OrderBy(a => a.ExpireDate ?? DateTime.MaxValue).ThenBy(a => a.StockBalanceID))
+            {
+                var take = Math.Min(remaining, BatchReturnable(item.ID, alloc.StockBalanceID, result));
+                if (take <= 0) continue;
+                result.Add(new ReturnLine(item.ID, item.ServiceID.Value, alloc.StockBalanceID, take, rate, alloc.BuyRate));
+                remaining -= take;
+                if (remaining <= 0) break;
+            }
+            if (remaining > 0)
+            {
+                Fail(I18n.IsBangla
+                    ? $"{MedicineName(item.ServiceID)}: মূল ব্যাচে {remaining:0.##} টি রিস্টক করা যাবে না। 'Damaged' নির্বাচন করুন বা পরিমাণ কমান।"
+                    : $"{MedicineName(item.ServiceID)}: {remaining:0.##} unit(s) cannot be restocked into the original batch. Mark it as Damaged or reduce the quantity.");
+                return null;
+            }
+        }
+        return result;
+    }
+
+    private async Task PostAsync(bool printAfterSave)
+    {
+        if (memo == null || savedReturn != null) return;
+        if (ReturnItemCount == 0 || string.IsNullOrWhiteSpace(reason))
+        {
+            Fail(I18n.IsBangla ? "ফেরতের ঔষধ ও কারণ লিখুন।" : "Select items to return and enter a return reason.");
+            return;
+        }
+        var built = BuildLines();
+        if (built == null || built.Count == 0) return;
+        lines = built;
+        isSaving = true;
         try
         {
             var result = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
             {
-            var source=await db.PharmacyCashMemos.Include(x=>x.Items).ThenInclude(x=>x.BatchAllocations).SingleAsync(x=>x.ID==memo.ID);
-            foreach(var group in lines.GroupBy(x=>x.CashMemoSubID))
-            {
-                var sold=source.Items.Single(x=>x.ID==group.Key);
-                var already=await db.PharmacySalesReturnItems.Where(x=>x.CashMemoSubID==sold.ID).SumAsync(x=>(decimal?)x.Quantity)??0;
-                if(group.Sum(x=>x.Quantity)>(sold.Quantity??0)-already)throw new InvalidOperationException($"Return quantity exceeded for {MedicineName(sold.ServiceID)}.");
-            }
-            foreach(var group in lines.Where(x=>x.StockBalanceID>0).GroupBy(x=>new{x.CashMemoSubID,x.StockBalanceID}))
-            {
-                var sold=source.Items.Single(x=>x.ID==group.Key.CashMemoSubID);
-                var allocation=sold.BatchAllocations.SingleOrDefault(x=>x.StockBalanceID==group.Key.StockBalanceID)
-                    ?? throw new InvalidOperationException("Restocking is allowed only to a batch used by the original sale.");
-                var already=await db.PharmacySalesReturnItems.Where(x=>x.CashMemoSubID==sold.ID&&x.StockBalanceID==group.Key.StockBalanceID&&x.IsRestocked).SumAsync(x=>(decimal?)x.Quantity)??0;
-                if(group.Sum(x=>x.Quantity)>allocation.Quantity-already)throw new InvalidOperationException("Return quantity exceeds the quantity originally sold from the selected batch.");
-            }
-            var priorReturns=await db.PharmacySalesReturns.Where(x=>x.CashMemoID==source.ID&&x.IsPosted).SumAsync(x=>(decimal?)x.RefundAmount)??0;
-            var currentGross=lines.Sum(x=>x.Gross);
-            var gross=source.Items.Sum(x=>(x.Rate??0)*(x.Quantity??0));
-            var net=Math.Max(0,(source.Total??gross)-(source.Discount??0));
-            var refund=gross<=0?0:Math.Min(net-priorReturns,Math.Round(net*currentGross/gross,2));
-            if(refund<=0)throw new InvalidOperationException(I18n.IsBangla ? "কোনো রিফান্ড অবশিষ্ট নেই।" : "No refundable amount remains.");
-            var uid=await CurrentUserIdAsync();
-            var now=DateTime.Now;
-            var header=new PharmacySalesReturn{CashMemoID=source.ID,StoreID=source.BufferStore??1,RefundAmount=refund,Reason=reason.Trim(),IsPosted=true,EnteredBy=uid,TransDate=now};
-            db.PharmacySalesReturns.Add(header);
-            await db.SaveChangesAsync();
-            foreach(var line in lines)
-            {
-                var sold=source.Items.Single(x=>x.ID==line.CashMemoSubID);
-                var buyRate=sold.BuyRate??0;
-                if(line.StockBalanceID>0)
+                var source = await db.PharmacyCashMemos.Include(x => x.Items).ThenInclude(x => x.BatchAllocations).SingleAsync(x => x.ID == memo.ID);
+                foreach (var group in lines.GroupBy(x => x.CashMemoSubID))
                 {
-                    var allocation=sold.BatchAllocations.Single(x=>x.StockBalanceID==line.StockBalanceID);
-                    buyRate=allocation.BuyRate;
-                    var stock=await db.MedicineStoreBalances.SingleAsync(x=>x.ID==line.StockBalanceID);
-                    if(stock.MedicineStoreID!=header.StoreID||stock.ServiceID!=line.ServiceID)throw new InvalidOperationException("Invalid restock batch.");
-                    stock.Balance+=line.Quantity;
+                    var sold = source.Items.Single(x => x.ID == group.Key);
+                    var already = await db.PharmacySalesReturnItems.Where(x => x.CashMemoSubID == sold.ID).SumAsync(x => (decimal?)x.Quantity) ?? 0;
+                    if (group.Sum(x => x.Quantity) > (sold.Quantity ?? 0) - already)
+                        throw new InvalidOperationException($"Return quantity exceeded for {MedicineName(sold.ServiceID)}.");
                 }
-                db.PharmacySalesReturnItems.Add(new PharmacySalesReturnItem{SalesReturnID=header.ID,CashMemoSubID=line.CashMemoSubID,ServiceID=line.ServiceID,StockBalanceID=line.StockBalanceID>0?line.StockBalanceID:null,Quantity=line.Quantity,Rate=line.Rate,BuyRate=buyRate,IsRestocked=line.StockBalanceID>0});
-                if(source.PatientType=="2"&&!string.IsNullOrWhiteSpace(source.RegNo))
+                foreach (var group in lines.Where(x => x.StockBalanceID > 0).GroupBy(x => new { x.CashMemoSubID, x.StockBalanceID }))
                 {
-                    var admission=await db.PatientAdmissions.FirstOrDefaultAsync(x=>x.RegNo==source.RegNo);
-                    var dept=admission==null?1:await(from b in db.BedCabins join c in db.BedCategories on b.CategoryID equals c.ID where b.ID==admission.BedCabinID select c.IpdDepartmentID).FirstOrDefaultAsync();
-                    if(source.IsPackage)db.PatientPackageTransactions.Add(new PatientPackageTransaction{RegNo=source.RegNo,ServiceID=line.ServiceID,ServiceRate=line.Rate,Quantity=-line.Quantity,IpdDepartmentID=dept,EnteredBy=uid,TransDate=now});
-                    else db.PatientTransactions.Add(new PatientTransaction{RegNo=source.RegNo,ServiceID=line.ServiceID,ServiceRate=line.Rate,Quantity=-line.Quantity,IpdDepartmentID=dept,EnteredBy=uid,TransDate=now});
+                    var sold = source.Items.Single(x => x.ID == group.Key.CashMemoSubID);
+                    var allocated = sold.BatchAllocations.Where(x => x.StockBalanceID == group.Key.StockBalanceID).Sum(x => x.Quantity);
+                    if (allocated <= 0) throw new InvalidOperationException("Restocking is allowed only to a batch used by the original sale.");
+                    var already = await db.PharmacySalesReturnItems.Where(x => x.CashMemoSubID == sold.ID && x.StockBalanceID == group.Key.StockBalanceID && x.IsRestocked).SumAsync(x => (decimal?)x.Quantity) ?? 0;
+                    if (group.Sum(x => x.Quantity) > allocated - already)
+                        throw new InvalidOperationException("Return quantity exceeds the quantity sold from the selected batch.");
                 }
-            }
-            var originalReference=$"PHARMACY-SALE:{source.ID}";
-            if(!await db.AccountVouchers.AnyAsync(x=>x.Reference==originalReference))
-            {
-                var originalNet=Math.Max(0,(source.Total??gross)-(source.Discount??0));
-                if(originalNet>0)AccountingPosting.AddPostedVoucher(db,source.PatientType=="1"?"Receipt":"Journal",source.TransDate,$"Pharmacy sale to {source.Name}",originalReference,source.EnteredBy,(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,originalNet,0),(AccountingPosting.PharmacySales,0,originalNet));
-            }
-            if(source.PatientType=="1")db.CentralCashCollections.Add(new CentralCashCollection{Amount=-refund,ModuleFlag=4,HeadID=4,EnteredBy=uid,TransDate=now,TransDateCL=now,ReferenceID=header.ID});
-            AccountingPosting.AddPostedVoucher(db,"Sales Return",now,$"Pharmacy sales return for memo #{source.ID}",$"PHARMACY-SALES-RETURN:{header.ID}",uid,(AccountingPosting.PharmacySales,refund,0),(source.PatientType=="1"?AccountingPosting.Cash:AccountingPosting.PatientReceivable,0,refund));
-            await db.SaveChangesAsync();
-            return (Header: header, Refund: refund);
+                var priorReturns = await db.PharmacySalesReturns.Where(x => x.CashMemoID == source.ID && x.IsPosted).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+                var currentGross = lines.Sum(x => x.Gross);
+                var gross = source.Items.Sum(x => (x.Rate ?? 0) * (x.Quantity ?? 0));
+                var net = Math.Max(0, (source.Total ?? gross) - (source.Discount ?? 0));
+                var refund = gross <= 0 ? 0 : Math.Min(net - priorReturns, Math.Round(net * currentGross / gross, 2));
+                if (refund <= 0) throw new InvalidOperationException("No refundable amount remains.");
+                var uid = await CurrentUserIdAsync();
+                var now = DateTime.Now;
+                var header = new PharmacySalesReturn { CashMemoID = source.ID, StoreID = source.BufferStore ?? 1, RefundAmount = refund, Reason = reason.Trim(), IsPosted = true, EnteredBy = uid, TransDate = now };
+                db.PharmacySalesReturns.Add(header);
+                await db.SaveChangesAsync();
+
+                var isIpdBedCredit = source.PatientType == "2" && (source.IsCredit == true || !await db.CentralCashCollections.AnyAsync(c => c.ModuleFlag == 4 && c.ReferenceID == source.ID && c.Amount > 0));
+
+                foreach (var line in lines)
+                {
+                    var sold = source.Items.Single(x => x.ID == line.CashMemoSubID);
+                    var buyRate = sold.BuyRate ?? 0;
+                    if (line.StockBalanceID > 0)
+                    {
+                        var allocation = sold.BatchAllocations.First(x => x.StockBalanceID == line.StockBalanceID);
+                        buyRate = allocation.BuyRate;
+                        var stock = await db.MedicineStoreBalances.SingleAsync(x => x.ID == line.StockBalanceID);
+                        if (stock.MedicineStoreID != header.StoreID || stock.ServiceID != line.ServiceID) throw new InvalidOperationException("Invalid restock batch.");
+                        stock.Balance += line.Quantity;
+                    }
+                    db.PharmacySalesReturnItems.Add(new PharmacySalesReturnItem { SalesReturnID = header.ID, CashMemoSubID = line.CashMemoSubID, ServiceID = line.ServiceID, StockBalanceID = line.StockBalanceID > 0 ? line.StockBalanceID : null, Quantity = line.Quantity, Rate = line.Rate, BuyRate = buyRate, IsRestocked = line.StockBalanceID > 0 });
+                    if (isIpdBedCredit && !string.IsNullOrWhiteSpace(source.RegNo))
+                    {
+                        var admission = await db.PatientAdmissions.FirstOrDefaultAsync(x => x.RegNo == source.RegNo);
+                        var dept = admission == null ? 1 : await (from b in db.BedCabins join c in db.BedCategories on b.CategoryID equals c.ID where b.ID == admission.BedCabinID select c.IpdDepartmentID).FirstOrDefaultAsync();
+                        if (source.IsPackage) db.PatientPackageTransactions.Add(new PatientPackageTransaction { RegNo = source.RegNo, ServiceID = line.ServiceID, ServiceRate = line.Rate, Quantity = -line.Quantity, IpdDepartmentID = dept, EnteredBy = uid, TransDate = now });
+                        else db.PatientTransactions.Add(new PatientTransaction { RegNo = source.RegNo, ServiceID = line.ServiceID, ServiceRate = line.Rate, Quantity = -line.Quantity, IpdDepartmentID = dept, EnteredBy = uid, TransDate = now });
+                    }
+                }
+                var originalReference = $"PHARMACY-SALE:{source.ID}";
+                if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference))
+                {
+                    var originalNet = Math.Max(0, (source.Total ?? gross) - (source.Discount ?? 0));
+                    if (originalNet > 0) AccountingPosting.AddPostedVoucher(db, !isIpdBedCredit ? "Receipt" : "Journal", source.TransDate, $"Pharmacy sale to {source.Name}", originalReference, source.EnteredBy, (!isIpdBedCredit ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, originalNet, 0), (AccountingPosting.PharmacySales, 0, originalNet));
+                }
+                if (!isIpdBedCredit)
+                {
+                    db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 4, HeadID = 4, EnteredBy = uid, TransDate = now, TransDateCL = now, ReferenceID = header.ID });
+                }
+                AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Pharmacy sales return for memo #{source.ID}", $"PHARMACY-SALES-RETURN:{header.ID}", uid, (AccountingPosting.PharmacySales, refund, 0), (!isIpdBedCredit ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, 0, refund));
+                await db.SaveChangesAsync();
+                return (Header: header, Refund: refund);
             }, IsolationLevel.Serializable);
-            savedReturn=result.Header;
-            priorRefund+=result.Refund;
-            Success(I18n.IsBangla ? $"বিক্রয় ফেরত #{result.Header.ID} সফলভাবে সংরক্ষিত ও রিফান্ড সম্পন্ন হয়েছে।" : $"Sales return #{result.Header.ID} posted with original-batch control, refund and accounting reversal.");
-            await using var refreshDb=await DbFactory.CreateDbContextAsync();
-            recent=await refreshDb.PharmacySalesReturns.AsNoTracking().OrderByDescending(x=>x.ID).Take(100).ToListAsync();
+
+            savedReturn = result.Header;
+            priorRefund += result.Refund;
+            Success(I18n.IsBangla ? $"ফেরত ভাউচার #RET-{result.Header.ID} সংরক্ষিত হয়েছে।" : $"Return voucher #RET-{result.Header.ID} saved. Refund {I18n.FormatCurrency(result.Refund)}.");
+            await using var refreshDb = await DbFactory.CreateDbContextAsync();
+            await LoadSideListsAsync(refreshDb);
+
+            if (printAfterSave)
+            {
+                StateHasChanged();
+                await Task.Yield();
+                await PrintA4Async();
+            }
         }
-        catch(Exception ex){
-            Fail(I18n.IsBangla ? $"বিক্রয় ফেরত ব্যর্থ: {ex.Message}" : $"Sales return failed: {ex.Message}");
+        catch (Exception ex)
+        {
+            lines = [];
+            Fail($"Return failed: {ex.Message}");
         }
-        finally{isSaving=false;}
+        finally { isSaving = false; }
     }
 
     private async Task OpenReturnAsync(long id)
     {
-        await using var db=await DbFactory.CreateDbContextAsync();
-        savedReturn=await db.PharmacySalesReturns.AsNoTracking().Include(x=>x.Items).SingleAsync(x=>x.ID==id);
-        memo=await db.PharmacyCashMemos.AsNoTracking().Include(x=>x.Items).ThenInclude(x=>x.BatchAllocations).SingleAsync(x=>x.ID==savedReturn.CashMemoID);
-        memoId=memo.ID;
-        reason=savedReturn.Reason;
-        lines=savedReturn.Items.Select(x=>new ReturnLine(x.CashMemoSubID,x.ServiceID,x.StockBalanceID??0,x.Quantity,x.Rate,x.BuyRate)).ToList();
-        priorRefund=await db.PharmacySalesReturns.Where(x=>x.CashMemoID==memo.ID&&x.ID<savedReturn.ID&&x.IsPosted).SumAsync(x=>(decimal?)x.RefundAmount)??0;
+        ClearFind();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        savedReturn = await db.PharmacySalesReturns.AsNoTracking().Include(x => x.Items).SingleAsync(x => x.ID == id);
+        memo = await db.PharmacyCashMemos.AsNoTracking().Include(x => x.Items).ThenInclude(x => x.BatchAllocations).SingleAsync(x => x.ID == savedReturn.CashMemoID);
+        reason = savedReturn.Reason;
+        drafts = [];
+        lines = savedReturn.Items.Select(x => new ReturnLine(x.CashMemoSubID, x.ServiceID, x.StockBalanceID ?? 0, x.Quantity, x.Rate, x.BuyRate)).ToList();
+        priorRefund = await db.PharmacySalesReturns.Where(x => x.CashMemoID == memo.ID && x.ID < savedReturn.ID && x.IsPosted).SumAsync(x => (decimal?)x.RefundAmount) ?? 0;
+        message = "";
     }
 
     private async Task<int> CurrentUserIdAsync()
     {
-        var u=(await AuthStateProvider.GetAuthenticationStateAsync()).User;
-        return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier),out var id)?id:1;
+        var u = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+        return int.TryParse(u.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : 1;
     }
 
-    private async Task PrintAsync()=>await JS.InvokeVoidAsync("hpm.printElement","sales-return-print");
+    private async Task PrintA4Async() => await JS.InvokeVoidAsync("hpm.printElement", "sales-return-print", $"RET-{savedReturn?.ID}");
+    private async Task PrintThermalAsync() => await JS.InvokeVoidAsync("hpm.printElement", "sales-return-thermal-print", $"RET-{savedReturn?.ID}");
 
     private void Reset()
     {
-        memo=null;
-        savedReturn=null;
-        memoId=null;
-        lines=[];
-        returnedByItem=[];
-        priorRefund=0;
-        reason="";
-        message="";
+        memo = null;
+        savedReturn = null;
+        ClearFind();
+        lines = [];
+        drafts = [];
+        returnedByItem = [];
+        returnedByBatch = [];
+        priorRefund = 0;
+        reason = "";
+        message = "";
+        _ = FocusFindSoonAsync();
     }
 
-    private string MedicineName(int? id)=>medicines.FirstOrDefault(x=>x.ID==id)?.Name??"—";
-    private void Success(string x){messageClass="success";message=x;}
-    private void Fail(string x){messageClass="danger";message=x;}
+    private async Task FocusFindSoonAsync()
+    {
+        await Task.Yield();
+        try { await findInputRef.FocusAsync(); } catch { }
+    }
+
+    private string MedicineName(int? id) => id.HasValue && medicineNames.TryGetValue(id.Value, out var n) ? n : "—";
+    private void Success(string x) { messageClass = "success"; message = x; }
+    private void Fail(string x) { messageClass = "danger"; message = x; }
 
     public void Dispose()
     {
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+        findCts?.Cancel();
+        findCts?.Dispose();
     }
 
-    private sealed record ReturnLine(long CashMemoSubID,int ServiceID,int StockBalanceID,decimal Quantity,decimal Rate,decimal BuyRate){public decimal Gross=>Quantity*Rate;}
+    private sealed class ReturnDraft
+    {
+        public required PharmacyCashMemoItem Item { get; init; }
+        public decimal AlreadyReturned { get; init; }
+        public decimal Max { get; init; }
+        public bool CanRestock { get; init; }
+        public bool Restock { get; set; }
+        public decimal Qty { get; set; }
+        public string BatchText { get; init; } = "";
+    }
+
+    private sealed record ReturnLine(long CashMemoSubID, int ServiceID, int StockBalanceID, decimal Quantity, decimal Rate, decimal BuyRate) { public decimal Gross => Quantity * Rate; }
 }

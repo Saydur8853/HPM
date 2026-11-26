@@ -65,6 +65,7 @@ builder.Services.AddSingleton<HospitalSetupService>();
 builder.Services.AddScoped<HospitalLicenseService>();
 builder.Services.AddScoped<I18nService>();
 builder.Services.AddScoped<PatientSelectionState>();
+builder.Services.AddSingleton<UserWorkspacePreferences>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -214,6 +215,46 @@ await using (var scope = app.Services.CreateAsyncScope())
             BEGIN
                 ALTER TABLE [Hospital_Profile] ADD [Developer_Phone] nvarchar(100) NULL;
             END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Cash_Memo]') AND name = 'Payment_Method')
+            BEGIN
+                ALTER TABLE [Cash_Memo] ADD [Payment_Method] nvarchar(40) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Cash_Memo]') AND name = 'Payment_Ref')
+            BEGIN
+                ALTER TABLE [Cash_Memo] ADD [Payment_Ref] nvarchar(100) NULL;
+            END
+            IF OBJECT_ID(N'[Pharmacy_Payment_Method]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Pharmacy_Payment_Method] (
+                    [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Pharmacy_Payment_Method] PRIMARY KEY,
+                    [Name] nvarchar(40) NOT NULL,
+                    [Is_Active] bit NOT NULL CONSTRAINT [DF_Pharmacy_Payment_Method_Is_Active] DEFAULT (1),
+                    [Sort_Order] int NOT NULL CONSTRAINT [DF_Pharmacy_Payment_Method_Sort_Order] DEFAULT (0),
+                    [Is_System] bit NOT NULL CONSTRAINT [DF_Pharmacy_Payment_Method_Is_System] DEFAULT (0)
+                );
+                CREATE UNIQUE NONCLUSTERED INDEX [IX_Pharmacy_Payment_Method_Name] ON [Pharmacy_Payment_Method]([Name]);
+            END
+            IF NOT EXISTS (SELECT 1 FROM [Pharmacy_Payment_Method] WHERE [Name] = N'Cash')
+                INSERT INTO [Pharmacy_Payment_Method] ([Name], [Is_Active], [Sort_Order], [Is_System]) VALUES (N'Cash', 1, 0, 1);
+            IF NOT EXISTS (SELECT 1 FROM [Pharmacy_Payment_Method] WHERE [Name] = N'Bank')
+                INSERT INTO [Pharmacy_Payment_Method] ([Name], [Is_Active], [Sort_Order], [Is_System]) VALUES (N'Bank', 1, 1, 1);
+            IF NOT EXISTS (SELECT 1 FROM [Pharmacy_Payment_Method] WHERE [Name] = N'MFS')
+                INSERT INTO [Pharmacy_Payment_Method] ([Name], [Is_Active], [Sort_Order], [Is_System]) VALUES (N'MFS', 1, 2, 1);
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'SKU')
+            BEGIN
+                ALTER TABLE [Service] ADD [SKU] nvarchar(50) NULL;
+            END
+            EXEC(N'UPDATE [Service] SET [SKU] = CONCAT(''MED-'', RIGHT(''00000'' + CAST([ID] AS varchar(10)), 5)) WHERE [Category_ID] = 3 AND ([SKU] IS NULL OR [SKU] = '''');');
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Service_Category_ID_SKU' AND object_id = OBJECT_ID(N'[Service]'))
+                EXEC(N'CREATE UNIQUE NONCLUSTERED INDEX [IX_Service_Category_ID_SKU] ON [Service]([Category_ID], [SKU]) WHERE [SKU] IS NOT NULL AND [SKU] <> '''';');
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Service_Category_ID_Generic_ID' AND object_id = OBJECT_ID(N'[Service]'))
+                CREATE NONCLUSTERED INDEX [IX_Service_Category_ID_Generic_ID] ON [Service]([Category_ID], [Generic_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Service_Category_ID_Type_ID' AND object_id = OBJECT_ID(N'[Service]'))
+                CREATE NONCLUSTERED INDEX [IX_Service_Category_ID_Type_ID] ON [Service]([Category_ID], [Type_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Service_Category_ID_Supplier_ID' AND object_id = OBJECT_ID(N'[Service]'))
+                CREATE NONCLUSTERED INDEX [IX_Service_Category_ID_Supplier_ID] ON [Service]([Category_ID], [Supplier_ID]);
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Medicine_Store_Balance_Service_Expire' AND object_id = OBJECT_ID(N'[Medicine_Store_Balance]'))
+                CREATE NONCLUSTERED INDEX [IX_Medicine_Store_Balance_Service_Expire] ON [Medicine_Store_Balance]([Service_ID], [Expire_Date]) INCLUDE ([Balance], [Medicine_Store_ID]);
             IF OBJECT_ID(N'[AspNetUsers]', N'U') IS NOT NULL
             BEGIN
                 UPDATE [AspNetUsers]
@@ -494,9 +535,11 @@ app.MapPost("/patient/logout", async (SignInManager<AppUser> signInManager) =>
     return Results.LocalRedirect("/patient/login");
 }).DisableAntiforgery().RequireAuthorization(new Microsoft.AspNetCore.Authorization.AuthorizeAttribute { Roles = RoleNames.Patient });
 
-app.MapPost("/account/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager) =>
+app.MapPost("/account/logout", async (HttpContext http, IAntiforgery antiforgery, SignInManager<AppUser> signInManager, UserWorkspacePreferences workspacePreferences) =>
 {
     await antiforgery.ValidateRequestAsync(http);
+    if (int.TryParse(http.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var logoutUserId))
+        workspacePreferences.ClearUser(logoutUserId);
     await signInManager.SignOutAsync();
     return Results.LocalRedirect("/login");
 }).RequireAuthorization("PasswordChangeAllowed");

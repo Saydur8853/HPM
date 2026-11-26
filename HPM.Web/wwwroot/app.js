@@ -1515,6 +1515,34 @@ window.hpm = {
         if (el) {
             el.scrollTo({ top: 0, behavior: 'smooth' });
         }
+    },
+
+    // Keeps the keyboard-highlighted row of a dropdown/list visible.
+    scrollActiveIntoView: function (containerSelector, activeSelector) {
+        var box = document.querySelector(containerSelector);
+        if (!box) return;
+        var active = box.querySelector(activeSelector || '.is-active');
+        if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+    },
+
+    // Page-level hotkeys (F2 / F4 / F9 / Esc) that work even when focus is outside the page root.
+    attachPageHotkeys: function (dotNetRef, keys) {
+        window.hpm.detachPageHotkeys();
+        var wanted = (keys || []).map(function (k) { return k.toLowerCase(); });
+        window.hpm._pageHotkeyHandler = function (e) {
+            var key = (e.key || '').toLowerCase();
+            if (wanted.indexOf(key) < 0) return;
+            if (key.length > 1 && key[0] === 'f') e.preventDefault();
+            dotNetRef.invokeMethodAsync('OnPageHotkey', e.key);
+        };
+        document.addEventListener('keydown', window.hpm._pageHotkeyHandler, true);
+    },
+
+    detachPageHotkeys: function () {
+        if (window.hpm._pageHotkeyHandler) {
+            document.removeEventListener('keydown', window.hpm._pageHotkeyHandler, true);
+            window.hpm._pageHotkeyHandler = null;
+        }
     }
 };
 

@@ -21,6 +21,7 @@ public partial class BulkUploadWidget
     [Parameter, EditorRequired] public string TypeKey { get; set; } = "doctor";
     [Parameter] public EventCallback OnImported { get; set; }
     [Parameter] public bool ShowFullPageGuide { get; set; }
+    [Parameter] public bool ShowExport { get; set; } = true;
 
     private const long MaxFileBytes = 5 * 1024 * 1024;
     private const int MaxRows = 5000;
@@ -97,6 +98,7 @@ public partial class BulkUploadWidget
                 new("SaleRate", true, "Number", "1.20"),
                 new("ReOrderLevel", false, "Whole number", "100"),
                 new("VatApplicable", false, "Yes / No", "No"),
+                new("SKU", false, "Unique SKU / barcode (max 50, blank = auto MED-xxxxx)", ""),
             ]),
         new("canteen", "Canteen Food", "ক্যান্টিন খাবার", "🍽️", LicensedModules.Canteen,
             "Canteen food & products. Category is created automatically if missing. Key: Name.",
@@ -405,7 +407,8 @@ public partial class BulkUploadWidget
                         Dec(m.BuyRate),
                         Dec(m.SaleRate),
                         IntStr(m.ReOrderLevel),
-                        m.IsVATApp == true ? "Yes" : "No"
+                        m.IsVATApp == true ? "Yes" : "No",
+                        m.Sku ?? ""
                     ]);
                 }
                 break;
@@ -854,12 +857,24 @@ public partial class BulkUploadWidget
             .Where(x => !string.IsNullOrWhiteSpace(x.Name)).GroupBy(x => x.Name!.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var toWrite = new List<(ImportRow Row, Service? Existing, string Name)>();
+        var skuOwners = existing.Values
+            .Where(x => !string.IsNullOrWhiteSpace(x.Sku))
+            .GroupBy(x => x.Sku!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Name!.Trim(), StringComparer.OrdinalIgnoreCase);
+        var seenSku = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var r in rows)
         {
             var name = r.Required("Name", 200);
             r.Label = name;
-            r.MaxLen("Type", 100); r.MaxLen("Generic", 200); r.MaxLen("Supplier", 50);
+            r.MaxLen("Type", 100); r.MaxLen("Generic", 200); r.MaxLen("Supplier", 50); r.MaxLen("SKU", 50);
+            if (r.Optional("SKU") is { } sku)
+            {
+                if (!seenSku.Add(sku))
+                    r.Error(L($"SKU '{sku}' ফাইলে একাধিকবার আছে", $"SKU '{sku}' repeats in this file"));
+                else if (skuOwners.TryGetValue(sku, out var owner) && !string.Equals(owner, name, StringComparison.OrdinalIgnoreCase))
+                    r.Error(L($"SKU '{sku}' অন্য ঔষধ ({owner})-এর", $"SKU '{sku}' already belongs to {owner}"));
+            }
             var buy = r.Decimal("BuyRate");
             var sale = r.Decimal("SaleRate", required: true);
             var reorder = r.Int("ReOrderLevel");
@@ -895,6 +910,7 @@ public partial class BulkUploadWidget
             entity.SaleRate = r.Decimal("SaleRate") ?? entity.SaleRate;
             entity.ReOrderLevel = r.Int("ReOrderLevel") ?? entity.ReOrderLevel;
             entity.IsVATApp = r.Bool("VatApplicable") ?? entity.IsVATApp ?? false;
+            if (r.Optional("SKU") is { } sku) entity.Sku = sku.ToUpperInvariant();
         }
     }
 
