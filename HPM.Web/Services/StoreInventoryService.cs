@@ -78,6 +78,19 @@ public sealed class StoreInventoryService(IDbContextFactory<HpmDbContext> dbFact
                 });
                 db.StoreStockLedger.Add(Ledger(now, locationId, l.ProductId, stock.ID, l.Qty, 0, l.Rate, RefGrn, challan.ID, null, $"Invoice {challan.InvoiceNo}", userId));
             }
+
+            // Accounts: each item category goes to its expense (or fixed-asset) head; the supplier is owed.
+            if (challan.Total > 0)
+            {
+                var categoryIds = products.Values.Select(p => p.CategoryID).Distinct().ToArray();
+                var categoryNames = await db.StoreProductCategories.AsNoTracking().Where(c => categoryIds.Contains(c.ID)).ToDictionaryAsync(c => c.ID, c => c.Name);
+                var lines = new List<(int AccountID, decimal Debit, decimal Credit)>();
+                foreach (var g in clean.GroupBy(l => AccountingSetup.StoreCategoryCode(categoryNames.GetValueOrDefault(products[l.ProductId].CategoryID))))
+                    lines.Add((await AccountingSetup.IdAsync(db, g.Key), g.Sum(l => Math.Round(l.Qty * l.Rate, 2)), 0m));
+                lines.Add((await AccountingSetup.IdAsync(db, AccountCodes.StoreSupplierPayable), 0m, challan.Total));
+                await OperationalAccounting.SyncJournalAsync(db, $"STORE-GRN:{challan.ID}", invoiceDate, userId,
+                    $"Store goods received, invoice {challan.InvoiceNo}", lines, "Purchase");
+            }
             await SaveAndRecalcAsync(db, products.Values);
             return challan;
         }, IsolationLevel.Serializable);

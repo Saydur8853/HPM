@@ -84,6 +84,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<AccountHead> AccountHeads => Set<AccountHead>();
     public DbSet<AccountVoucher> AccountVouchers => Set<AccountVoucher>();
     public DbSet<AccountVoucherLine> AccountVoucherLines => Set<AccountVoucherLine>();
+    public DbSet<AccountSetting> AccountSettings => Set<AccountSetting>();
     public DbSet<CashierHandover> CashierHandovers => Set<CashierHandover>();
     public DbSet<FinancialPeriodLock> FinancialPeriodLocks => Set<FinancialPeriodLock>();
     public DbSet<FinancialReversal> FinancialReversals => Set<FinancialReversal>();
@@ -1567,6 +1568,13 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         line.HasOne(x => x.Voucher).WithMany(x => x.Lines).HasForeignKey(x => x.VoucherID).OnDelete(DeleteBehavior.Cascade);
         line.HasOne<AccountHead>().WithMany().HasForeignKey(x => x.AccountID).OnDelete(DeleteBehavior.Restrict);
         line.HasIndex(x => new { x.AccountID, x.VoucherID });
+
+        var accountSetting = b.Entity<AccountSetting>();
+        accountSetting.ToTable("Accounts_Setting", t => t.ExcludeFromMigrations());
+        accountSetting.HasKey(x => x.Key);
+        accountSetting.Property(x => x.Key).HasColumnName("Setting_Key").HasMaxLength(80);
+        accountSetting.Property(x => x.Value).HasColumnName("Setting_Value").HasMaxLength(400);
+        accountSetting.Property(x => x.UpdatedAt).HasColumnName("Updated_At").HasColumnType("datetime");
 
         var handover = b.Entity<CashierHandover>();
         handover.ToTable("Cashier_Handover");

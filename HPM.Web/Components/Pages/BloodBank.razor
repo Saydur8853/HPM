@@ -243,7 +243,7 @@
                 }
                 @if (issueForm.CrossMatchID > 0)
                 {
-                    <EditForm Model="issueForm" OnValidSubmit="IssueUnit" class="inline-form"><DataAnnotationsValidator /><h3>Handover details</h3><label>Received by<InputText @bind-Value="issueForm.ReceivedBy" /></label><label>Ward / location<InputText @bind-Value="issueForm.WardOrLocation" /></label><button class="danger-btn" type="submit">Confirm issue</button><button type="button" @onclick="() => issueForm = new()">Cancel</button></EditForm>
+                    <EditForm Model="issueForm" OnValidSubmit="IssueUnit" class="inline-form"><DataAnnotationsValidator /><h3>Handover details</h3><label>Received by<InputText @bind-Value="issueForm.ReceivedBy" /></label><label>Ward / location<InputText @bind-Value="issueForm.WardOrLocation" /></label><label>Bag charge (৳)<InputNumber @bind-Value="issueForm.ChargeAmount" min="0" step="0.01" /></label><label>Paid by<InputSelect @bind-Value="issueForm.PaymentMethod"><option value="Cash">Cash</option><option value="Bank">Bank</option><option value="MFS">MFS</option></InputSelect></label>@if (issueForm.PaymentMethod != "Cash") { <label>Ref. / Trx ID<InputText @bind-Value="issueForm.PaymentRef" /></label> }<button class="danger-btn" type="submit">Confirm issue</button><button type="button" @onclick="() => issueForm = new()">Cancel</button></EditForm>
                 }
             </article>
         </section>
@@ -387,16 +387,54 @@
         await db.SaveChangesAsync(); matchForm = new(); await Done("Cross-match result saved.");
     }
 
-    private void StartIssue(long id) { issueForm = new BloodIssue { CrossMatchID = id, IssuedAt = DateTime.Now }; }
+    private async Task StartIssue(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        decimal.TryParse(await AccountingSetup.SettingAsync(db, AccountingSetup.BloodBagRateKey), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var rate);
+        issueForm = new BloodIssue { CrossMatchID = id, IssuedAt = DateTime.Now, ChargeAmount = rate, PaymentMethod = "Cash" };
+    }
+
     private async Task IssueUnit()
     {
         if (!RequireOperator()) return;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var match = await db.BloodCrossMatches.Include(x => x.Component).Include(x => x.Requisition).ThenInclude(x => x!.CrossMatches).ThenInclude(x => x.Issue).SingleOrDefaultAsync(x => x.ID == issueForm.CrossMatchID);
-        if (match is null || match.Result != "Compatible" || match.Component?.Status != "Reserved" || match.Component.ExpiresAt <= DateTime.Now) { Fail("Only a compatible, reserved, in-date unit can be issued."); return; }
-        issueForm.IssuedBy = userId; issueForm.IssuedAt = DateTime.Now; issueForm.Status = "Issued"; db.BloodIssues.Add(issueForm); match.Component.Status = "Issued";
-        var issuedCount = match.Requisition!.CrossMatches.Count(x => x.Issue != null) + 1; match.Requisition.Status = issuedCount >= match.Requisition.UnitsRequested ? "Fulfilled" : "Partially Issued";
-        await db.SaveChangesAsync(); issueForm = new(); await Done("Blood component issued with full traceability.");
+        if (issueForm.ChargeAmount < 0) { Fail("Charge cannot be negative."); return; }
+        try
+        {
+            var form = issueForm;
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var match = await db.BloodCrossMatches.Include(x => x.Component).Include(x => x.Requisition).ThenInclude(x => x!.CrossMatches).ThenInclude(x => x.Issue).SingleOrDefaultAsync(x => x.ID == form.CrossMatchID);
+                if (match is null || match.Result != "Compatible" || match.Component?.Status != "Reserved" || match.Component.ExpiresAt <= DateTime.Now)
+                    throw new InvalidOperationException("Only a compatible, reserved, in-date unit can be issued.");
+                var issue = new BloodIssue
+                {
+                    CrossMatchID = form.CrossMatchID, ReceivedBy = form.ReceivedBy, WardOrLocation = form.WardOrLocation,
+                    IssuedBy = userId, IssuedAt = DateTime.Now, Status = "Issued",
+                    ChargeAmount = Math.Round(form.ChargeAmount, 2),
+                    PaymentMethod = form.ChargeAmount > 0 ? (form.PaymentMethod ?? "Cash") : null,
+                    PaymentRef = string.IsNullOrWhiteSpace(form.PaymentRef) ? null : form.PaymentRef.Trim()
+                };
+                db.BloodIssues.Add(issue);
+                match.Component.Status = "Issued";
+                var issuedCount = match.Requisition!.CrossMatches.Count(x => x.Issue != null) + 1;
+                match.Requisition.Status = issuedCount >= match.Requisition.UnitsRequested ? "Fulfilled" : "Partially Issued";
+                await db.SaveChangesAsync();
+                if (issue.ChargeAmount > 0)
+                {
+                    // Blood bag charge is Blood Bank income, received in cash, bank or MFS.
+                    await OperationalAccounting.SyncRevenueAsync(db, $"BLOOD-ISSUE:{issue.ID}", issue.ID, issue.ChargeAmount, issue.IssuedAt, userId,
+                        $"Blood unit {match.Component.ComponentNo} for {match.Requisition.PatientName} ({issue.PaymentMethod}{(issue.PaymentRef == null ? "" : ", Ref " + issue.PaymentRef)})",
+                        await AccountingSetup.PaymentAccountIdAsync(db, issue.PaymentMethod),
+                        AccountingSetup.IsCashMethod(issue.PaymentMethod) ? AccountingPosting.ModuleFlags.BloodBank : null,
+                        await AccountingSetup.IdAsync(db, AccountCodes.BloodBankIncome));
+                    await db.SaveChangesAsync();
+                }
+                return true;
+            });
+            issueForm = new();
+            await Done("Blood component issued with full traceability.");
+        }
+        catch (Exception ex) { Fail(ex.GetBaseException().Message); }
     }
 
     private async Task ReturnIssue(long id)
@@ -411,7 +449,7 @@
     }
 
     private RenderFragment IssueTable(IEnumerable<BloodIssue> rows) => @<div class="table-wrap"><table><thead><tr><th>Unit</th><th>Patient</th><th>Issued</th><th>Received by</th><th>Status</th><th></th></tr></thead><tbody>
-        @foreach (var x in rows) { <tr><td><b>@x.CrossMatch?.Component?.ComponentNo</b><small>@x.CrossMatch?.Component?.BloodGroup · @x.CrossMatch?.Component?.ComponentType</small></td><td>@x.CrossMatch?.Requisition?.PatientName<small>@x.CrossMatch?.Requisition?.PatientID</small></td><td>@x.IssuedAt.ToString("dd MMM, HH:mm")</td><td>@x.ReceivedBy<small>@x.WardOrLocation</small></td><td><span class="status @StatusClass(x.Status)">@x.Status</span></td><td>@if (x.Status == "Issued" && canOperate) { <button class="mini danger-btn" @onclick="() => ReturnIssue(x.ID)">Record returned / discard</button> }</td></tr> }
+        @foreach (var x in rows) { <tr><td><b>@x.CrossMatch?.Component?.ComponentNo</b><small>@x.CrossMatch?.Component?.BloodGroup · @x.CrossMatch?.Component?.ComponentType</small></td><td>@x.CrossMatch?.Requisition?.PatientName<small>@x.CrossMatch?.Requisition?.PatientID</small></td><td>@x.IssuedAt.ToString("dd MMM, HH:mm")@if (x.ChargeAmount > 0) { <small>৳@x.ChargeAmount.ToString("N0") · @x.PaymentMethod</small> }</td><td>@x.ReceivedBy<small>@x.WardOrLocation</small></td><td><span class="status @StatusClass(x.Status)">@x.Status</span></td><td>@if (x.Status == "Issued" && canOperate) { <button class="mini danger-btn" @onclick="() => ReturnIssue(x.ID)">Record returned / discard</button> }</td></tr> }
         </tbody></table></div>
     ;
 

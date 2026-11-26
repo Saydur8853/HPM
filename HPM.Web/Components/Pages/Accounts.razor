@@ -1970,7 +1970,14 @@
         cashCollection = collections.Sum(x => x.Amount);
         var postedIds = vouchers.Where(x => x.IsPosted && x.Status != "Pending" && x.Status != "Rejected").Select(x => x.ID).ToHashSet();
         var postedLines = allLines.Where(x => postedIds.Contains(x.VoucherID)).ToList();
-        glCash = postedLines.Where(x => x.AccountID == AccountingPosting.Cash).Sum(x => x.Debit - x.Credit);
+        // Counter collections are compared with money the GL received (cash + bank + MFS), leaving out
+        // expenses, purchases and supplier/salary payments, which never pass through counter collection.
+        var moneyIds = accounts.Where(x => x.Code is AccountCodes.Cash or AccountCodes.Bank or AccountCodes.Mfs).Select(x => x.ID).ToHashSet();
+        moneyIds.Add(AccountingPosting.Cash);
+        var outflowIds = vouchers.Where(x => x.VoucherType is "Expense" or "Payment" or "Purchase" or "Purchase Return").Select(x => x.ID).ToHashSet();
+        foreach (var r in vouchers.Where(x => x.ReversalOfVoucherID.HasValue && outflowIds.Contains(x.ReversalOfVoucherID.Value)).ToList()) outflowIds.Add(r.ID);
+        var collectionLines = postedLines.Where(x => moneyIds.Contains(x.AccountID) && !outflowIds.Contains(x.VoucherID)).ToList();
+        glCash = collectionLines.Sum(x => x.Debit - x.Credit);
         cashDifference = cashCollection - glCash;
         pendingCount = vouchers.Count(x => x.Status == "Pending");
         var incomeIds = accounts.Where(x => x.AccountType == "Income").Select(x => x.ID).ToHashSet();
@@ -1984,7 +1991,7 @@
 
         var centralByDay = collections.GroupBy(x => x.TransDateCL.Date).ToDictionary(x => x.Key, x => x.Sum(y => y.Amount));
         var voucherDates = vouchers.ToDictionary(x => x.ID, x => x.VoucherDate.Date);
-        var glByDay = postedLines.Where(x => x.AccountID == AccountingPosting.Cash)
+        var glByDay = collectionLines
             .GroupBy(x => voucherDates[x.VoucherID]).ToDictionary(x => x.Key, x => x.Sum(y => y.Debit - y.Credit));
         reconciliationRows = centralByDay.Keys.Union(glByDay.Keys).OrderByDescending(x => x)
             .Select(x => new ReconciliationRow(x, centralByDay.GetValueOrDefault(x), glByDay.GetValueOrDefault(x))).ToList();
@@ -2233,7 +2240,14 @@
             {
                 var end = toDate.Date.AddDays(1);
                 var opd = await db.OPDTickets.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
-                foreach (var x in opd) await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket);
+                foreach (var x in opd)
+                {
+                    var split = await AccountingSetup.OpdSplitAsync(db, x.DoctorID, x.Total);
+                    await OperationalAccounting.SyncRevenueAsync(db, $"OPD-TICKET:{x.ID}", x.ID, x.Total, x.TransDate, uid, $"OPD consultation ticket #{x.ID}", AccountingPosting.Cash, AccountingPosting.ModuleFlags.OpdTicket, split.RevenueId, split.DoctorShare, split.DoctorPayableId);
+                }
+                var diagIncome = await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome);
+                var emgIncome = await AccountingSetup.IdAsync(db, AccountCodes.EmergencyIncome);
+                var otIncome = await AccountingSetup.IdAsync(db, AccountCodes.OtIncome);
                 var memos = await db.EmergencyMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && (x.ModuleID == 11 || x.ModuleID == 2)).ToListAsync();
                 foreach (var x in memos)
                 {
@@ -2241,13 +2255,13 @@
                     var flag = diagnostic ? AccountingPosting.ModuleFlags.Diagnostic : AccountingPosting.ModuleFlags.Emergency;
                     var netAmount = Math.Max(0, x.Total - x.Discount);
                     var paidAmount = Math.Min(x.Paid, netAmount);
-                    await OperationalAccounting.SyncSplitRevenueAsync(db, $"{prefix}:{x.ID}", x.ID, netAmount, paidAmount, x.TransDate, uid, $"{prefix} memo #{x.ID}", x.PatientType == "1" ? flag : null);
+                    await OperationalAccounting.SyncSplitRevenueAsync(db, $"{prefix}:{x.ID}", x.ID, netAmount, paidAmount, x.TransDate, uid, $"{prefix} memo #{x.ID}", x.PatientType == "1" ? flag : null, diagnostic ? diagIncome : emgIncome);
                 }
                 var ot = await db.OTCashMemos.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end).ToListAsync();
                 foreach (var x in ot)
                 {
                     var debit = x.PatientType == "1" ? AccountingPosting.Cash : AccountingPosting.PatientReceivable;
-                    await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{x.ID}", x.ID, Math.Max(0, x.Total - x.Discount), x.TransDate, uid, $"OT cash memo #{x.ID}", debit, x.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null);
+                    await OperationalAccounting.SyncRevenueAsync(db, $"OT-MEMO:{x.ID}", x.ID, Math.Max(0, x.Total - x.Discount), x.TransDate, uid, $"OT cash memo #{x.ID}", debit, x.PatientType == "1" ? AccountingPosting.ModuleFlags.Ot : null, otIncome);
                 }
                 var reversedIds = await db.FinancialReversals.Where(x => x.EntityType == "IPD Money Receipt").Select(x => x.EntityID).ToListAsync();
                 var receipts = await db.IpdMoneyReceipts.Where(x => x.TransDate >= fromDate.Date && x.TransDate < end && !reversedIds.Contains(x.ID)).ToListAsync();

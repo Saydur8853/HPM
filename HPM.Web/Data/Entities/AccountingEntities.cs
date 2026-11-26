@@ -74,6 +74,13 @@ public sealed class FinancialPeriodLock
     [StringLength(500)] public string? UnlockReason { get; set; }
 }
 
+public sealed class AccountSetting
+{
+    [Required, StringLength(80)] public string Key { get; set; } = string.Empty;
+    [StringLength(400)] public string? Value { get; set; }
+    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+}
+
 public sealed class FinancialReversal
 {
     public long ID { get; set; }

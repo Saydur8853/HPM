@@ -1,0 +1,512 @@
+@page "/accounts/profit-loss"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Profit & Loss") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root fin-page">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">📈 @I18n.T("Profit & Loss")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Income")</span><b class="ok">@I18n.FormatCurrency(totalIncome)</b></div>
+            <div class="px-metric"><span>@I18n.T("Expense")</span><b class="bad">@I18n.FormatCurrency(totalExpense)</b></div>
+            <div class="px-metric"><span>@(NetProfit >= 0 ? I18n.T("Net Profit") : I18n.T("Net Loss"))</span><b class="@(NetProfit >= 0 ? "ok" : "bad")">@I18n.FormatCurrency(Math.Abs(NetProfit))</b></div>
+            <div class="px-metric"><span>@I18n.T("Margin")</span><b>@(totalIncome == 0 ? "—" : (NetProfit / totalIncome).ToString("P1"))</b></div>
+            <button type="button" class="px-btn" @onclick='() => PrintAsync("fin-print", $"Profit & Loss {FromDate:dd MMM yyyy} - {ToDate:dd MMM yyyy}")'>🖨 @I18n.T("Print")</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="fin-toolbar">
+        <div class="px-seg">
+            @foreach (var p in new[] { ("today", "Today"), ("7days", "7 Days"), ("month", "This Month"), ("lastmonth", "Last Month"), ("year", "This Year") })
+            {
+                var key = p.Item1;
+                <button type="button" class="@(Preset == key ? "on" : "")" @onclick="() => ApplyPresetAsync(key)">@I18n.T(p.Item2)</button>
+            }
+        </div>
+        <input type="date" value="@FromDate.ToString("yyyy-MM-dd")" @onchange="SetFromAsync" />
+        <span class="muted">→</span>
+        <input type="date" value="@ToDate.ToString("yyyy-MM-dd")" @onchange="SetToAsync" />
+        <div class="px-seg fin-tabs">
+            @foreach (var t in new[] { ("pl", "📊 Profit & Loss"), ("daily", "📅 Daily Book"), ("dept", "🏥 Department-wise"), ("tb", "⚖️ Trial Balance"), ("dues", "🤝 Payables & Dues") })
+            {
+                var key = t.Item1;
+                <button type="button" class="@(tab == key ? "on" : "")" @onclick="() => tab = key">@I18n.T(t.Item2)</button>
+            }
+        </div>
+    </div>
+
+    <div class="fin-scroll" id="fin-print">
+        @if (loading)
+        {
+            <div class="px-loading">@I18n.T("Loading accounts…")</div>
+        }
+        else if (tab == "pl")
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Profit & Loss Statement") · @FromDate.ToString("dd MMM yyyy") – @ToDate.ToString("dd MMM yyyy")</div></div>
+            @if (uncategorisedWarning)
+            {
+                <div class="px-note-box review">⚠️ @I18n.T("Some income is still in the general \"Hospital Service Revenue\" head. Use \"Repost operational journals\" in General Ledger to move old entries to department heads.")</div>
+            }
+            @if (doctorShareNotSet)
+            {
+                <div class="px-note-box review">ℹ️ @I18n.T("Doctor share of the OPD visit fee is 0%, so the full fee is counted as hospital income.") <a href="/accounts/setup">@I18n.T("Set doctor share")</a></div>
+            }
+            <div class="fin-grid">
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>💰 @I18n.T("Income")</h2></div><b class="ok-text">@I18n.FormatCurrency(totalIncome)</b></header>
+                    @StatementTable(incomeRows, prevIncome, true)
+                </section>
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>🧾 @I18n.T("Expense")</h2></div><b class="bad-text">@I18n.FormatCurrency(totalExpense)</b></header>
+                    @StatementTable(expenseRows, prevExpense, false)
+                </section>
+            </div>
+
+            <section class="px-card fin-card fin-result @(NetProfit >= 0 ? "profit" : "loss")">
+                <div class="fin-result-line"><span>@I18n.T("Total Income")</span><b>@I18n.FormatCurrency(totalIncome)</b></div>
+                <div class="fin-result-line"><span>− @I18n.T("Total Expense")</span><b>@I18n.FormatCurrency(totalExpense)</b></div>
+                <div class="fin-result-line total"><span>= @(NetProfit >= 0 ? I18n.T("Net Profit") : I18n.T("Net Loss"))</span><b>@I18n.FormatCurrency(Math.Abs(NetProfit))</b></div>
+                <div class="fin-result-sub">
+                    @I18n.T("Previous period") (@PrevFrom.ToString("dd MMM") – @PrevTo.ToString("dd MMM")):
+                    <b>@I18n.FormatCurrency(prevIncome.Values.Sum() - prevExpense.Values.Sum())</b>
+                    @if (capitalPurchases > 0)
+                    {
+                        <span> · 🏗 @I18n.T("Equipment & furniture bought (asset, not expense)"): <b>@I18n.FormatCurrency(capitalPurchases)</b></span>
+                    }
+                </div>
+            </section>
+
+            <section class="px-card fin-card">
+                <header class="px-card-head"><div class="px-card-title"><h2>📅 @I18n.T("Last 6 months")</h2></div><span class="muted">@I18n.T("Income vs expense by month")</span></header>
+                <div class="fin-trend">
+                    @{ var max = Math.Max(1, trend.Count == 0 ? 1 : trend.Max(m => Math.Max(m.Income, m.Expense))); }
+                    @foreach (var m in trend)
+                    {
+                        <div class="fin-trend-col">
+                            <div class="fin-trend-bars">
+                                <span class="inc" style="height:@Pct(m.Income, max)%" title="@I18n.T("Income") @I18n.FormatCurrency(m.Income)"></span>
+                                <span class="exp" style="height:@Pct(m.Expense, max)%" title="@I18n.T("Expense") @I18n.FormatCurrency(m.Expense)"></span>
+                            </div>
+                            <b class="@(m.Income - m.Expense >= 0 ? "ok-text" : "bad-text")">@Short(m.Income - m.Expense)</b>
+                            <small>@m.Month.ToString("MMM yy")</small>
+                        </div>
+                    }
+                </div>
+                <div class="fin-legend"><span class="inc"></span>@I18n.T("Income") <span class="exp"></span>@I18n.T("Expense") · @I18n.T("Figure under each month = profit")</div>
+            </section>
+        }
+        else if (tab == "daily")
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Daily Book") · @FromDate.ToString("dd MMM yyyy") – @ToDate.ToString("dd MMM yyyy")</div></div>
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>📅 @I18n.T("Daily Book")</h2></div>
+                    <label class="px-toggle no-print"><input type="checkbox" @bind="hideEmptyDays" /> @I18n.T("Hide days with no entry")</label>
+                </header>
+                <div class="fin-table-wrap">
+                    <table class="fin-table">
+                        <thead>
+                            <tr>
+                                <th>@I18n.T("Date")</th>
+                                <th class="r">@I18n.T("Income")</th><th class="r">@I18n.T("Expense")</th><th class="r">@I18n.T("Profit / Loss")</th>
+                                <th class="r">💵 @I18n.T("Cash In")</th><th class="r">🏦 @I18n.T("Bank In")</th><th class="r">📱 @I18n.T("MFS In")</th><th class="r">@I18n.T("Total Collection")</th>
+                                <th class="r">@I18n.T("Paid Out")</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var d in dailyRows.Where(d => !hideEmptyDays || !d.IsEmpty))
+                            {
+                                <tr class="@(d.Date.DayOfWeek == DayOfWeek.Friday ? "weekend" : "")">
+                                    <td><b>@d.Date.ToString("dd MMM")</b> <small class="muted">@d.Date.ToString("ddd")</small></td>
+                                    <td class="r">@Money(d.Income)</td>
+                                    <td class="r">@Money(d.Expense)</td>
+                                    <td class="r strong @(d.Income - d.Expense >= 0 ? "ok-text" : "bad-text")">@(d.Income == 0 && d.Expense == 0 ? "—" : I18n.FormatCurrency(d.Income - d.Expense))</td>
+                                    <td class="r">@Money(d.CashIn)</td>
+                                    <td class="r">@Money(d.BankIn)</td>
+                                    <td class="r">@Money(d.MfsIn)</td>
+                                    <td class="r strong">@Money(d.CashIn + d.BankIn + d.MfsIn)</td>
+                                    <td class="r">@Money(d.PaidOut)</td>
+                                </tr>
+                            }
+                            @if (dailyRows.Count == 0) { <tr><td colspan="9" class="muted">@I18n.T("Nothing recorded in this period.")</td></tr> }
+                        </tbody>
+                        <tfoot>
+                            <tr class="grand">
+                                <td>@I18n.T("Total")</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.Income))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.Expense))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.Income - x.Expense))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.CashIn))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.BankIn))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.MfsIn))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.CashIn + x.BankIn + x.MfsIn))</td>
+                                <td class="r">@I18n.FormatCurrency(dailyRows.Sum(x => x.PaidOut))</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <div class="fin-card-foot muted">@I18n.T("Income and expense are accrual (bill date). Collection is money actually received in cash, bank or MFS; Paid Out is money spent on expenses, purchases, salaries and dues.")</div>
+            </section>
+        }
+        else if (tab == "dept")
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Department-wise Profitability") · @FromDate.ToString("dd MMM yyyy") – @ToDate.ToString("dd MMM yyyy")</div></div>
+            <section class="px-card fin-card">
+                <header class="px-card-head"><div class="px-card-title"><h2>🏥 @I18n.T("What each department earns")</h2></div><span class="muted">@I18n.T("Income − its own direct cost = contribution")</span></header>
+                <table class="fin-table">
+                    <thead><tr><th>@I18n.T("Department")</th><th class="r">@I18n.T("Income")</th><th class="r">@I18n.T("Direct Cost")</th><th class="r">@I18n.T("Contribution")</th><th style="width:28%">@I18n.T("Share of income")</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in deptRows)
+                        {
+                            <tr>
+                                <td><b>@I18n.T(d.Name)</b><small class="muted d-block">@d.CostNote</small></td>
+                                <td class="r">@I18n.FormatCurrency(d.Income)</td>
+                                <td class="r">@(d.Cost == 0 ? "—" : I18n.FormatCurrency(d.Cost))</td>
+                                <td class="r strong @(d.Income - d.Cost >= 0 ? "ok-text" : "bad-text")">@I18n.FormatCurrency(d.Income - d.Cost)</td>
+                                <td><div class="px-bar"><span style="width:@Pct(d.Income, Math.Max(1, totalIncome))%"></span></div></td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr><td>@I18n.T("Total contribution")</td><td class="r">@I18n.FormatCurrency(deptRows.Sum(x => x.Income))</td><td class="r">@I18n.FormatCurrency(deptRows.Sum(x => x.Cost))</td><td class="r">@I18n.FormatCurrency(deptRows.Sum(x => x.Income - x.Cost))</td><td></td></tr>
+                        <tr><td>− @I18n.T("Shared costs (salary, utilities, operations, discounts)")</td><td></td><td class="r">@I18n.FormatCurrency(sharedCost)</td><td class="r">@I18n.FormatCurrency(-sharedCost)</td><td></td></tr>
+                        <tr class="grand"><td>= @(NetProfit >= 0 ? I18n.T("Net Profit") : I18n.T("Net Loss"))</td><td></td><td></td><td class="r">@I18n.FormatCurrency(NetProfit)</td><td></td></tr>
+                    </tfoot>
+                </table>
+            </section>
+        }
+        else if (tab == "tb")
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Trial Balance as on") @ToDate.ToString("dd MMM yyyy")</div></div>
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>⚖️ @I18n.T("Trial Balance as on") @ToDate.ToString("dd MMM yyyy")</h2></div>
+                    @if (tbRows.Sum(x => x.Debit) == tbRows.Sum(x => x.Credit)) { <span class="px-tag green">✓ @I18n.T("Balanced")</span> }
+                    else { <span class="px-tag red">@I18n.T("Not balanced")</span> }
+                </header>
+                <table class="fin-table">
+                    <thead><tr><th>@I18n.T("Code")</th><th>@I18n.T("Account Head")</th><th>@I18n.T("Type")</th><th class="r">@I18n.T("Debit")</th><th class="r">@I18n.T("Credit")</th></tr></thead>
+                    <tbody>
+                        @foreach (var r in tbRows)
+                        {
+                            <tr><td class="muted">@r.Code</td><td>@r.Name</td><td><span class="px-tag @TypeTag(r.Type)">@I18n.T(r.Type)</span></td><td class="r">@(r.Debit == 0 ? "" : I18n.FormatCurrency(r.Debit))</td><td class="r">@(r.Credit == 0 ? "" : I18n.FormatCurrency(r.Credit))</td></tr>
+                        }
+                    </tbody>
+                    <tfoot><tr class="grand"><td colspan="3">@I18n.T("Total")</td><td class="r">@I18n.FormatCurrency(tbRows.Sum(x => x.Debit))</td><td class="r">@I18n.FormatCurrency(tbRows.Sum(x => x.Credit))</td></tr></tfoot>
+                </table>
+            </section>
+        }
+        else
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Payables & Dues as on") @ToDate.ToString("dd MMM yyyy")</div></div>
+            <div class="fin-grid">
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>🤝 @I18n.T("Hospital owes (payable)")</h2></div><b class="bad-text">@I18n.FormatCurrency(payables.Sum(x => x.Amount))</b></header>
+                    <table class="fin-table">
+                        <tbody>
+                            @foreach (var p in payables)
+                            {
+                                <tr><td>@p.Name</td><td class="r strong">@I18n.FormatCurrency(p.Amount)</td></tr>
+                            }
+                            @if (payables.Count == 0) { <tr><td class="muted">@I18n.T("Nothing is owed.")</td><td></td></tr> }
+                        </tbody>
+                    </table>
+                    <div class="fin-card-foot"><a class="px-btn sm" href="/accounts/expenses">💸 @I18n.T("Pay dues")</a></div>
+                </section>
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>📥 @I18n.T("Hospital will receive")</h2></div><b class="ok-text">@I18n.FormatCurrency(receivables.Sum(x => x.Amount))</b></header>
+                    <table class="fin-table">
+                        <tbody>
+                            @foreach (var p in receivables)
+                            {
+                                <tr><td>@p.Name</td><td class="r strong">@I18n.FormatCurrency(p.Amount)</td></tr>
+                            }
+                            @if (receivables.Count == 0) { <tr><td class="muted">@I18n.T("Nothing to receive.")</td><td></td></tr> }
+                        </tbody>
+                    </table>
+                    <header class="px-card-head"><div class="px-card-title"><h2>🏦 @I18n.T("Cash & bank balance")</h2></div><b>@I18n.FormatCurrency(moneyBalances.Sum(x => x.Amount))</b></header>
+                    <table class="fin-table">
+                        <tbody>
+                            @foreach (var p in moneyBalances) { <tr><td>@p.Name</td><td class="r strong">@I18n.FormatCurrency(p.Amount)</td></tr> }
+                        </tbody>
+                    </table>
+                </section>
+            </div>
+
+            <section class="px-card fin-card">
+                <header class="px-card-head"><div class="px-card-title"><h2>👨‍⚕️ @I18n.T("Doctor earnings & payments")</h2></div><span class="muted">@I18n.T("Doctor's income = hospital's expense or payable")</span></header>
+                <table class="fin-table">
+                    <thead><tr><th>@I18n.T("Doctor")</th><th class="r">@I18n.T("Visit Fee Share")</th><th class="r">@I18n.T("Referral Commission")</th><th class="r">@I18n.T("Salary / Fees")</th><th class="r">@I18n.T("Paid")</th><th class="r">@I18n.T("Due")</th></tr></thead>
+                    <tbody>
+                        @foreach (var d in doctorRows)
+                        {
+                            <tr>
+                                <td><b>@d.Name</b></td>
+                                <td class="r">@Money(d.VisitShare)</td>
+                                <td class="r">@Money(d.Commission)</td>
+                                <td class="r">@Money(d.Salary)</td>
+                                <td class="r">@Money(d.Paid)</td>
+                                <td class="r strong @(d.Due > 0 ? "bad-text" : "")">@I18n.FormatCurrency(d.Due)</td>
+                            </tr>
+                        }
+                        @if (doctorRows.Count == 0) { <tr><td colspan="6" class="muted">@I18n.T("No doctor earnings recorded yet.")</td></tr> }
+                    </tbody>
+                    @if (doctorRows.Count > 0)
+                    {
+                        <tfoot><tr class="grand"><td>@I18n.T("Total")</td><td class="r">@I18n.FormatCurrency(doctorRows.Sum(x => x.VisitShare))</td><td class="r">@I18n.FormatCurrency(doctorRows.Sum(x => x.Commission))</td><td class="r">@I18n.FormatCurrency(doctorRows.Sum(x => x.Salary))</td><td class="r">@I18n.FormatCurrency(doctorRows.Sum(x => x.Paid))</td><td class="r">@I18n.FormatCurrency(doctorRows.Sum(x => x.Due))</td></tr></tfoot>
+                    }
+                </table>
+                <div class="fin-card-foot muted">@I18n.T("Visit share and commission are totals up to the selected end date. Salary / Fees shows only amounts recorded for a selected doctor.")</div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private sealed record StatementRow(string Group, int HeadId, string Code, string Name, decimal Amount);
+    private sealed record DeptRow(string Name, decimal Income, decimal Cost, string CostNote);
+    private sealed record TbRow(string Code, string Name, string Type, decimal Debit, decimal Credit);
+    private sealed record AmountRow(string Name, decimal Amount);
+    private sealed record MonthRow(DateTime Month, decimal Income, decimal Expense);
+    private sealed class DailyRow
+    {
+        public DateTime Date; public decimal Income, Expense, CashIn, BankIn, MfsIn, PaidOut;
+        public bool IsEmpty => Income == 0 && Expense == 0 && CashIn == 0 && BankIn == 0 && MfsIn == 0 && PaidOut == 0;
+    }
+    private List<DailyRow> dailyRows = [];
+    private bool hideEmptyDays;
+
+    private sealed class DoctorRow { public string Name = ""; public decimal VisitShare, Commission, Salary, Paid; public decimal Due => VisitShare + Commission + Salary - Paid; }
+
+    private string tab = "pl";
+    private bool loading = true, uncategorisedWarning, doctorShareNotSet;
+    private List<StatementRow> incomeRows = [], expenseRows = [];
+    private Dictionary<int, decimal> prevIncome = [], prevExpense = [];
+    private decimal totalIncome, totalExpense, capitalPurchases, sharedCost;
+    private List<DeptRow> deptRows = [];
+    private List<TbRow> tbRows = [];
+    private List<AmountRow> payables = [], receivables = [], moneyBalances = [];
+    private List<MonthRow> trend = [];
+    private List<DoctorRow> doctorRows = [];
+
+    private decimal NetProfit => totalIncome - totalExpense;
+    private DateTime PrevTo => FromDate.AddDays(-1);
+    private DateTime PrevFrom => FromDate.AddDays(-((ToDate - FromDate).Days + 1));
+
+    private static readonly string[] DeptOrder = ["OPD", "Diagnostics & Lab", "Pharmacy", "IPD", "Emergency", "OT", "Blood Bank", "Canteen", "Other Services"];
+
+    protected override async Task OnFinanceInitializedAsync() => await LoadAsync();
+    protected override Task OnRangeChangedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var trendFrom = new DateTime(ToDate.Year, ToDate.Month, 1).AddMonths(-5);
+            var allToDate = await PostedLinesAsync(db, null, ToDate);
+            var headById = Heads.ToDictionary(h => h.ID);
+            var incomeIds = Heads.Where(h => h.AccountType == "Income").Select(h => h.ID).ToHashSet();
+            var expenseIds = Heads.Where(h => h.AccountType == "Expense").Select(h => h.ID).ToHashSet();
+
+            var period = allToDate.Where(l => l.Date >= FromDate.Date).ToList();
+            var prev = allToDate.Where(l => l.Date >= PrevFrom.Date && l.Date <= PrevTo.Date).ToList();
+
+            incomeRows = Rows(period, incomeIds, true);
+            expenseRows = Rows(period, expenseIds, false);
+            totalIncome = incomeRows.Sum(x => x.Amount);
+            totalExpense = expenseRows.Sum(x => x.Amount);
+            prevIncome = prev.Where(l => incomeIds.Contains(l.AccountID)).GroupBy(l => l.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Credit - x.Debit));
+            prevExpense = prev.Where(l => expenseIds.Contains(l.AccountID)).GroupBy(l => l.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Debit - x.Credit));
+            var fixedIds = Heads.Where(h => AccountingSetup.GroupOf(h) == "Fixed Assets").Select(h => h.ID).ToHashSet();
+            capitalPurchases = period.Where(l => fixedIds.Contains(l.AccountID)).Sum(l => l.Debit - l.Credit);
+            uncategorisedWarning = incomeRows.Any(x => x.Code == AccountCodes.HospitalRevenue && x.Amount != 0);
+            doctorShareNotSet = await AccountingSetup.DoctorVisitSharePercentAsync(db, 0) == 0
+                                && !(await db.AccountSettings.AsNoTracking().AnyAsync(x => x.Key.StartsWith(AccountingSetup.DoctorVisitShareKey + ":")));
+
+            // department contribution
+            var codeOf = Heads.ToDictionary(h => h.ID, h => h.Code);
+            deptRows = [];
+            var directExpenseIds = new HashSet<int>();
+            foreach (var dept in DeptOrder)
+            {
+                var inc = incomeRows.Where(r => r.Group == dept).Sum(r => r.Amount);
+                var costHeads = expenseRows.Where(r => r.Group == dept || (dept == "Diagnostics & Lab" && r.Code == AccountCodes.DoctorCommission)).ToList();
+                foreach (var c in costHeads) directExpenseIds.Add(c.HeadId);
+                var cost = costHeads.Sum(r => r.Amount);
+                if (inc == 0 && cost == 0) continue;
+                deptRows.Add(new DeptRow(dept, inc, cost, costHeads.Count == 0 ? "" : string.Join(", ", costHeads.Select(c => c.Name))));
+            }
+            sharedCost = expenseRows.Where(r => !directExpenseIds.Contains(r.HeadId)).Sum(r => r.Amount);
+
+            // trial balance
+            tbRows = allToDate.GroupBy(l => l.AccountID)
+                .Select(g =>
+                {
+                    var net = g.Sum(x => x.Debit - x.Credit);
+                    var h = headById.GetValueOrDefault(g.Key);
+                    return new TbRow(h?.Code ?? "", h?.Name ?? $"#{g.Key}", h?.AccountType ?? "", net > 0 ? net : 0, net < 0 ? -net : 0);
+                })
+                .Where(r => r.Debit != 0 || r.Credit != 0)
+                .OrderBy(r => r.Code).ToList();
+
+            // balances
+            var balance = allToDate.GroupBy(l => l.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Debit - x.Credit));
+            payables = Heads.Where(h => h.AccountType == "Liability" && balance.GetValueOrDefault(h.ID) != 0)
+                .Select(h => new AmountRow(h.Name, -balance[h.ID])).OrderByDescending(x => x.Amount).ToList();
+            var moneyCodes = new[] { AccountCodes.Cash, AccountCodes.Bank, AccountCodes.Mfs };
+            receivables = Heads.Where(h => AccountingSetup.GroupOf(h) == "Receivables" && balance.GetValueOrDefault(h.ID) != 0)
+                .Select(h => new AmountRow(h.Name, balance[h.ID])).ToList();
+            moneyBalances = Heads.Where(h => moneyCodes.Contains(h.Code))
+                .Select(h => new AmountRow(h.Name, balance.GetValueOrDefault(h.ID))).ToList();
+
+            // monthly trend (by voucher date month)
+            trend = [];
+            for (var m = trendFrom; m <= ToDate; m = m.AddMonths(1))
+            {
+                var mEnd = m.AddMonths(1);
+                var lines = allToDate.Where(l => l.Date >= m && l.Date < mEnd).ToList();
+                trend.Add(new MonthRow(m,
+                    lines.Where(l => incomeIds.Contains(l.AccountID)).Sum(l => l.Credit - l.Debit),
+                    lines.Where(l => expenseIds.Contains(l.AccountID)).Sum(l => l.Debit - l.Credit)));
+            }
+
+            // daily book: one row per day of the range
+            var cashId = Head(AccountCodes.Cash)?.ID ?? AccountingPosting.Cash;
+            var bankId = Head(AccountCodes.Bank)?.ID ?? -1;
+            var mfsId = Head(AccountCodes.Mfs)?.ID ?? -1;
+            var byDay = period.GroupBy(l => l.Date.Date).ToDictionary(g => g.Key, g => g.ToList());
+            dailyRows = [];
+            for (var day = FromDate.Date; day <= ToDate.Date; day = day.AddDays(1))
+            {
+                var row = new DailyRow { Date = day };
+                if (byDay.TryGetValue(day, out var dl))
+                {
+                    row.Income = dl.Where(l => incomeIds.Contains(l.AccountID)).Sum(l => l.Credit - l.Debit);
+                    row.Expense = dl.Where(l => expenseIds.Contains(l.AccountID)).Sum(l => l.Debit - l.Credit);
+                    var inflow = dl.Where(l => !PostedLine.IsOutflowType(l.SourceType)).ToList();
+                    row.CashIn = inflow.Where(l => l.AccountID == cashId).Sum(l => l.Debit - l.Credit);
+                    row.BankIn = inflow.Where(l => l.AccountID == bankId).Sum(l => l.Debit - l.Credit);
+                    row.MfsIn = inflow.Where(l => l.AccountID == mfsId).Sum(l => l.Debit - l.Credit);
+                    row.PaidOut = dl.Where(l => PostedLine.IsOutflowType(l.SourceType) && (l.AccountID == cashId || l.AccountID == bankId || l.AccountID == mfsId))
+                        .Sum(l => l.Credit - l.Debit);
+                }
+                dailyRows.Add(row);
+            }
+
+            await LoadDoctorRowsAsync(db, allToDate);
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { loading = false; }
+
+        List<StatementRow> Rows(List<PostedLine> lines, HashSet<int> ids, bool income) =>
+            lines.Where(l => ids.Contains(l.AccountID)).GroupBy(l => l.AccountID)
+                .Select(g =>
+                {
+                    var h = Heads.First(x => x.ID == g.Key);
+                    var amt = income ? g.Sum(x => x.Credit - x.Debit) : g.Sum(x => x.Debit - x.Credit);
+                    return new StatementRow(AccountingSetup.GroupOf(h), h.ID, h.Code, h.Name, amt);
+                })
+                .Where(r => r.Amount != 0)
+                .OrderBy(r => Array.IndexOf(DeptOrder, r.Group) is var i && i < 0 ? 99 : i).ThenBy(r => r.Group).ThenBy(r => r.Code)
+                .ToList();
+    }
+
+    private async Task LoadDoctorRowsAsync(HpmDbContext db, List<PostedLine> allToDate)
+    {
+        var payableId = Head(AccountCodes.DoctorPayable)?.ID ?? -1;
+        var salaryId = Head(AccountCodes.DoctorSalary)?.ID ?? -1;
+        var relevant = allToDate.Where(l => l.AccountID == payableId || l.AccountID == salaryId).ToList();
+        var ticketIds = new HashSet<long>();
+        var memoIds = new HashSet<long>();
+        foreach (var l in relevant)
+        {
+            if (TryId(l.Reference, "OPD-TICKET:", out var t)) ticketIds.Add(t);
+            else if (TryId(l.Reference, "DOCTOR-COMMISSION:DIAGNOSTIC:", out var m)) memoIds.Add(m);
+        }
+        var ticketDoctor = ticketIds.Count == 0 ? [] : await db.OPDTickets.AsNoTracking().Where(x => ticketIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.DoctorID);
+        var memoDoctor = memoIds.Count == 0 ? [] : await db.EmergencyMemos.AsNoTracking().Where(x => memoIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.DoctorID ?? 0);
+        var names = await db.Doctors.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Name);
+
+        var rows = new Dictionary<int, DoctorRow>();
+        DoctorRow Row(int id) => rows.TryGetValue(id, out var r) ? r : rows[id] = new DoctorRow { Name = names.GetValueOrDefault(id) ?? $"Doctor #{id}" };
+        foreach (var l in relevant)
+        {
+            int doctorId;
+            if (TryId(l.Reference, "OPD-TICKET:", out var t) && ticketDoctor.TryGetValue(t, out doctorId)) Row(doctorId).VisitShare += l.Credit - l.Debit;
+            else if (TryId(l.Reference, "DOCTOR-COMMISSION:DIAGNOSTIC:", out var m) && memoDoctor.TryGetValue(m, out doctorId) && l.AccountID == payableId) Row(doctorId).Commission += l.Credit - l.Debit;
+            else if (TryDoctorRef(l.Reference, out doctorId))
+            {
+                if (l.AccountID == payableId)
+                {
+                    // fee recorded as due adds to what is owed; a payment reduces it
+                    Row(doctorId).Salary += l.Credit;
+                    Row(doctorId).Paid += l.Debit;
+                }
+                else if (l.AccountID == salaryId && !relevant.Any(x => x.VoucherID == l.VoucherID && x.AccountID == payableId))
+                {
+                    // salary paid straight from cash/bank: earned and paid at once
+                    Row(doctorId).Salary += l.Debit - l.Credit;
+                    Row(doctorId).Paid += l.Debit - l.Credit;
+                }
+            }
+        }
+        doctorRows = rows.Values.Where(r => r.VisitShare != 0 || r.Commission != 0 || r.Salary != 0 || r.Paid != 0).OrderByDescending(r => r.Due).ToList();
+
+        static bool TryId(string? reference, string prefix, out long id)
+        {
+            id = 0;
+            return reference is not null && reference.StartsWith(prefix, StringComparison.Ordinal) && long.TryParse(reference[prefix.Length..], out id);
+        }
+        static bool TryDoctorRef(string? reference, out int id)
+        {
+            id = 0;
+            if (reference is null || !reference.StartsWith("DOCTOR:", StringComparison.Ordinal)) return false;
+            var raw = reference[7..].Split('|')[0];
+            return int.TryParse(raw, out id);
+        }
+    }
+
+    private RenderFragment StatementTable(List<StatementRow> rows, Dictionary<int, decimal> prevMap, bool income) => __builder =>
+    {
+        <table class="fin-table">
+            <thead><tr><th>@I18n.T("Head")</th><th class="r">@I18n.T("This period")</th><th class="r">@I18n.T("Previous")</th></tr></thead>
+            <tbody>
+                @foreach (var g in rows.GroupBy(r => r.Group))
+                {
+                    <tr class="group"><td>@I18n.T(g.Key)</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Amount))</td><td class="r muted">@I18n.FormatCurrency(g.Sum(x => prevMap.GetValueOrDefault(x.HeadId)))</td></tr>
+                    @foreach (var r in g)
+                    {
+                        var before = prevMap.GetValueOrDefault(r.HeadId);
+                        <tr>
+                            <td class="indent">@r.Name <small class="muted">@r.Code</small></td>
+                            <td class="r">@I18n.FormatCurrency(r.Amount)</td>
+                            <td class="r muted">@(before == 0 ? "—" : I18n.FormatCurrency(before)) @Change(r.Amount, before, income)</td>
+                        </tr>
+                    }
+                }
+                @if (rows.Count == 0) { <tr><td colspan="3" class="muted">@I18n.T("Nothing recorded in this period.")</td></tr> }
+            </tbody>
+        </table>
+    };
+
+    private static MarkupString Change(decimal now, decimal before, bool income)
+    {
+        if (before == 0 || now == before) return new("");
+        var pct = (now - before) / Math.Abs(before);
+        var good = income ? pct > 0 : pct < 0;
+        return new($"<span class=\"fin-chg {(good ? "up" : "down")}\">{(pct > 0 ? "▲" : "▼")}{Math.Abs(pct):P0}</span>");
+    }
+
+    private string Money(decimal v) => v == 0 ? "—" : I18n.FormatCurrency(v);
+    private static string Pct(decimal v, decimal max) => (max <= 0 ? 0 : Math.Clamp(v / max * 100, 0, 100)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Short(decimal v) => Math.Abs(v) >= 100000 ? $"{v / 100000:0.#}L" : Math.Abs(v) >= 1000 ? $"{v / 1000:0.#}K" : v.ToString("0");
+    private static string TypeTag(string t) => t switch { "Asset" => "blue", "Liability" => "amber", "Income" => "green", "Expense" => "red", _ => "violet" };
+}

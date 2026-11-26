@@ -1984,11 +1984,28 @@
                         Against = receipt.Against
                     });
 
-                if (netAmount > 0)
-                    AccountingPosting.AddPostedVoucher(db, "Journal", curDischargeDate,
-                        $"IPD final bill #{bill.BillNo} for {entity.RegNo}", $"IPD-FINAL-BILL:{bill.BillNo}", userId,
-                        (AccountingPosting.PatientReceivable, netAmount, 0),
-                        (AccountingPosting.HospitalRevenue, 0, netAmount));
+                // IPD-credit pharmacy sales and IPD diagnostic memos already posted their own income and
+                // patient receivable when they were billed. Only the rest of the bill is income here,
+                // otherwise those amounts would be counted twice. Bed charges get their own income head
+                // and the discount is shown as an expense so gross income stays visible.
+                var pharmacyPosted = await db.PatientTransactions.AsNoTracking()
+                    .Where(x => x.RegNo == entity.RegNo && x.TransDate <= curDischargeDate)
+                    .SumAsync(x => (decimal?)(x.ServiceRate * x.Quantity)) ?? 0;
+                var diagnosticPosted = snapshot.ServiceItems
+                    .Where(x => x.Remarks != null && x.Remarks.StartsWith("[DIAGNOSTIC", StringComparison.Ordinal))
+                    .Sum(x => x.Total);
+                var postedElsewhere = Math.Clamp(pharmacyPosted + diagnosticPosted, 0, snapshot.GrossAmount);
+                var bedIncome = Math.Min(snapshot.BedCharges, snapshot.GrossAmount - postedElsewhere);
+                var serviceIncome = snapshot.GrossAmount - postedElsewhere - bedIncome;
+                var finalLines = new List<(int AccountID, decimal Debit, decimal Credit)>
+                {
+                    (AccountingPosting.PatientReceivable, netAmount - postedElsewhere, 0),
+                    (await AccountingSetup.IdAsync(db, AccountCodes.DiscountAllowed), curDiscountAmount, 0),
+                    (await AccountingSetup.IdAsync(db, AccountCodes.IpdBedIncome), 0, bedIncome),
+                    (await AccountingSetup.IdAsync(db, AccountCodes.IpdServiceIncome), 0, serviceIncome)
+                };
+                await OperationalAccounting.SyncJournalAsync(db, $"IPD-FINAL-BILL:{bill.BillNo}", curDischargeDate, userId,
+                    $"IPD final bill #{bill.BillNo} for {entity.RegNo}", finalLines);
 
                 if (appliedAdvanceAmount > 0)
                     AccountingPosting.AddPostedVoucher(db, "Journal", curDischargeDate,

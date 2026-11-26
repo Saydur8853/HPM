@@ -1027,6 +1027,15 @@
             .Where(x => x.TransDate >= start && x.TransDate < end)
             .ToListAsync();
 
+        // 7b. Canteen sales and blood bag charges
+        var canteenSales = await db.CanteenSales.AsNoTracking()
+            .Where(x => x.TransDate >= start && x.TransDate < end)
+            .ToListAsync();
+        var bloodIssues = await db.BloodIssues.AsNoTracking()
+            .Where(x => x.IssuedAt >= start && x.IssuedAt < end && x.ChargeAmount > 0)
+            .ToListAsync();
+        static decimal CanteenNet(CanteenSale x) => Math.Max(0, (x.Total ?? 0) - (x.Discount ?? 0));
+
         // 8. Returns & Reversals
         var diagReturns = await db.DiagnosticCashMemoReturns.AsNoTracking()
             .Where(x => x.TransDate >= start && x.TransDate < end && x.Status == "Posted")
@@ -1097,6 +1106,22 @@
                 pharmacyMemos.Sum(x => x.Discount ?? 0),
                 pharmacyMemos.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0)),
                 pharmacyMemos.Sum(x => (x.Total ?? 0) - (x.Discount ?? 0)),
+                0),
+
+            new("🍽️", I18n.T("Canteen Sales", "ক্যান্টিন বিক্রয়"),
+                canteenSales.Count,
+                canteenSales.Sum(x => x.Total ?? 0),
+                canteenSales.Sum(x => x.Discount ?? 0),
+                canteenSales.Sum(CanteenNet),
+                canteenSales.Where(x => x.CustomerType != "Credit").Sum(CanteenNet),
+                canteenSales.Where(x => x.CustomerType == "Credit").Sum(CanteenNet)),
+
+            new("🩸", I18n.T("Blood Bank (blood bags)", "ব্লাড ব্যাংক (রক্তের ব্যাগ)"),
+                bloodIssues.Count,
+                bloodIssues.Sum(x => x.ChargeAmount),
+                0,
+                bloodIssues.Sum(x => x.ChargeAmount),
+                bloodIssues.Sum(x => x.ChargeAmount),
                 0)
         ];
 
@@ -1128,6 +1153,8 @@
         foreach (var d in diagMemos) AccumulateCashier(d.EnteredBy, d.Paid);
         foreach (var o in otMemos) AccumulateCashier(o.EnteredBy, o.Total - o.Discount);
         foreach (var r in ipdReceipts) AccumulateCashier(r.EnteredBy, r.Amount);
+        foreach (var c in canteenSales.Where(x => x.CustomerType != "Credit")) AccumulateCashier(c.EnteredBy, CanteenNet(c));
+        foreach (var b in bloodIssues) AccumulateCashier(b.IssuedBy, b.ChargeAmount);
         foreach (var p in pharmacyMemos) AccumulateCashier(p.EnteredBy, (p.Total ?? 0) - (p.Discount ?? 0));
 
         var userNames = await db.Users

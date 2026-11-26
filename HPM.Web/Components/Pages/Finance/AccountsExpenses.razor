@@ -1,0 +1,484 @@
+@page "/accounts/expenses"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Expense & Payments") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">💸 @I18n.T("Expense & Payments")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Expenses")</span><b class="bad">@I18n.FormatCurrency(TotalOf("Expense"))</b></div>
+            <div class="px-metric"><span>@I18n.T("Dues Paid")</span><b>@I18n.FormatCurrency(TotalOf("Payment"))</b></div>
+            <div class="px-metric"><span>@I18n.T("Other Income")</span><b class="ok">@I18n.FormatCurrency(TotalOf("Receipt"))</b></div>
+            <div class="px-metric"><span>@I18n.T("Awaiting Approval")</span><b class="@(entries.Any(x => x.Status == "Pending") ? "bad" : "")">@entries.Count(x => x.Status == "Pending")</b></div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <!-- List -->
+        <section class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-filter-row">
+                    <div class="px-seg">
+                        @foreach (var p in new[] { ("today", "Today"), ("7days", "7 Days"), ("month", "This Month"), ("lastmonth", "Last Month"), ("year", "This Year") })
+                        {
+                            var key = p.Item1;
+                            <button type="button" class="@(Preset == key ? "on" : "")" @onclick="() => ApplyPresetAsync(key)">@I18n.T(p.Item2)</button>
+                        }
+                    </div>
+                    <input type="date" value="@FromDate.ToString("yyyy-MM-dd")" @onchange="SetFromAsync" />
+                    <span class="muted">→</span>
+                    <input type="date" value="@ToDate.ToString("yyyy-MM-dd")" @onchange="SetToAsync" />
+                </div>
+                <div class="px-filter-row">
+                    <div class="px-search-box sm grow">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search head, payee, note or voucher...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(search)) { <button type="button" class="px-x" @onclick='() => search = ""'>✕</button> }
+                    </div>
+                    <div class="px-seg">
+                        @foreach (var t in new[] { ("All", "All"), ("Expense", "Expenses"), ("Payment", "Dues Paid"), ("Receipt", "Other Income") })
+                        {
+                            var key = t.Item1;
+                            <button type="button" class="@(typeFilter == key ? "on" : "")" @onclick="() => typeFilter = key">@I18n.T(t.Item2)</button>
+                        }
+                    </div>
+                </div>
+            </header>
+            <div class="px-cart flat">
+                <div class="px-cart-head" style="grid-template-columns: 90px minmax(170px,1fr) 110px 120px 96px 70px;">
+                    <div>@I18n.T("Date")</div><div>@I18n.T("Head / Details")</div><div>@I18n.T("Via")</div><div class="r">@I18n.T("Amount")</div><div>@I18n.T("Status")</div><div></div>
+                </div>
+                <div class="px-cart-rows">
+                    @{ var view = FilteredEntries().ToList(); }
+                    @if (view.Count == 0)
+                    {
+                        <div class="px-empty"><div class="px-empty-icon">💸</div><div>@I18n.T("No entries in this period")</div><small>@I18n.T("Record salaries, utility bills, purchases and supplier payments from the form.")</small></div>
+                    }
+                    @foreach (var e in view)
+                    {
+                        var row = e;
+                        <div class="px-cart-row @(row.Status == "Cancelled" ? "expired" : "")" style="grid-template-columns: 90px minmax(170px,1fr) 110px 120px 96px 70px;">
+                            <div class="muted">@row.Date.ToString("dd MMM yy")</div>
+                            <div class="px-cart-name stack">
+                                <b>@row.HeadName</b>
+                                <small class="muted">@row.VoucherNo · @row.Narration</small>
+                            </div>
+                            <div><span class="px-tag @(row.ViaCode == AccountCodes.Cash ? "green" : row.ViaCode == AccountCodes.Bank ? "blue" : "violet")">@row.ViaName</span></div>
+                            <div class="r strong @(row.Type == "Receipt" ? "ok-text" : "")">@(row.Type == "Receipt" ? "+" : "−")@I18n.FormatCurrency(row.Amount)</div>
+                            <div><span class="px-tag @StatusTag(row.Status)">@I18n.T(row.Status)</span></div>
+                            <div class="c">
+                                @if (IsAdmin && row.Status == "Pending")
+                                {
+                                    <button type="button" class="px-btn sm primary" title="@I18n.T("Approve and post")" disabled="@IsBusy" @onclick="() => ApproveAsync(row.VoucherId)">✓</button>
+                                }
+                                else if (IsAdmin && row.Status == "Approved")
+                                {
+                                    <button type="button" class="px-del" title="@I18n.T("Cancel (reverse) this entry")" disabled="@IsBusy" @onclick="() => cancelId = row.VoucherId">↶</button>
+                                }
+                            </div>
+                        </div>
+                        @if (cancelId == row.VoucherId)
+                        {
+                            <div class="px-reason-row">
+                                <input placeholder="@I18n.T("Reason for cancelling")" @bind="cancelReason" maxlength="200" />
+                                <button type="button" class="px-btn sm danger" disabled="@(IsBusy || string.IsNullOrWhiteSpace(cancelReason))" @onclick="() => CancelAsync(row.VoucherId)">@I18n.T("Cancel entry")</button>
+                                <button type="button" class="px-btn sm" @onclick="() => cancelId = 0">@I18n.T("Keep")</button>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+            <footer class="px-card-foot">
+                <span class="px-print-fmt">@view.Count @I18n.T("entries") · @I18n.T("Out") @I18n.FormatCurrency(view.Where(x => x.Type != "Receipt" && x.Status != "Cancelled" && x.Status != "Rejected").Sum(x => x.Amount)) · @I18n.T("In") @I18n.FormatCurrency(view.Where(x => x.Type == "Receipt" && x.Status != "Cancelled" && x.Status != "Rejected").Sum(x => x.Amount))</span>
+                <div class="px-foot-actions">
+                    <button type="button" class="px-btn" disabled="@(view.Count == 0)" @onclick='() => PrintAsync("exp-print", $"Expense & Payments {FromDate:dd MMM yyyy} - {ToDate:dd MMM yyyy}")'>🖨 @I18n.T("Print")</button>
+                    <a class="px-btn" href="/accounts/profit-loss">📈 @I18n.T("Profit & Loss")</a>
+                </div>
+            </footer>
+        </section>
+
+        <!-- Entry form -->
+        <section class="px-card">
+            <header class="px-card-head"><div class="px-card-title"><h2>@I18n.T("New Entry")</h2><span class="px-badge new">@(IsAdmin ? I18n.T("Posts immediately") : I18n.T("Needs admin approval"))</span></div></header>
+            <div class="px-card-body">
+                <div class="px-seg full">
+                    <button type="button" class="@(mode == "Expense" ? "on" : "")" @onclick='() => SetMode("Expense")'>🧾 @I18n.T("Expense")</button>
+                    <button type="button" class="@(mode == "Payment" ? "on" : "")" @onclick='() => SetMode("Payment")'>🤝 @I18n.T("Pay Dues")</button>
+                    <button type="button" class="@(mode == "Receipt" ? "on" : "")" @onclick='() => SetMode("Receipt")'>💰 @I18n.T("Other Income")</button>
+                </div>
+                <div class="px-note-box">@ModeHint</div>
+
+                <div class="px-field">
+                    <span>@I18n.T("Quick pick")</span>
+                    <div class="px-reason-chips">
+                        @foreach (var code in QuickCodes)
+                        {
+                            var c = code;
+                            var h = Head(c);
+                            if (h is null) continue;
+                            <button type="button" class="@(headId == h.ID ? "on" : "")" @onclick="() => PickHead(h.ID)">@ShortName(h)</button>
+                        }
+                    </div>
+                </div>
+
+                <div class="px-form-grid two">
+                    <label class="px-field span-all">
+                        <span>@HeadLabel <i>*</i></span>
+                        <select value="@headId" @onchange="e => PickHead(int.TryParse(e.Value?.ToString(), out var v) ? v : 0)">
+                            <option value="0">@I18n.T("Select head...")</option>
+                            @foreach (var g in ModeHeads().GroupBy(AccountingSetup.GroupOf))
+                            {
+                                <optgroup label="@I18n.T(g.Key)">
+                                    @foreach (var h in g) { <option value="@h.ID">@h.Code · @h.Name</option> }
+                                </optgroup>
+                            }
+                        </select>
+                    </label>
+                    @if (NeedsDoctor)
+                    {
+                        <label class="px-field span-all">
+                            <span>@I18n.T("Doctor") <i>*</i></span>
+                            <select @bind="doctorId">
+                                <option value="0">@I18n.T("Select doctor...")</option>
+                                @foreach (var d in doctors) { <option value="@d.ID">@d.Name</option> }
+                            </select>
+                        </label>
+                    }
+                    <label class="px-field">
+                        <span>@I18n.T("Amount") <i>*</i></span>
+                        <input type="number" min="0" step="0.01" class="px-qty-input" style="width:100%" value="@(amount == 0 ? "" : amount.ToString("0.##"))" @onchange="e => amount = decimal.TryParse(e.Value?.ToString(), out var a) && a > 0 ? Math.Round(a, 2) : 0" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Date") <i>*</i></span>
+                        <input type="date" value="@entryDate.ToString("yyyy-MM-dd")" @onchange="e => entryDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : entryDate" max="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                    </label>
+                    @if (IsDepreciation)
+                    {
+                        <label class="px-field span-all">
+                            <span>@I18n.T("Asset being depreciated") <i>*</i></span>
+                            <select @bind="assetCode">
+                                <option value="@AccountCodes.MedicalEquipment">@I18n.T("Medical Equipment & Machines")</option>
+                                <option value="@AccountCodes.Furniture">@I18n.T("Furniture & Fixtures")</option>
+                            </select>
+                        </label>
+                        <div class="px-note-box span-all">@I18n.T("Depreciation spreads the cost of a machine or furniture over its useful life, e.g. a 12 lakh machine used for 10 years = 10,000 per month. No money leaves the hospital; the asset value goes down.")</div>
+                    }
+                    else
+                    {
+                    <div class="px-field span-all">
+                        <span>@(mode == "Receipt" ? I18n.T("Received in") : I18n.T("Paid from")) <i>*</i></span>
+                        <div class="px-seg full">
+                            @foreach (var v in new[] { (AccountCodes.Cash, "💵 Cash"), (AccountCodes.Bank, "🏦 Bank"), (AccountCodes.Mfs, "📱 MFS") })
+                            {
+                                var code = v.Item1;
+                                <button type="button" class="@(viaCode == code ? "on" : "")" @onclick="() => viaCode = code">@I18n.T(v.Item2)</button>
+                            }
+                        </div>
+                    </div>
+                    @if (mode == "Expense")
+                    {
+                        <div class="px-field span-all">
+                            <label class="px-toggle"><input type="checkbox" @bind="onCredit" /> @I18n.T("Bought on credit (not paid yet) — record as supplier due")</label>
+                        </div>
+                    }
+                    }
+                    <label class="px-field span-all">
+                        <span>@(mode == "Receipt" ? I18n.T("Received from") : I18n.T("Paid to / Payee"))</span>
+                        <input @bind="payee" maxlength="100" placeholder="@I18n.T("e.g. DESCO, ABC Traders, staff name")" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Bill / Ref. No.") <em>@I18n.T("optional")</em></span>
+                        <input @bind="refNo" maxlength="40" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Note") <em>@I18n.T("optional")</em></span>
+                        <input @bind="note" maxlength="200" />
+                    </label>
+                </div>
+            </div>
+            <footer class="px-card-foot">
+                <span class="px-print-fmt">@(headId > 0 ? $"{HeadName(headId)} · {I18n.FormatCurrency(amount)}" : "")</span>
+                <div class="px-foot-actions">
+                    <button type="button" class="px-btn" @onclick="ResetForm">@I18n.T("Clear")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@(IsBusy || headId <= 0 || amount <= 0 || (NeedsDoctor && doctorId <= 0))" @onclick="SaveAsync">
+                        @(IsBusy ? I18n.T("Saving…") : IsAdmin ? I18n.T("Save & Post") : I18n.T("Submit for Approval"))
+                    </button>
+                </div>
+            </footer>
+        </section>
+    </div>
+
+    @{ var printRows = FilteredEntries().ToList(); }
+    <div id="exp-print" class="fin-print-sheet">
+        <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Expense & Payments") · @FromDate.ToString("dd MMM yyyy") – @ToDate.ToString("dd MMM yyyy")@(typeFilter == "All" ? "" : " · " + I18n.T(typeFilter))</div></div>
+        <table class="fin-table">
+            <thead><tr><th>#</th><th>@I18n.T("Date")</th><th>@I18n.T("Voucher")</th><th>@I18n.T("Head")</th><th>@I18n.T("Details")</th><th>@I18n.T("Via")</th><th>@I18n.T("Status")</th><th class="r">@I18n.T("Amount")</th></tr></thead>
+            <tbody>
+                @for (var i = 0; i < printRows.Count; i++)
+                {
+                    var r = printRows[i];
+                    <tr><td>@(i + 1)</td><td>@r.Date.ToString("dd MMM yy")</td><td>@r.VoucherNo</td><td>@r.HeadName</td><td>@r.Narration</td><td>@r.ViaName</td><td>@I18n.T(r.Status)</td><td class="r">@(r.Type == "Receipt" ? "+" : "")@I18n.FormatCurrency(r.Amount)</td></tr>
+                }
+            </tbody>
+            <tfoot>
+                @foreach (var g in printRows.Where(x => x.Status == "Approved").GroupBy(x => x.Type))
+                {
+                    <tr><td colspan="7">@I18n.T(g.Key == "Expense" ? "Total expenses" : g.Key == "Payment" ? "Total dues paid" : "Total other income") (@I18n.T("approved"))</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Amount))</td></tr>
+                }
+            </tfoot>
+        </table>
+        <div class="fin-sign-row"><span>@I18n.T("Prepared by")</span><span>@I18n.T("Accounts")</span><span>@I18n.T("Approved by")</span></div>
+    </div>
+</div>
+
+@code {
+    private sealed record Entry(long VoucherId, string VoucherNo, DateTime Date, string Type, string Status, string HeadName, string ViaName, string ViaCode, decimal Amount, string Narration);
+
+    private List<Entry> entries = [];
+    private List<DoctorsProfile> doctors = [];
+    private string search = "", typeFilter = "All";
+    private long cancelId;
+    private string cancelReason = "";
+
+    private string mode = "Expense";
+    private int headId, doctorId;
+    private decimal amount;
+    private DateTime entryDate = DateTime.Today;
+    private string viaCode = AccountCodes.Cash;
+    private bool onCredit;
+    private string assetCode = AccountCodes.MedicalEquipment;
+    private bool IsDepreciation => mode == "Expense" && headId > 0 && HeadCode(headId) == AccountCodes.Depreciation;
+    private string payee = "", refNo = "", note = "";
+
+    private static readonly string VoucherPrefix = "E";
+
+    protected override async Task OnFinanceInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        await LoadAsync();
+    }
+
+    protected override Task OnRangeChangedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var end = ToDate.Date.AddDays(1);
+        var vouchers = await db.AccountVouchers.AsNoTracking().Include(x => x.Lines)
+            .Where(x => x.VoucherNo.StartsWith(VoucherPrefix) && x.VoucherDate >= FromDate.Date && x.VoucherDate < end)
+            .OrderByDescending(x => x.VoucherDate).ThenByDescending(x => x.ID)
+            .ToListAsync();
+        var moneyIds = new HashSet<int>();
+        foreach (var c in new[] { AccountCodes.Cash, AccountCodes.Bank, AccountCodes.Mfs })
+            if (Head(c) is { } h) moneyIds.Add(h.ID);
+        var payableIds = Heads.Where(x => x.AccountType == "Liability").Select(x => x.ID).ToHashSet();
+        entries = vouchers.Select(v =>
+        {
+            var type = v.VoucherType is "Expense" or "Payment" or "Receipt" ? v.VoucherType : "Expense";
+            // the head is the non-money line (for credit purchases: the expense, not the payable)
+            var headLine = v.Lines.Where(l => !moneyIds.Contains(l.AccountID))
+                .OrderBy(l => payableIds.Contains(l.AccountID) && type == "Expense" ? 1 : 0).FirstOrDefault();
+            var viaLine = v.Lines.FirstOrDefault(l => moneyIds.Contains(l.AccountID))
+                          ?? v.Lines.FirstOrDefault(l => l.AccountID != headLine?.AccountID);
+            var amount = v.Lines.Sum(l => l.Debit);
+            return new Entry(v.ID, v.VoucherNo, v.VoucherDate, type, v.Status,
+                headLine is null ? "—" : HeadName(headLine.AccountID),
+                viaLine is null ? "—" : ShortName(Heads.FirstOrDefault(h => h.ID == viaLine.AccountID)),
+                viaLine is null ? "" : HeadCode(viaLine.AccountID),
+                amount, v.Narration ?? "");
+        }).ToList();
+    }
+
+    private IEnumerable<Entry> FilteredEntries()
+    {
+        var q = entries.AsEnumerable();
+        if (typeFilter != "All") q = q.Where(x => x.Type == typeFilter);
+        var tokens = SearchText.Tokenize(search);
+        if (tokens.Length > 0) q = q.Where(x => SearchText.MatchesAll(tokens, x.HeadName, x.Narration, x.VoucherNo, x.ViaName));
+        return q;
+    }
+
+    private decimal TotalOf(string type) => entries.Where(x => x.Type == type && x.Status == "Approved").Sum(x => x.Amount);
+
+    // ---------------- form ----------------
+    private IEnumerable<AccountHead> ModeHeads() => mode switch
+    {
+        "Payment" => Heads.Where(h => h.IsActive && h.AccountType == "Liability"),
+        "Receipt" => Heads.Where(h => h.IsActive && (h.AccountType == "Income" || h.AccountType == "Equity")),
+        _ => Heads.Where(h => h.IsActive && (h.AccountType == "Expense" || AccountingSetup.GroupOf(h) == "Fixed Assets"))
+    };
+
+    private string[] QuickCodes => mode switch
+    {
+        "Payment" => [AccountCodes.SalaryPayable, AccountCodes.DoctorPayable, AccountCodes.SupplierPayable, AccountCodes.StoreSupplierPayable, AccountCodes.CanteenSupplierPayable],
+        "Receipt" => [AccountCodes.OtherIncome, AccountCodes.Capital],
+        _ => [AccountCodes.Electricity, AccountCodes.Gas, AccountCodes.Water, AccountCodes.Telephone, AccountCodes.Cleaning, AccountCodes.Repair, AccountCodes.Rent,
+              AccountCodes.DoctorSalary, AccountCodes.StaffSalary, AccountCodes.LabSupplies, AccountCodes.CanteenPurchase, AccountCodes.MedicalEquipment, AccountCodes.Furniture, AccountCodes.Depreciation, AccountCodes.Misc]
+    };
+
+    private string HeadLabel => mode switch { "Payment" => I18n.T("Due to pay"), "Receipt" => I18n.T("Income head"), _ => I18n.T("Expense head") };
+
+    private MarkupString ModeHint => new(mode switch
+    {
+        "Payment" => I18n.T("Pay a bill that is already recorded as due: supplier invoices from Pharmacy, Store and Canteen purchases, finalized staff salary, or doctor fee and commission."),
+        "Receipt" => I18n.T("Money received that is not a patient bill, e.g. rent from a shop, scrap sale, or new capital from the owner."),
+        _ => I18n.T("Bills and purchases paid now: utility bills, cleaning products, repairs, doctor salary, equipment and furniture. Equipment and furniture are recorded as assets, not as expense.")
+    });
+
+    private bool NeedsDoctor => headId > 0 && (HeadCode(headId) is AccountCodes.DoctorPayable or AccountCodes.DoctorSalary);
+
+    private static string ShortName(AccountHead? h) => h is null ? "—" : h.Code switch
+    {
+        AccountCodes.Cash => "Cash",
+        AccountCodes.Bank => "Bank",
+        AccountCodes.Mfs => "MFS",
+        AccountCodes.Electricity => "Electricity",
+        AccountCodes.Gas => "Gas",
+        AccountCodes.Water => "Water",
+        AccountCodes.Telephone => "Internet/Phone",
+        AccountCodes.Cleaning => "Cleaning",
+        AccountCodes.Repair => "Repair",
+        AccountCodes.DoctorSalary => "Doctor Salary",
+        AccountCodes.StaffSalary => "Staff Salary",
+        AccountCodes.LabSupplies => "Lab Reagents",
+        AccountCodes.CanteenPurchase => "Canteen Items",
+        AccountCodes.MedicalEquipment => "Machine",
+        AccountCodes.Furniture => "Furniture",
+        AccountCodes.Misc => "Misc.",
+        AccountCodes.Depreciation => "Depreciation",
+        AccountCodes.SalaryPayable => "Staff Salary Due",
+        AccountCodes.DoctorPayable => "Doctor Due",
+        AccountCodes.SupplierPayable => "Medicine Supplier",
+        AccountCodes.StoreSupplierPayable => "Store Supplier",
+        AccountCodes.CanteenSupplierPayable => "Canteen Supplier",
+        AccountCodes.OtherIncome => "Other Income",
+        AccountCodes.Capital => "Owner Capital",
+        _ => h.Name
+    };
+
+    private void SetMode(string m) { mode = m; headId = 0; doctorId = 0; onCredit = false; }
+    private void PickHead(int id) { headId = id; if (!NeedsDoctor) doctorId = 0; }
+
+    private void ResetForm()
+    {
+        headId = 0; doctorId = 0; amount = 0; payee = ""; refNo = ""; note = ""; onCredit = false;
+        entryDate = DateTime.Today; viaCode = AccountCodes.Cash;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (headId <= 0 || amount <= 0) { Fail(I18n.T("Select a head and enter the amount.")); return; }
+        if (NeedsDoctor && doctorId <= 0) { Fail(I18n.T("Select the doctor.")); return; }
+        if (entryDate > DateTime.Today) { Fail(I18n.T("Date cannot be in the future.")); return; }
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var head = Heads.First(h => h.ID == headId);
+            int otherId;
+            if (IsDepreciation)
+                otherId = await AccountingSetup.IdAsync(db, assetCode);
+            else if (mode == "Expense" && onCredit)
+            {
+                var payableCode = head.Code switch
+                {
+                    AccountCodes.CanteenPurchase => AccountCodes.CanteenSupplierPayable,
+                    AccountCodes.MedicinePurchase => AccountCodes.SupplierPayable,
+                    AccountCodes.DoctorSalary => AccountCodes.DoctorPayable,
+                    AccountCodes.StaffSalary => AccountCodes.SalaryPayable,
+                    _ => AccountCodes.StoreSupplierPayable
+                };
+                otherId = await AccountingSetup.IdAsync(db, payableCode);
+            }
+            else otherId = await AccountingSetup.IdAsync(db, viaCode);
+
+            var doctor = doctors.FirstOrDefault(d => d.ID == doctorId);
+            var parts = new List<string> { head.Name };
+            if (doctor is not null) parts.Add(doctor.Name);
+            if (!string.IsNullOrWhiteSpace(payee)) parts.Add(payee.Trim());
+            if (!string.IsNullOrWhiteSpace(note)) parts.Add(note.Trim());
+            if (mode == "Expense" && onCredit) parts.Add("on credit");
+            var narration = string.Join(" — ", parts);
+            if (narration.Length > 500) narration = narration[..500];
+            var reference = doctor is not null ? $"DOCTOR:{doctor.ID}" : null;
+            if (!string.IsNullOrWhiteSpace(refNo)) reference = reference is null ? refNo.Trim() : $"{reference}|{refNo.Trim()}";
+
+            var lines = mode == "Receipt"
+                ? new List<AccountVoucherLine> { new() { AccountID = otherId, Debit = amount }, new() { AccountID = headId, Credit = amount } }
+                : new List<AccountVoucherLine> { new() { AccountID = headId, Debit = amount }, new() { AccountID = otherId, Credit = amount } };
+
+            if (IsAdmin) await FinancialControl.EnsurePostingAllowedAsync(db, entryDate, CurrentUserId);
+            var voucher = new AccountVoucher
+            {
+                VoucherNo = $"{VoucherPrefix}{DateTime.UtcNow:yyMMddHHmmssfff}",
+                VoucherType = mode,
+                VoucherDate = entryDate,
+                Narration = narration,
+                Reference = reference,
+                IsPosted = IsAdmin,
+                Status = IsAdmin ? "Approved" : "Pending",
+                EnteredBy = CurrentUserId,
+                TransDate = DateTime.Now,
+                ApprovedBy = IsAdmin ? CurrentUserId : null,
+                ApprovedAt = IsAdmin ? DateTime.Now : null,
+                Lines = lines
+            };
+            db.AccountVouchers.Add(voucher);
+            await db.SaveChangesAsync();
+            Success(IsAdmin
+                ? $"{voucher.VoucherNo}: {head.Name} {I18n.FormatCurrency(amount)} {I18n.T("posted.")}"
+                : $"{voucher.VoucherNo} {I18n.T("submitted. An administrator must approve it before it counts in the accounts.")}");
+            ResetForm();
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task ApproveAsync(long voucherId)
+    {
+        if (!IsAdmin) return;
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var v = await db.AccountVouchers.FindAsync(voucherId);
+            if (v is null || v.Status != "Pending") { Fail(I18n.T("This entry is no longer pending.")); return; }
+            await FinancialControl.EnsurePostingAllowedAsync(db, v.VoucherDate, CurrentUserId);
+            v.Status = "Approved"; v.IsPosted = true; v.ApprovedBy = CurrentUserId; v.ApprovedAt = DateTime.Now;
+            await db.SaveChangesAsync();
+            Success($"{v.VoucherNo} {I18n.T("approved and posted.")}");
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task CancelAsync(long voucherId)
+    {
+        if (!IsAdmin || string.IsNullOrWhiteSpace(cancelReason)) return;
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var v = await db.AccountVouchers.FindAsync(voucherId) ?? throw new InvalidOperationException("Entry not found.");
+            await AccountingPosting.ReversePostedVoucherAsync(db, v, cancelReason.Trim(), CurrentUserId, DateTime.Now);
+            await db.SaveChangesAsync();
+            Success($"{v.VoucherNo} {I18n.T("cancelled with a reversal entry.")}");
+            cancelId = 0; cancelReason = "";
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private static string StatusTag(string s) => s switch { "Approved" => "green", "Pending" => "amber", "Cancelled" or "Rejected" => "red", _ => "gray" };
+}

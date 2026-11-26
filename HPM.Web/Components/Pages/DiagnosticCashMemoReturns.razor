@@ -1226,20 +1226,24 @@
                     }
                 }
 
+                var diagIncomeId = await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome);
                 var originalReference = $"DIAGNOSTIC:{source.ID}";
                 if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
                 {
                     var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
                     if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
                     if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
-                    originalLines.Add((AccountingPosting.HospitalRevenue, 0, net));
+                    originalLines.Add((diagIncomeId, 0, net));
                     AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
                 }
-                var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (AccountingPosting.HospitalRevenue, adjustment, 0) };
+                var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (diagIncomeId, adjustment, 0) };
                 if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
                 if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
                 AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
                 if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });
+                await db.SaveChangesAsync();
+                // returned tests no longer earn the referring doctor a commission
+                await AccountingSetup.ResyncDiagnosticCommissionForMemoAsync(db, source.ID, userId);
                 await db.SaveChangesAsync();
                 return (Header: header, Adjustment: adjustment, Refund: refund);
             }, IsolationLevel.Serializable);
@@ -1361,6 +1365,9 @@
                 entity.CancelledBy = userId;
                 entity.CancelledAt = now;
                 entity.CancellationReason = cancellationReason.Trim();
+                await db.SaveChangesAsync();
+                // voided return: the tests are billed again, so the commission comes back
+                await AccountingSetup.ResyncDiagnosticCommissionForMemoAsync(db, entity.MemoID, userId);
                 await db.SaveChangesAsync();
                 return true;
             }, IsolationLevel.Serializable);

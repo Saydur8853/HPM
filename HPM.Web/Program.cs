@@ -538,6 +538,7 @@ await using (var scope = app.Services.CreateAsyncScope())
             END
         """;
         await db.Database.ExecuteSqlRawAsync(patientColSql);
+        await AccountingSetup.EnsureAsync(db);
 
         var branding = app.Services.GetRequiredService<HospitalSetupService>();
         await branding.LoadAsync();

@@ -34,8 +34,8 @@ public static class LicensedModules
         new(Ot, "Operation Theatre", [Registration], ["OperationSchedule", "OperationTheatreNotes", "OtCashMemos"]),
         new(Nursing, "Nursing", [Ipd], ["NurseDesk"]),
         new(BloodBank, "Blood Bank & Transfusion", [Registration], ["BloodBank"]),
-        new(Canteen, "Canteen", [], ["CanteenSales", "CanteenProducts", "CanteenChallanPage"]),
-        new(Accounts, "Accounts", [], ["Accounts", "FinancialReports"]),
+        new(Canteen, "Canteen", [], ["CanteenSales", "CanteenProducts", "CanteenChallanPage", "CanteenDues"]),
+        new(Accounts, "Accounts", [], ["Accounts", "FinancialReports", "AccountsExpenses", "AccountsProfitLoss", "AccountsSetup"]),
         new(Hrm, "HRM, Rostering & Payroll", [], ["Hrm"]),
         new(Store, "Supply Chain & Store", [], ["StoreProductsPage", "StoreChallanPage", "StoreRequisitions", "StoreIssuePage", "StoreReturns", "StoreStockPage", "StoreStockControl", "StoreReports"]),
         new(Reports, "Operational Reports", [], ["Reports"]),
@@ -67,7 +67,7 @@ public static class LicensedModules
         if (path.StartsWith("/canteen")) return Canteen;
         if (path.StartsWith("/store/")) return Store;
         if (path.StartsWith("/reports/mis")) return Mis;
-        if (path.StartsWith("/reports/financial") || path == "/accounts") return Accounts;
+        if (path.StartsWith("/reports/financial") || path == "/accounts" || path.StartsWith("/accounts/")) return Accounts;
         if (path == "/reports") return Reports;
         if (path == "/blood-bank") return BloodBank;
         if (path == "/admin/patient-queries") return PatientPortal;

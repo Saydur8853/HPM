@@ -1,0 +1,161 @@
+@page "/accounts/setup"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Accounts Setup") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root fin-page">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">⚙️ @I18n.T("Accounts Setup")</h1></div>
+        <div class="px-topbar-right">
+            <a class="px-btn" href="/accounts?view=particulars">🗂️ @I18n.T("Chart of Accounts")</a>
+            <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveAsync">@(IsBusy ? I18n.T("Saving…") : I18n.T("Save Settings"))</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="fin-scroll">
+        <div class="fin-grid">
+            <section class="px-card fin-card">
+                <header class="px-card-head"><div class="px-card-title"><h2>👨‍⚕️ @I18n.T("Doctor share of OPD visit fee")</h2></div></header>
+                <div class="px-card-body">
+                    <div class="px-note-box">@I18n.T("When a patient pays the visit fee, this percentage belongs to the doctor (recorded as doctor due) and the rest is hospital income. A doctor-specific value overrides the hospital default; leave it blank to use the default.")</div>
+                    <label class="px-field">
+                        <span>@I18n.T("Hospital default (%)")</span>
+                        <input type="number" min="0" max="100" step="0.01" class="px-qty-input" @bind="defaultShare" />
+                    </label>
+                    <div class="px-search-box sm">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search doctor...")" @bind="doctorSearch" @bind:event="oninput" />
+                    </div>
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("Doctor")</th><th class="r" style="width:140px">@I18n.T("Doctor share %")</th><th class="r" style="width:120px">@I18n.T("Hospital keeps")</th></tr></thead>
+                        <tbody>
+                            @foreach (var d in doctors.Where(d => SearchText.MatchesAll(SearchText.Tokenize(doctorSearch), d.Name)))
+                            {
+                                var id = d.ID;
+                                var own = doctorShares.GetValueOrDefault(id);
+                                var effective = own ?? defaultShare;
+                                <tr>
+                                    <td>@d.Name @if (own is not null) { <span class="px-tag blue">@I18n.T("custom")</span> }</td>
+                                    <td class="r"><input type="number" min="0" max="100" step="0.01" class="px-cell-input" style="text-align:right" placeholder="@defaultShare.ToString("0.##")"
+                                                         value="@(own?.ToString("0.##") ?? "")" @onchange="e => SetDoctorShare(id, e.Value?.ToString())" /></td>
+                                    <td class="r muted">@((100 - effective).ToString("0.##"))%</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <div class="fin-stack">
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>🩸 @I18n.T("Blood Bank")</h2></div></header>
+                    <div class="px-card-body">
+                        <label class="px-field">
+                            <span>@I18n.T("Default charge per blood bag")</span>
+                            <input type="number" min="0" step="1" class="px-qty-input" @bind="bloodBagRate" />
+                        </label>
+                        <small class="muted">@I18n.T("Filled in automatically when a unit is issued; staff can change it per issue.")</small>
+                    </div>
+                </section>
+
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>💳 @I18n.T("Payment method → ledger")</h2></div></header>
+                    <div class="px-card-body">
+                        <div class="px-note-box">@I18n.T("Money received by each POS payment method goes to this cash/bank ledger, so cash in hand and bank balance stay separate.")</div>
+                        <table class="fin-table">
+                            <tbody>
+                                @foreach (var m in methods)
+                                {
+                                    var name = m;
+                                    <tr>
+                                        <td><b>@name</b></td>
+                                        <td class="r">
+                                            <select value="@methodMap.GetValueOrDefault(name, AccountingSetup.GuessPaymentCode(name))" @onchange="e => methodMap[name] = e.Value?.ToString() ?? AccountCodes.Cash">
+                                                <option value="@AccountCodes.Cash">@I18n.T("Cash in Hand")</option>
+                                                <option value="@AccountCodes.Bank">@I18n.T("Bank Account")</option>
+                                                <option value="@AccountCodes.Mfs">@I18n.T("Mobile Banking (MFS)")</option>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>🔬 @I18n.T("Doctor referral commission")</h2></div></header>
+                    <div class="px-card-body">
+                        <small class="muted">@I18n.T("Commission rates per test category are set in Doctor Commission Master. Every diagnostic bill now records the referring doctor's commission as hospital expense and doctor due.")</small>
+                        <a class="px-btn" href="/masters/doctor-commissions">🧮 @I18n.T("Open Doctor Commission Master")</a>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<DoctorsProfile> doctors = [];
+    private Dictionary<int, decimal?> doctorShares = [];
+    private decimal defaultShare;
+    private decimal bloodBagRate;
+    private List<string> methods = [];
+    private Dictionary<string, string> methodMap = [];
+    private string doctorSearch = "";
+
+    protected override async Task OnFinanceInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        var settings = await AccountingSetup.SettingsAsync(db);
+        defaultShare = Parse(settings.GetValueOrDefault(AccountingSetup.DoctorVisitShareKey)) ?? 0;
+        bloodBagRate = Parse(settings.GetValueOrDefault(AccountingSetup.BloodBagRateKey)) ?? 0;
+        foreach (var kv in settings.Where(x => x.Key.StartsWith(AccountingSetup.DoctorVisitShareKey + ":")))
+            if (int.TryParse(kv.Key[(AccountingSetup.DoctorVisitShareKey.Length + 1)..], out var id)) doctorShares[id] = Parse(kv.Value);
+        methods = await db.PharmacyPaymentMethods.AsNoTracking().OrderBy(x => x.SortOrder).Select(x => x.Name).ToListAsync();
+        if (!methods.Contains("Cash")) methods.Insert(0, "Cash");
+        foreach (var m in methods)
+            methodMap[m] = settings.GetValueOrDefault($"PAYMENT_ACCOUNT:{m}") ?? AccountingSetup.GuessPaymentCode(m);
+    }
+
+    private void SetDoctorShare(int id, string? raw)
+    {
+        var v = Parse(raw);
+        if (v is null) doctorShares.Remove(id);
+        else doctorShares[id] = Math.Clamp(v.Value, 0, 100);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (defaultShare is < 0 or > 100) { Fail(I18n.T("Doctor share must be between 0 and 100.")); return; }
+        if (bloodBagRate < 0) { Fail(I18n.T("Blood bag charge cannot be negative.")); return; }
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await AccountingSetup.SaveSettingAsync(db, AccountingSetup.DoctorVisitShareKey, Fmt(defaultShare));
+            await AccountingSetup.SaveSettingAsync(db, AccountingSetup.BloodBagRateKey, bloodBagRate == 0 ? null : Fmt(bloodBagRate));
+            var existing = await db.AccountSettings.Where(x => x.Key.StartsWith(AccountingSetup.DoctorVisitShareKey + ":")).ToListAsync();
+            db.AccountSettings.RemoveRange(existing.Where(x => !doctorShares.ContainsKey(int.TryParse(x.Key[(AccountingSetup.DoctorVisitShareKey.Length + 1)..], out var i) ? i : -1)));
+            foreach (var kv in doctorShares.Where(x => x.Value is not null))
+                await AccountingSetup.SaveSettingAsync(db, $"{AccountingSetup.DoctorVisitShareKey}:{kv.Key}", Fmt(kv.Value!.Value));
+            foreach (var kv in methodMap)
+                await AccountingSetup.SaveSettingAsync(db, $"PAYMENT_ACCOUNT:{kv.Key}", kv.Value == AccountingSetup.GuessPaymentCode(kv.Key) ? null : kv.Value);
+            await db.SaveChangesAsync();
+            Success(I18n.T("Accounts settings saved. They apply to new bills from now on."));
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private static decimal? Parse(string? s) =>
+        decimal.TryParse(s, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+    private static string Fmt(decimal v) => v.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+}

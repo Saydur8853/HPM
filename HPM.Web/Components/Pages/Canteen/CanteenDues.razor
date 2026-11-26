@@ -1,0 +1,202 @@
+@page "/canteen/dues"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@inject IDbContextFactory<HpmDbContext> DbFactory
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+
+<PageTitle>@I18n.T("Canteen Staff Dues") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">🧾 @I18n.T("Canteen Staff Dues")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Staff with dues")</span><b>@debtors.Count(d => d.Balance > 0)</b></div>
+            <div class="px-metric"><span>@I18n.T("Total due")</span><b class="bad">@I18n.FormatCurrency(debtors.Where(d => d.Balance > 0).Sum(d => d.Balance))</b></div>
+            <div class="px-metric"><span>@I18n.T("Collected today")</span><b class="ok">@I18n.FormatCurrency(collectedToday)</b></div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="px-alert @messageClass"><span>@message</span><button type="button" @onclick='() => message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <section class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-filter-row">
+                    <div class="px-search-box sm grow">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search staff name or designation...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(search)) { <button type="button" class="px-x" @onclick='() => search = ""'>✕</button> }
+                    </div>
+                    <label class="px-toggle"><input type="checkbox" @bind="onlyDue" /> @I18n.T("Only with dues")</label>
+                </div>
+            </header>
+            <div class="px-cart flat">
+                <div class="px-cart-head" style="grid-template-columns: minmax(160px,1fr) 150px 120px;">
+                    <div>@I18n.T("Staff")</div><div>@I18n.T("Designation")</div><div class="r">@I18n.T("Due")</div>
+                </div>
+                <div class="px-cart-rows">
+                    @{ var tokens = SearchText.Tokenize(search); var view = debtors.Where(d => (!onlyDue || d.Balance > 0) && SearchText.MatchesAll(tokens, d.Name, d.Designation)).ToList(); }
+                    @if (view.Count == 0)
+                    {
+                        <div class="px-empty"><div class="px-empty-icon">✅</div><div>@I18n.T("No staff dues")</div><small>@I18n.T("Credit sales to staff from Canteen POS appear here.")</small></div>
+                    }
+                    @foreach (var d in view)
+                    {
+                        var row = d;
+                        <div class="px-cart-row clickable @(selected?.ID == row.ID ? "selected" : "")" style="grid-template-columns: minmax(160px,1fr) 150px 120px;" @onclick="() => SelectAsync(row.ID)">
+                            <div class="px-cart-name"><b>@row.Name</b></div>
+                            <div class="muted">@row.Designation</div>
+                            <div class="r strong @(row.Balance > 0 ? "bad-text" : "ok-text")">@I18n.FormatCurrency(row.Balance)</div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </section>
+
+        <section class="px-card">
+            @if (selected is null)
+            {
+                <div class="px-empty"><div class="px-empty-icon">👈</div><div>@I18n.T("Select a staff member")</div><small>@I18n.T("See the due history and collect payment.")</small></div>
+            }
+            else
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>@selected.Name</h2><span class="px-badge @(selected.Balance > 0 ? "new" : "paid")">@I18n.T("Due") @I18n.FormatCurrency(selected.Balance)</span></div>
+                    <button type="button" class="px-btn" @onclick='() => JS.InvokeVoidAsync("hpm.printElement", "canteen-due-print", $"Canteen dues - {selected.Name}")'>🖨 @I18n.T("Statement")</button>
+                </header>
+                <div class="px-card-body">
+                    @if (selected.Balance > 0)
+                    {
+                        <div class="px-panel px-form-grid two">
+                            <label class="px-field">
+                                <span>@I18n.T("Amount received") <i>*</i></span>
+                                <input type="number" min="0" step="0.01" class="px-qty-input" style="width:100%" value="@(amount == 0 ? "" : amount.ToString("0.##"))"
+                                       @onchange="e => amount = decimal.TryParse(e.Value?.ToString(), out var a) && a > 0 ? Math.Min(Math.Round(a, 2), selected.Balance) : 0" />
+                            </label>
+                            <div class="px-field">
+                                <span>&nbsp;</span>
+                                <button type="button" class="px-btn" @onclick="() => amount = selected.Balance">@I18n.T("Full due") (@I18n.FormatCurrency(selected.Balance))</button>
+                            </div>
+                            <div class="px-field span-all">
+                                <span>@I18n.T("Received in")</span>
+                                <div class="px-seg full">
+                                    @foreach (var m in new[] { "Cash", "Bank", "MFS" })
+                                    {
+                                        var mm = m;
+                                        <button type="button" class="@(method == mm ? "on" : "")" @onclick="() => method = mm">@I18n.T(mm)</button>
+                                    }
+                                </div>
+                            </div>
+                            <label class="px-field span-all">
+                                <span>@I18n.T("Note / Ref.") <em>@I18n.T("optional")</em></span>
+                                <input @bind="note" maxlength="100" placeholder="@I18n.T("e.g. salary deduction November")" />
+                            </label>
+                            <div class="span-all">
+                                <button type="button" class="px-btn primary lg" style="width:100%" disabled="@(busy || amount <= 0)" @onclick="CollectAsync">
+                                    @(busy ? I18n.T("Saving…") : $"{I18n.T("Collect")} {I18n.FormatCurrency(amount)}")
+                                </button>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="px-section-title">@I18n.T("History")</div>
+                    <div id="canteen-due-print">
+                        <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Canteen due statement") · @selected.Name (@selected.Designation) · @DateTime.Now.ToString("dd MMM yyyy")</div></div>
+                        <table class="fin-table">
+                            <thead><tr><th>@I18n.T("Date")</th><th>@I18n.T("Details")</th><th class="r">@I18n.T("Bill")</th><th class="r">@I18n.T("Paid")</th><th class="r">@I18n.T("Balance")</th></tr></thead>
+                            <tbody>
+                                @foreach (var l in ledger)
+                                {
+                                    <tr>
+                                        <td>@l.TransDate.ToString("dd MMM yy, hh:mm tt")</td>
+                                        <td>@(l.BillNo > 0 ? $"{I18n.T("Canteen bill")} #{l.BillNo}" : I18n.T("Payment received"))</td>
+                                        <td class="r">@(l.Debit == 0 ? "" : I18n.FormatCurrency(l.Debit))</td>
+                                        <td class="r ok-text">@(l.Credit == 0 ? "" : I18n.FormatCurrency(l.Credit))</td>
+                                        <td class="r strong">@I18n.FormatCurrency(l.Balance)</td>
+                                    </tr>
+                                }
+                                @if (ledger.Count == 0) { <tr><td colspan="5" class="muted">@I18n.T("No history.")</td></tr> }
+                            </tbody>
+                            <tfoot><tr class="grand"><td colspan="4">@I18n.T("Current due")</td><td class="r">@I18n.FormatCurrency(selected.Balance)</td></tr></tfoot>
+                        </table>
+                    </div>
+                </div>
+            }
+        </section>
+    </div>
+</div>
+
+@code {
+    private List<CanteenDebtor> debtors = [];
+    private CanteenDebtor? selected;
+    private List<CanteenDebtorLedger> ledger = [];
+    private string search = "", method = "Cash", note = "", message = "", messageClass = "success";
+    private bool onlyDue = true, busy;
+    private decimal amount, collectedToday;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        debtors = await db.CanteenDebtors.AsNoTracking().OrderByDescending(x => x.Balance).ThenBy(x => x.Name).ToListAsync();
+        var today = DateTime.Today;
+        collectedToday = await db.CanteenDebtorLedgers.AsNoTracking().Where(x => x.TransDate >= today && x.Credit > 0).SumAsync(x => (decimal?)x.Credit) ?? 0;
+        if (selected is not null) await SelectAsync(selected.ID);
+    }
+
+    private async Task SelectAsync(int id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        selected = await db.CanteenDebtors.AsNoTracking().FirstOrDefaultAsync(x => x.ID == id);
+        ledger = await db.CanteenDebtorLedgers.AsNoTracking().Where(x => x.DebtorID == id).OrderByDescending(x => x.TransDate).ThenByDescending(x => x.ID).Take(200).ToListAsync();
+        amount = 0; note = "";
+    }
+
+    private async Task CollectAsync()
+    {
+        if (selected is null || amount <= 0) return;
+        busy = true;
+        try
+        {
+            var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
+            var userId = int.TryParse(user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : throw new InvalidOperationException("The signed-in user could not be identified.");
+            var debtorId = selected.ID;
+            var pay = amount;
+            var payMethod = method;
+            var payNote = note.Trim();
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var d = await db.CanteenDebtors.SingleAsync(x => x.ID == debtorId);
+                if (pay > d.Balance) throw new InvalidOperationException($"Due is only {d.Balance:N2}.");
+                var now = DateTime.Now;
+                await FinancialControl.EnsurePostingAllowedAsync(db, now, userId);
+                d.Balance -= pay;
+                var row = new CanteenDebtorLedger { DebtorID = d.ID, BillNo = 0, Debit = 0, Credit = pay, Balance = d.Balance, TransDate = now };
+                db.CanteenDebtorLedgers.Add(row);
+                await db.SaveChangesAsync();
+                AccountingPosting.AddPostedVoucher(db, "Receipt", now,
+                    $"Canteen due collected from {d.Name} ({payMethod}){(payNote.Length == 0 ? "" : " — " + payNote)}",
+                    $"CANTEEN-DUE:{row.ID}", userId,
+                    (await AccountingSetup.IdAsync(db, AccountingSetup.GuessPaymentCode(payMethod)), pay, 0),
+                    (await AccountingSetup.IdAsync(db, AccountCodes.CanteenReceivable), 0, pay));
+                if (AccountingSetup.IsCashMethod(payMethod))
+                    db.CentralCashCollections.Add(new CentralCashCollection
+                    {
+                        Amount = pay, ModuleFlag = AccountingPosting.ModuleFlags.Canteen, HeadID = AccountingPosting.ModuleFlags.Canteen,
+                        EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = row.ID
+                    });
+                await db.SaveChangesAsync();
+                return true;
+            });
+            messageClass = "success";
+            message = $"{I18n.FormatCurrency(pay)} {I18n.T("collected from")} {selected.Name}.";
+            await LoadAsync();
+        }
+        catch (Exception ex) { messageClass = "danger"; message = ex.GetBaseException().Message; }
+        finally { busy = false; }
+    }
+}

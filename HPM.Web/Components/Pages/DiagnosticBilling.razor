@@ -2595,7 +2595,11 @@
                 }
 
                 await OperationalAccounting.SyncSplitRevenueAsync(db, $"DIAGNOSTIC:{editor.ID}", editor.ID,
-                    revenueAmount, editor.Paid, editor.TransDate, userId, $"Diagnostic memo #{editor.ID}", isIpdMode ? null : 12);
+                    revenueAmount, editor.Paid, editor.TransDate, userId, $"Diagnostic memo #{editor.ID}", isIpdMode ? null : 12,
+                    await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome));
+                // Referring doctor's commission is the hospital's expense and the doctor's payable.
+                await AccountingSetup.SyncDiagnosticCommissionAsync(db, editor.ID, editor.DoctorID ?? 0, editor.TransDate,
+                    editor.Items.Select(x => (x.TestID, (decimal)x.Rate, (decimal)x.Quantity)), userId, editor.PatientName ?? "");
                 await db.SaveChangesAsync();
 
                 if (diagnosticOrder is not null && diagnosticOrder.Status == "Pending")
@@ -2717,6 +2721,7 @@
                         Math.Max(0, entity.Total - entity.Discount), entity.TransDate, userId, reason,
                         entity.PatientType == "2" ? AccountingPosting.PatientReceivable : AccountingPosting.Cash,
                         entity.PatientType == "2" ? null : 12);
+                    await OperationalAccounting.ReverseReferenceAsync(db, $"DOCTOR-COMMISSION:DIAGNOSTIC:{entity.ID}", userId, reason);
                     if (entity.PatientType == "2" && !string.IsNullOrWhiteSpace(entity.RegNo))
                     {
                         var marker = $"[DIAGNOSTIC:{entity.ID}:";

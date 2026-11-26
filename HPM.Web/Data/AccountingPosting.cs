@@ -21,6 +21,8 @@ public static class AccountingPosting
         public const int Emergency = 11;
         public const int Diagnostic = 12;
         public const int Ot = 13;
+        public const int Canteen = 14;
+        public const int BloodBank = 15;
     }
 
     public static void AddPostedVoucher(

@@ -610,8 +610,15 @@ public partial class Hrm : IDisposable
             period.Status = "Finalized";
             period.FinalizedAt = DateTime.UtcNow;
             period.FinalizedBy = await CurrentUserNameAsync();
+            // Accounts: the month's salary is an expense now and owed to staff until it is paid.
+            var netPay = await db.HrmPayrollEntries.Where(x => x.PayrollPeriodID == period.ID).SumAsync(x => (decimal?)x.NetPay) ?? 0;
+            if (netPay > 0)
+                await OperationalAccounting.SyncJournalAsync(db, $"PAYROLL:{period.ID}", period.ToDate, await CurrentUserIdAsync(),
+                    $"Staff salary for {period.Name}",
+                    [(await AccountingSetup.IdAsync(db, AccountCodes.StaffSalary), netPay, 0m),
+                     (await AccountingSetup.IdAsync(db, AccountCodes.SalaryPayable), 0m, netPay)]);
             await db.SaveChangesAsync();
-            Success("Payroll period finalized. Regeneration is now locked.");
+            Success("Payroll period finalized. Salary expense posted to Accounts.");
             await LoadPayrollAsync(db);
         }
         catch (Exception ex) { Fail(FriendlyDatabaseError(ex)); }
@@ -644,7 +651,41 @@ public partial class Hrm : IDisposable
     }
 
     private async Task PrintAsync() => await JS.InvokeVoidAsync("print");
-    private async Task<string> CurrentUserNameAsync() => (await AuthStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "System";
+    private string payrollPayFrom = "Cash";
+
+    private async Task PayPayrollAsync()
+    {
+        if (selectedPayrollPeriod is null || selectedPayrollPeriod.Status != "Finalized") return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var unpaid = await db.HrmPayrollEntries.Where(x => x.PayrollPeriodID == selectedPayrollPeriod.ID && x.PaymentStatus != "Paid").ToListAsync();
+            var amount = unpaid.Sum(x => x.NetPay);
+            if (unpaid.Count == 0) { Fail("Every salary in this period is already paid."); return; }
+            var userId = await CurrentUserIdAsync();
+            var payDate = DateTime.Today;
+            await FinancialControl.EnsurePostingAllowedAsync(db, payDate, userId);
+            foreach (var row in unpaid) row.PaymentStatus = "Paid";
+            if (amount > 0)
+                AccountingPosting.AddPostedVoucher(db, "Payment", payDate,
+                    $"Salary paid for {selectedPayrollPeriod.Name} ({unpaid.Count} staff) via {payrollPayFrom}",
+                    $"PAYROLL-PAY:{selectedPayrollPeriod.ID}:{DateTime.Now:yyMMddHHmmss}", userId,
+                    (await AccountingSetup.IdAsync(db, AccountCodes.SalaryPayable), amount, 0),
+                    (await AccountingSetup.IdAsync(db, AccountingSetup.GuessPaymentCode(payrollPayFrom)), 0, amount));
+            await db.SaveChangesAsync();
+            Success($"Salary of {unpaid.Count} staff marked paid; {amount:N2} posted from {payrollPayFrom}.");
+            await LoadPayrollAsync(db);
+        }
+        catch (Exception ex) { Fail(FriendlyDatabaseError(ex)); }
+    }
+
+    private async Task<int> CurrentUserIdAsync()
+    {
+        var value = (await AuthStateProvider.GetAuthenticationStateAsync()).User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(value, out var id) ? id : throw new InvalidOperationException("The signed-in user could not be identified.");
+    }
+
+    private async Task<string> CurrentUserNameAsync() =>(await AuthStateProvider.GetAuthenticationStateAsync()).User.Identity?.Name ?? "System";
 
     private static DateTime? TryCombine(DateTime date, string? timeText)
     {

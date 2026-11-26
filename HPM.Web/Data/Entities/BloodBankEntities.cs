@@ -122,4 +122,7 @@ public sealed class BloodIssue
     [StringLength(20)] public string? ReturnDisposition { get; set; }
     [StringLength(300)] public string? ReturnReason { get; set; }
     public int? ReturnedBy { get; set; }
+    public decimal ChargeAmount { get; set; }
+    [StringLength(30)] public string? PaymentMethod { get; set; }
+    [StringLength(60)] public string? PaymentRef { get; set; }
 }
