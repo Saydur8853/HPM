@@ -150,20 +150,8 @@ public static class AccountingSetup
     // ---------------------------------------------------------------- startup
     public static async Task EnsureAsync(HpmDbContext db)
     {
-        const string schemaSql = """
-            IF OBJECT_ID(N'[Accounts_Setting]', N'U') IS NULL
-                CREATE TABLE [Accounts_Setting] (
-                    [Setting_Key] nvarchar(80) NOT NULL CONSTRAINT [PK_Accounts_Setting] PRIMARY KEY,
-                    [Setting_Value] nvarchar(400) NULL,
-                    [Updated_At] datetime NOT NULL CONSTRAINT [DF_Accounts_Setting_Updated_At] DEFAULT (GETDATE()));
-            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'ChargeAmount') IS NULL
-                ALTER TABLE [Blood_Issue] ADD [ChargeAmount] decimal(18,2) NOT NULL CONSTRAINT [DF_Blood_Issue_ChargeAmount] DEFAULT (0);
-            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'PaymentMethod') IS NULL
-                ALTER TABLE [Blood_Issue] ADD [PaymentMethod] nvarchar(30) NULL;
-            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'PaymentRef') IS NULL
-                ALTER TABLE [Blood_Issue] ADD [PaymentRef] nvarchar(60) NULL;
-            """;
-        await db.Database.ExecuteSqlRawAsync(schemaSql);
+        await db.Database.ExecuteSqlRawAsync(BaseSchemaSql);
+
         await db.Database.ExecuteSqlRawAsync(CostCenterSchemaSql);
         await db.Database.ExecuteSqlRawAsync(CostCenterSeedSql);
 
@@ -215,6 +203,32 @@ public static class AccountingSetup
             await db.Database.ExecuteSqlRawAsync(
                 $"UPDATE [Accounts_Voucher_Line] SET [Cost_Center_ID] = {g.Key} WHERE [Cost_Center_ID] IS NULL AND [Account_ID] IN ({headIds})");
         }
+    }
+
+    private const string BaseSchemaSql = """
+            IF OBJECT_ID(N'[Accounts_Setting]', N'U') IS NULL
+                CREATE TABLE [Accounts_Setting] (
+                    [Setting_Key] nvarchar(80) NOT NULL CONSTRAINT [PK_Accounts_Setting] PRIMARY KEY,
+                    [Setting_Value] nvarchar(400) NULL,
+                    [Updated_At] datetime NOT NULL CONSTRAINT [DF_Accounts_Setting_Updated_At] DEFAULT (GETDATE()));
+            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'ChargeAmount') IS NULL
+                ALTER TABLE [Blood_Issue] ADD [ChargeAmount] decimal(18,2) NOT NULL CONSTRAINT [DF_Blood_Issue_ChargeAmount] DEFAULT (0);
+            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'PaymentMethod') IS NULL
+                ALTER TABLE [Blood_Issue] ADD [PaymentMethod] nvarchar(30) NULL;
+            IF OBJECT_ID(N'[Blood_Issue]', N'U') IS NOT NULL AND COL_LENGTH(N'Blood_Issue', N'PaymentRef') IS NULL
+                ALTER TABLE [Blood_Issue] ADD [PaymentRef] nvarchar(60) NULL;
+            """;
+
+    /// <summary>
+    /// Everything EnsureAsync creates, as one idempotent SQL batch (tables, departments, chart of accounts),
+    /// for the migration. The data fixes for old databases (reclassification, department back-fill) stay in EnsureAsync.
+    /// </summary>
+    public static string MigrationSql()
+    {
+        var chart = string.Join("\n", Chart().Select(c =>
+            $"IF NOT EXISTS (SELECT 1 FROM [Accounts_Chart] WHERE [Code] = N'{c.Code}') " +
+            $"INSERT INTO [Accounts_Chart] ([Code], [Name], [Account_Type], [Is_Active]) VALUES (N'{c.Code}', N'{c.Name.Replace("'", "''")}', N'{c.Type}', 1);"));
+        return BaseSchemaSql + "\n" + CostCenterSchemaSql + "\n" + CostCenterSeedSql + "\nIF OBJECT_ID(N'[Accounts_Chart]', N'U') IS NOT NULL\nBEGIN\n" + chart + "\nEND\n";
     }
 
     // ---------------------------------------------------------------- cost centers (departments)

@@ -1936,6 +1936,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
 
         var issue = b.Entity<BloodIssue>();
         issue.ToTable("Blood_Issue");
+        issue.Property(x => x.ChargeAmount).HasColumnType("decimal(18,2)");
         issue.HasIndex(x => x.CrossMatchID).IsUnique();
         issue.HasOne(x => x.CrossMatch).WithOne(x => x.Issue).HasForeignKey<BloodIssue>(x => x.CrossMatchID).OnDelete(DeleteBehavior.Restrict);
     }
