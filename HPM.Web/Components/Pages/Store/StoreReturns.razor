@@ -1,0 +1,279 @@
+@page "/store/returns"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
+
+<PageTitle>@I18n.T("Department Return") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">↩️ @I18n.T("Department Return")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Returns (30 days)")</span><b>@recent.Count</b></div>
+            <button type="button" class="px-btn" @onclick="NewReturn">+ @I18n.T("New Return")</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <section class="px-card">
+            @if (saved == null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@I18n.T("Receive Return from Department")</h2><span class="px-badge new">@I18n.T("NEW")</span></div></header>
+                <div class="px-card-body">
+                    <div class="px-panel px-form-grid">
+                        <label class="px-field">
+                            <span>@I18n.T("Returning Department") <i>*</i></span>
+                            <select @bind="departmentId">
+                                <option value="0">@I18n.T("Select department...")</option>
+                                @foreach (var d in Lookups.Departments)
+                                {
+                                    <option value="@d.ID">@d.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Return Into Store") <i>*</i></span>
+                            <select @bind="locationId">
+                                @foreach (var l in Lookups.Locations)
+                                {
+                                    <option value="@l.ID">@l.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <div class="px-field span-all">
+                            <span>@I18n.T("Reason") <i>*</i></span>
+                            <div class="px-reason-chips">
+                                @foreach (var r in Reasons)
+                                {
+                                    var rr = r;
+                                    <button type="button" class="@(reason == rr ? "on" : "")" @onclick="() => reason = rr">@I18n.T(rr)</button>
+                                }
+                            </div>
+                        </div>
+                        <label class="px-field span-all">
+                            <span>@I18n.T("Note") <em>@I18n.T("optional")</em></span>
+                            <input @bind="note" maxlength="300" />
+                        </label>
+                    </div>
+
+                    <div class="px-field">
+                        <span>@I18n.T("Add Returned Item")</span>
+                        <StoreItemPicker @ref="picker" Items="@Lookups.PickItems(null)" OnPick="AddLine" Placeholder="@I18n.T("Search item being returned...")" />
+                    </div>
+
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 30px minmax(150px,1fr) 70px 130px 130px 32px;">
+                            <div>#</div><div>@I18n.T("Item")</div><div>@I18n.T("Unit")</div><div class="c">@I18n.T("Qty")</div><div class="c">@I18n.T("Back to Stock?")</div><div></div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @if (lines.Count == 0)
+                            {
+                                <div class="px-empty"><div class="px-empty-icon">↩️</div><div>@I18n.T("No items yet")</div><small>@I18n.T("Usable items go back into stock; damaged or expired ones are only recorded.")</small></div>
+                            }
+                            @for (var i = 0; i < lines.Count; i++)
+                            {
+                                var line = lines[i];
+                                var idx = i;
+                                <div class="px-cart-row @(line.Restock ? "" : "picked")" style="grid-template-columns: 30px minmax(150px,1fr) 70px 130px 130px 32px;">
+                                    <div class="muted">@(i + 1)</div>
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(line.ProductId)</b></div>
+                                    <div class="muted">@Lookups.ProductUnit(line.ProductId)</div>
+                                    <div class="c">
+                                        <div class="px-stepper">
+                                            <button type="button" @onclick="() => line.Qty = Math.Max(1, line.Qty - 1)">−</button>
+                                            <input type="number" min="1" value="@line.Qty.ToString("0.##")" @onchange="e => line.Qty = decimal.TryParse(e.Value?.ToString(), out var q) && q > 0 ? q : line.Qty" />
+                                            <button type="button" @onclick="() => line.Qty += 1">+</button>
+                                        </div>
+                                    </div>
+                                    <div class="c">
+                                        <label class="px-toggle">
+                                            <input type="checkbox" checked="@line.Restock" @onchange="e => line.Restock = e.Value is true" />
+                                            @(line.Restock ? I18n.T("Yes, usable") : I18n.T("No, damaged"))
+                                        </label>
+                                    </div>
+                                    <div class="c"><button type="button" class="px-del" @onclick="() => lines.RemoveAt(idx)">✕</button></div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt">@lines.Count(x => x.Restock) @I18n.T("to stock") · @lines.Count(x => !x.Restock) @I18n.T("damaged")</span>
+                    <div class="px-foot-actions">
+                        <button type="button" class="px-btn primary lg" disabled="@(IsBusy || departmentId <= 0 || lines.Count == 0 || string.IsNullOrWhiteSpace(reason))" @onclick="SaveAsync">
+                            @(IsBusy ? I18n.T("Saving…") : I18n.T("Save Return"))
+                        </button>
+                    </div>
+                </footer>
+            }
+            else
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>@I18n.T("Return") #RET-@saved.ID</h2><span class="px-badge paid">@I18n.T("SAVED")</span></div>
+                    <button type="button" class="px-btn" @onclick='() => PrintAsync("store-return-print", $"RET-{saved.ID}")'>🖨 @I18n.T("Print")</button>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-bill-strip">
+                        <div><span>@I18n.T("Department")</span><b>@Lookups.DepartmentName(saved.DepartmentID)</b></div>
+                        <div><span>@I18n.T("Store")</span><b>@Lookups.LocationName(saved.LocationID)</b></div>
+                        <div><span>@I18n.T("Reason")</span><b>@(saved.Reason ?? "—")</b></div>
+                        <div><span>@I18n.T("Date")</span><b>@saved.TransDate.ToString("dd MMM yyyy, hh:mm tt")</b></div>
+                    </div>
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 30px minmax(150px,1fr) 80px 140px;">
+                            <div>#</div><div>@I18n.T("Item")</div><div class="r">@I18n.T("Qty")</div><div>@I18n.T("Action")</div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @for (var i = 0; i < saved.Items.Count; i++)
+                            {
+                                var it = saved.Items[i];
+                                <div class="px-cart-row" style="grid-template-columns: 30px minmax(150px,1fr) 80px 140px;">
+                                    <div class="muted">@(i + 1)</div>
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(it.ProductID)</b><small>@Lookups.ProductUnit(it.ProductID)</small></div>
+                                    <div class="r strong">@it.Quantity.ToString("0.##")</div>
+                                    <div><span class="px-tag @(it.IsRestocked ? "green" : "gray")">@(it.IsRestocked ? I18n.T("Back to stock") : I18n.T("Damaged / write-off"))</span></div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt"></span>
+                    <div class="px-foot-actions"><button type="button" class="px-btn primary lg" @onclick="NewReturn">+ @I18n.T("New Return")</button></div>
+                </footer>
+            }
+        </section>
+
+        <aside class="px-card">
+            <header class="px-card-head stack">
+                <h2 style="margin:0; font-size:13.5px; font-weight:800;">@I18n.T("Recent Returns")</h2>
+                <div class="px-search-box sm">
+                    <span class="px-search-icon">🔍</span>
+                    <input type="text" placeholder="@I18n.T("RET #, department, reason...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                </div>
+            </header>
+            <div class="px-queue">
+                @{ var tokens = SearchText.Tokenize(search).Select(t => t.StartsWith("RET-", StringComparison.OrdinalIgnoreCase) ? t[4..] : t).Where(t => t.Length > 0).ToArray();
+                   var list = recent.Where(x => SearchText.MatchesAll(tokens, x.ID.ToString(), Lookups.DepartmentName(x.DepartmentID), x.Reason, x.Note)).ToList(); }
+                @if (list.Count == 0)
+                {
+                    <div class="px-empty sm">@I18n.T("No return found.")</div>
+                }
+                @foreach (var x in list)
+                {
+                    <button type="button" class="px-q-item @(saved?.ID == x.ID ? "active" : "")" @onclick="() => OpenAsync(x.ID)">
+                        <span class="px-q-id">RET-@x.ID</span>
+                        <span class="px-q-info">
+                            <span class="px-q-name">@SearchText.Highlight(Lookups.DepartmentName(x.DepartmentID), tokens)</span>
+                            <span class="px-q-meta">@x.TransDate.ToString("dd MMM, hh:mm tt") · @SearchText.Highlight(x.Reason, tokens)</span>
+                        </span>
+                        <span class="px-q-amt">@x.Items.Count @I18n.T("items")</span>
+                    </button>
+                }
+            </div>
+        </aside>
+    </div>
+</div>
+
+@if (saved != null)
+{
+    <div id="store-return-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@I18n.T("Store Return Receipt")" Subtitle="@Lookups.LocationName(saved.LocationID)" DocumentNo="@($"RET-{saved.ID}")" BarcodeCode="@($"SRET-{saved.ID}")" />
+        <div class="print-grid">
+            <div><span>@I18n.T("Returned By"):</span> <b>@Lookups.DepartmentName(saved.DepartmentID)</b></div>
+            <div><span>@I18n.T("Reason"):</span> <b>@(saved.Reason ?? "—")</b></div>
+            <div><span>@I18n.T("Date"):</span> <b>@saved.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+            <div><span>@I18n.T("Note"):</span> <b>@(saved.Note ?? "—")</b></div>
+        </div>
+        <table class="data-table">
+            <thead><tr><th>#</th><th>@I18n.T("Item")</th><th class="num">@I18n.T("Qty")</th><th>@I18n.T("Unit")</th><th>@I18n.T("Action")</th></tr></thead>
+            <tbody>
+                @for (var i = 0; i < saved.Items.Count; i++)
+                {
+                    var it = saved.Items[i];
+                    <tr><td>@(i + 1)</td><td><b>@Lookups.ProductName(it.ProductID)</b></td><td class="num">@it.Quantity.ToString("0.##")</td><td>@Lookups.ProductUnit(it.ProductID)</td><td>@(it.IsRestocked ? I18n.T("Back to stock") : I18n.T("Damaged / write-off"))</td></tr>
+                }
+            </tbody>
+        </table>
+        <PrintDocumentFooter SignTitle1="@I18n.T("Returned By")" SignTitle2="@I18n.T("Store Keeper")" SignTitle3="@I18n.T("Authorized By")" />
+    </div>
+}
+
+@code {
+    private static readonly string[] Reasons = ["Unused / Excess", "Wrong Item", "Damaged", "Expired", "Patient Discharged", "Other"];
+
+    private StoreItemPicker? picker;
+    private List<StoreMovement> recent = [];
+    private StoreMovement? saved;
+    private List<ReturnLine> lines = [];
+    private int departmentId;
+    private int locationId;
+    private string reason = "Unused / Excess";
+    private string note = "";
+    private string search = "";
+
+    protected override async Task OnStoreInitializedAsync()
+    {
+        locationId = Lookups.DefaultLocationId;
+        await LoadListAsync();
+    }
+
+    private async Task LoadListAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var since = DateTime.Today.AddDays(-30);
+        recent = await db.StoreMovements.AsNoTracking().Include(x => x.Items).Where(x => x.Type == "RETURN" && x.TransDate >= since).OrderByDescending(x => x.ID).Take(200).ToListAsync();
+    }
+
+    private void NewReturn()
+    {
+        saved = null;
+        lines = [];
+        departmentId = 0;
+        note = "";
+        reason = "Unused / Excess";
+        Message = "";
+    }
+
+    private async Task AddLine(StorePickItem item)
+    {
+        var existing = lines.FirstOrDefault(x => x.ProductId == item.Id);
+        if (existing != null) existing.Qty += 1;
+        else lines.Add(new ReturnLine { ProductId = item.Id, Qty = 1, Restock = reason is not ("Damaged" or "Expired") });
+        if (picker != null) await picker.FocusAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            var mv = await Inventory.ReturnAsync(departmentId, locationId, reason, note, lines.Select(x => new StoreReturnLineInput(x.ProductId, x.Qty, x.Restock)).ToList(), CurrentUserId);
+            await ReloadLookupsAsync();
+            await LoadListAsync();
+            await OpenAsync(mv.ID);
+            Success(I18n.IsBangla ? $"রিটার্ন #RET-{mv.ID} সংরক্ষিত হয়েছে।" : $"Return #RET-{mv.ID} saved.");
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task OpenAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        saved = await db.StoreMovements.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == id && x.Type == "RETURN");
+        lines = [];
+        Message = "";
+    }
+
+    private sealed class ReturnLine
+    {
+        public int ProductId { get; init; }
+        public decimal Qty { get; set; }
+        public bool Restock { get; set; } = true;
+    }
+}

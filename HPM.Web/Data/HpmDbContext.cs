@@ -113,6 +113,14 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<StoreChallanSub> StoreChallanItems => Set<StoreChallanSub>();
     public DbSet<StoreIssue> StoreIssues => Set<StoreIssue>();
     public DbSet<StoreIssueSub> StoreIssueItems => Set<StoreIssueSub>();
+    public DbSet<StoreLocation> StoreLocations => Set<StoreLocation>();
+    public DbSet<StoreDepartment> StoreDepartments => Set<StoreDepartment>();
+    public DbSet<StoreStock> StoreStocks => Set<StoreStock>();
+    public DbSet<StoreStockLedger> StoreStockLedger => Set<StoreStockLedger>();
+    public DbSet<StoreRequisition> StoreRequisitions => Set<StoreRequisition>();
+    public DbSet<StoreRequisitionSub> StoreRequisitionItems => Set<StoreRequisitionSub>();
+    public DbSet<StoreMovement> StoreMovements => Set<StoreMovement>();
+    public DbSet<StoreMovementSub> StoreMovementItems => Set<StoreMovementSub>();
     public DbSet<PurchaseRequisition> PurchaseRequisitions => Set<PurchaseRequisition>();
     public DbSet<PurchaseRequisitionItem> PurchaseRequisitionItems => Set<PurchaseRequisitionItem>();
     public DbSet<HrmDepartment> HrmDepartments => Set<HrmDepartment>();

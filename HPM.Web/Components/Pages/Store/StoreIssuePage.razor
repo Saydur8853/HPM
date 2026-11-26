@@ -1,0 +1,382 @@
+@page "/store/issue"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
+
+<PageTitle>@I18n.T("Issue to Department") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">📤 @I18n.T("Issue to Department")</h1>
+        </div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Today's Issues")</span><b>@recent.Count(x => x.TransDate.Date == DateTime.Today)</b></div>
+            <div class="px-metric"><span>@I18n.T("Today's Value")</span><b>@I18n.FormatCurrency(recent.Where(x => x.TransDate.Date == DateTime.Today).Sum(x => x.Total ?? 0))</b></div>
+            <a class="px-btn ghost" href="/store/requisitions">📝 @I18n.T("Requisitions")</a>
+            <button type="button" class="px-btn" @onclick="NewIssue">+ @I18n.T("New Issue")</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <section class="px-card">
+            @if (saved == null)
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title">
+                        <h2>@(requisition != null ? $"{I18n.T("Issue against")} REQ-{requisition.ID}" : I18n.T("Direct Issue"))</h2>
+                        <span class="px-badge new">@I18n.T("NEW")</span>
+                    </div>
+                </header>
+                <div class="px-card-body">
+                    @if (requisition != null)
+                    {
+                        <div class="px-rx-strip">
+                            <span>📝 <b>REQ-@requisition.ID</b> · @Lookups.DepartmentName(requisition.DepartmentID) · @requisition.Items.Count @I18n.T("items") @(requisition.Priority == "Urgent" ? "· 🔴 Urgent" : "")</span>
+                            <button type="button" title="@I18n.T("Switch to direct issue")" @onclick="NewIssue">✕</button>
+                        </div>
+                    }
+                    <div class="px-panel px-form-grid">
+                        <label class="px-field">
+                            <span>@I18n.T("Department") <i>*</i></span>
+                            <select @bind="departmentId" disabled="@(requisition != null)">
+                                <option value="0">@I18n.T("Select department...")</option>
+                                @foreach (var d in Lookups.Departments)
+                                {
+                                    <option value="@d.ID">@d.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Issue From Store") <i>*</i></span>
+                            <select @bind="locationId" disabled="@(requisition != null || lines.Count > 0)">
+                                @foreach (var l in Lookups.Locations)
+                                {
+                                    <option value="@l.ID">@l.Name</option>
+                                }
+                            </select>
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Received By")</span>
+                            <input @bind="receivedBy" maxlength="100" placeholder="@I18n.T("Name of person collecting")" />
+                        </label>
+                        <label class="px-field span-all">
+                            <span>@I18n.T("Note") <em>@I18n.T("optional")</em></span>
+                            <input @bind="note" maxlength="300" />
+                        </label>
+                    </div>
+
+                    @if (requisition == null)
+                    {
+                        <div class="px-field">
+                            <span>@I18n.T("Add Item") <em>@I18n.T("only non-expired stock can be issued; earliest expiry goes first")</em></span>
+                            <StoreItemPicker @ref="picker" Items="@Lookups.PickItems(locationId)" OnPick="AddLine" Placeholder="@I18n.T("Search item to issue...")" />
+                        </div>
+                    }
+
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 30px minmax(150px,1fr) 70px @(requisition != null ? "80px " : "")90px 130px 32px;">
+                            <div>#</div><div>@I18n.T("Item")</div><div>@I18n.T("Unit")</div>
+                            @if (requisition != null) { <div class="r">@I18n.T("Approved")</div> }
+                            <div class="r">@I18n.T("Available")</div><div class="c">@I18n.T("Issue Qty")</div><div></div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @if (lines.Count == 0)
+                            {
+                                <div class="px-empty"><div class="px-empty-icon">📤</div><div>@I18n.T("No items to issue")</div><small>@I18n.T("Search an item above, or pick an approved requisition from the right panel.")</small></div>
+                            }
+                            @for (var i = 0; i < lines.Count; i++)
+                            {
+                                var line = lines[i];
+                                var idx = i;
+                                var have = Lookups.StockAt(locationId, line.ProductId);
+                                <div class="px-cart-row @(line.Qty > have ? "warn-row" : "")" style="grid-template-columns: 30px minmax(150px,1fr) 70px @(requisition != null ? "80px " : "")90px 130px 32px;">
+                                    <div class="muted">@(i + 1)</div>
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(line.ProductId)</b></div>
+                                    <div class="muted">@Lookups.ProductUnit(line.ProductId)</div>
+                                    @if (requisition != null) { <div class="r muted">@line.Max?.ToString("0.##")</div> }
+                                    <div class="r"><span class="px-stock @(have >= line.Qty && have > 0 ? "ok" : have > 0 ? "low" : "out")">@have.ToString("0.##")</span></div>
+                                    <div class="c">
+                                        <div class="px-stepper">
+                                            <button type="button" @onclick="() => SetQty(line, line.Qty - 1)">−</button>
+                                            <input type="number" min="0" value="@line.Qty.ToString("0.##")" @onchange="e => SetQty(line, decimal.TryParse(e.Value?.ToString(), out var q) ? q : line.Qty)" />
+                                            <button type="button" @onclick="() => SetQty(line, line.Qty + 1)">+</button>
+                                        </div>
+                                    </div>
+                                    <div class="c"><button type="button" class="px-del" @onclick="() => lines.RemoveAt(idx)">✕</button></div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt">@lines.Count(x => x.Qty > 0) @I18n.T("item(s)") · @lines.Sum(x => x.Qty).ToString("0.##") @I18n.T("units")</span>
+                    <div class="px-foot-actions">
+                        <button type="button" class="px-btn" disabled="@(!CanSave)" @onclick="() => SaveAsync(false)">@I18n.T("Save Only")</button>
+                        <button type="button" class="px-btn primary lg" disabled="@(!CanSave)" @onclick="() => SaveAsync(true)">
+                            @(IsBusy ? I18n.T("Saving…") : $"🖨 {I18n.T("Issue & Print Slip")}")
+                        </button>
+                    </div>
+                </footer>
+            }
+            else
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>@I18n.T("Issue Slip") #ISS-@saved.ID</h2><span class="px-badge paid">@I18n.T("ISSUED")</span></div>
+                    <button type="button" class="px-btn" @onclick='() => PrintAsync("store-issue-print", $"ISS-{saved.ID}")'>🖨 @I18n.T("Print")</button>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-bill-strip">
+                        <div><span>@I18n.T("Department")</span><b>@Lookups.DepartmentName(saved.IssueDepartment)</b></div>
+                        <div><span>@I18n.T("Store")</span><b>@Lookups.LocationName(saved.LocationID)</b></div>
+                        <div><span>@I18n.T("Reference")</span><b>@saved.IndentNo</b></div>
+                        <div><span>@I18n.T("Received By")</span><b>@(saved.ReceivedBy ?? "—")</b></div>
+                        <div><span>@I18n.T("Date")</span><b>@saved.TransDate.ToString("dd MMM yyyy, hh:mm tt")</b></div>
+                        <div><span>@I18n.T("Value")</span><b>@I18n.FormatCurrency(saved.Total ?? 0)</b></div>
+                    </div>
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 30px minmax(150px,1fr) 110px 90px 80px 90px;">
+                            <div>#</div><div>@I18n.T("Item")</div><div>@I18n.T("Batch")</div><div>@I18n.T("Expiry")</div><div class="r">@I18n.T("Qty")</div><div class="r">@I18n.T("Value")</div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @for (var i = 0; i < savedItems.Count; i++)
+                            {
+                                var it = savedItems[i];
+                                <div class="px-cart-row" style="grid-template-columns: 30px minmax(150px,1fr) 110px 90px 80px 90px;">
+                                    <div class="muted">@(i + 1)</div>
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(it.ProductID)</b><small>@Lookups.ProductUnit(it.ProductID)</small></div>
+                                    <div class="muted">@(it.BatchNo ?? "—")</div>
+                                    <div class="muted">@(it.ExpireDate?.ToString("MMM yyyy") ?? "—")</div>
+                                    <div class="r strong">@((it.Quantity ?? 0).ToString("0.##"))</div>
+                                    <div class="r">@I18n.FormatCurrency(it.Total ?? 0)</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt"></span>
+                    <div class="px-foot-actions"><button type="button" class="px-btn primary lg" @onclick="NewIssue">+ @I18n.T("New Issue")</button></div>
+                </footer>
+            }
+        </section>
+
+        <aside class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-seg full">
+                    <button type="button" class="@(rightTab == "ready" ? "on" : "")" @onclick='() => rightTab = "ready"'>@I18n.T("Ready to Issue") <span class="px-count @(ready.Count > 0 ? "warn" : "")">@ready.Count</span></button>
+                    <button type="button" class="@(rightTab == "recent" ? "on" : "")" @onclick='() => rightTab = "recent"'>@I18n.T("Recent Issues") <span class="px-count">@recent.Count</span></button>
+                </div>
+                <div class="px-search-box sm">
+                    <span class="px-search-icon">🔍</span>
+                    <input type="text" placeholder="@I18n.T("Number, department, receiver...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                    @if (!string.IsNullOrWhiteSpace(search))
+                    {
+                        <button type="button" class="px-x" @onclick='() => search = ""'>✕</button>
+                    }
+                </div>
+            </header>
+            <div class="px-queue">
+                @{ var tokens = SearchText.Tokenize(search).Select(t => t.Contains('-') ? t[(t.IndexOf('-') + 1)..] : t).Where(t => t.Length > 0).ToArray(); }
+                @if (rightTab == "ready")
+                {
+                    var list = ready.Where(r => SearchText.MatchesAll(tokens, r.ID.ToString(), Lookups.DepartmentName(r.DepartmentID))).ToList();
+                    @if (list.Count == 0)
+                    {
+                        <div class="px-empty sm">@I18n.T("No approved requisition waiting.")</div>
+                    }
+                    @foreach (var r in list)
+                    {
+                        <button type="button" class="px-q-item @(requisition?.ID == r.ID ? "active" : "")" @onclick="() => LoadRequisitionAsync(r.ID)">
+                            <span class="px-q-id">REQ-@r.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">@SearchText.Highlight(Lookups.DepartmentName(r.DepartmentID), tokens) @if (r.Priority == "Urgent") { <span class="px-tag red">@I18n.T("Urgent")</span> }</span>
+                                <span class="px-q-meta">@r.Items.Count @I18n.T("items") · @Lookups.LocationName(r.LocationID) · @r.RequestedAt.ToString("dd MMM")</span>
+                            </span>
+                            <span class="px-tag @StoreRequisitions.StatusTag(r.Status)">@I18n.T(r.Status)</span>
+                        </button>
+                    }
+                }
+                else
+                {
+                    var list = recent.Where(x => SearchText.MatchesAll(tokens, x.ID.ToString(), Lookups.DepartmentName(x.IssueDepartment), x.ReceivedBy, x.IndentNo)).ToList();
+                    @if (list.Count == 0)
+                    {
+                        <div class="px-empty sm">@I18n.T("No issue found.")</div>
+                    }
+                    @foreach (var x in list)
+                    {
+                        <button type="button" class="px-q-item @(saved?.ID == x.ID ? "active" : "")" @onclick="() => OpenIssueAsync(x.ID)">
+                            <span class="px-q-id">ISS-@x.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">@SearchText.Highlight(Lookups.DepartmentName(x.IssueDepartment), tokens)</span>
+                                <span class="px-q-meta">@x.TransDate.ToString("dd MMM, hh:mm tt") · @x.IndentNo @(string.IsNullOrWhiteSpace(x.ReceivedBy) ? "" : $"· {x.ReceivedBy}")</span>
+                            </span>
+                            <span class="px-q-amt">@I18n.FormatCurrency(x.Total ?? 0)</span>
+                        </button>
+                    }
+                }
+            </div>
+        </aside>
+    </div>
+</div>
+
+@if (saved != null)
+{
+    <div id="store-issue-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@I18n.T("Store Issue Slip")" Subtitle="@Lookups.LocationName(saved.LocationID)" DocumentNo="@($"ISS-{saved.ID}")" BarcodeCode="@($"ISS-{saved.ID}")" />
+        <div class="print-grid">
+            <div><span>@I18n.T("Issued To"):</span> <b>@Lookups.DepartmentName(saved.IssueDepartment)</b></div>
+            <div><span>@I18n.T("Reference"):</span> <b>@saved.IndentNo</b></div>
+            <div><span>@I18n.T("Received By"):</span> <b>@(saved.ReceivedBy ?? "—")</b></div>
+            <div><span>@I18n.T("Date"):</span> <b>@saved.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+        </div>
+        <table class="data-table">
+            <thead><tr><th>#</th><th>@I18n.T("Item")</th><th>@I18n.T("Batch")</th><th>@I18n.T("Expiry")</th><th class="num">@I18n.T("Qty")</th><th>@I18n.T("Unit")</th><th class="num">@I18n.T("Value")</th></tr></thead>
+            <tbody>
+                @for (var i = 0; i < savedItems.Count; i++)
+                {
+                    var it = savedItems[i];
+                    <tr><td>@(i + 1)</td><td><b>@Lookups.ProductName(it.ProductID)</b></td><td>@(it.BatchNo ?? "—")</td><td>@(it.ExpireDate?.ToString("MMM yyyy") ?? "—")</td><td class="num">@((it.Quantity ?? 0).ToString("0.##"))</td><td>@Lookups.ProductUnit(it.ProductID)</td><td class="num">@I18n.FormatCurrency(it.Total ?? 0)</td></tr>
+                }
+            </tbody>
+        </table>
+        <div class="print-total"><div class="grand"><span>@I18n.T("Total Value")</span><b>@I18n.FormatCurrency(saved.Total ?? 0)</b></div></div>
+        <PrintDocumentFooter SignTitle1="@I18n.T("Received By")" SignTitle2="@I18n.T("Store Keeper")" SignTitle3="@I18n.T("Authorized By")" />
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "requisitionId")] public long? QueryRequisitionId { get; set; }
+
+    private StoreItemPicker? picker;
+    private List<StoreRequisition> ready = [];
+    private List<StoreIssue> recent = [];
+    private StoreRequisition? requisition;
+    private StoreIssue? saved;
+    private List<StoreIssueSub> savedItems = [];
+    private List<IssueLine> lines = [];
+    private int departmentId;
+    private int locationId;
+    private string receivedBy = "";
+    private string note = "";
+    private string rightTab = "ready";
+    private string search = "";
+
+    private bool CanSave => !IsBusy && departmentId > 0 && lines.Any(x => x.Qty > 0);
+
+    protected override async Task OnStoreInitializedAsync()
+    {
+        locationId = Lookups.DefaultLocationId;
+        await LoadListsAsync();
+        if (QueryRequisitionId is > 0) await LoadRequisitionAsync(QueryRequisitionId.Value);
+        else if (ready.Count == 0) rightTab = "recent";
+    }
+
+    private async Task LoadListsAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        ready = await db.StoreRequisitions.AsNoTracking().Include(x => x.Items)
+            .Where(x => x.Status == StoreStatus.Approved || x.Status == StoreStatus.PartiallyIssued)
+            .OrderByDescending(x => x.Priority == "Urgent").ThenBy(x => x.RequestedAt).ToListAsync();
+        var since = DateTime.Today.AddDays(-30);
+        recent = await db.StoreIssues.AsNoTracking().Where(x => x.TransDate >= since).OrderByDescending(x => x.ID).Take(300).ToListAsync();
+    }
+
+    private async Task LoadRequisitionAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var req = await db.StoreRequisitions.AsNoTracking().Include(x => x.Items).FirstOrDefaultAsync(x => x.ID == id);
+        if (req == null || req.Status is not (StoreStatus.Approved or StoreStatus.PartiallyIssued))
+        {
+            Fail(I18n.T("This requisition is not approved for issue."));
+            return;
+        }
+        saved = null;
+        requisition = req;
+        departmentId = req.DepartmentID;
+        locationId = req.LocationID;
+        lines = req.Items
+            .Select(x => new { x.ProductID, Remaining = (x.QtyApproved ?? x.QtyRequested) - x.QtyIssued })
+            .Where(x => x.Remaining > 0)
+            .Select(x => new IssueLine { ProductId = x.ProductID, Max = x.Remaining, Qty = Math.Min(x.Remaining, Lookups.StockAt(req.LocationID, x.ProductID)) })
+            .ToList();
+        Message = "";
+        if (lines.Any(x => x.Qty < (x.Max ?? 0)))
+            Fail(I18n.T("Some items are short in stock; quantities were reduced to what is available. The rest can be issued later."));
+    }
+
+    private void NewIssue()
+    {
+        saved = null;
+        requisition = null;
+        lines = [];
+        departmentId = 0;
+        receivedBy = "";
+        note = "";
+        Message = "";
+    }
+
+    private async Task AddLine(StorePickItem item)
+    {
+        var have = Lookups.StockAt(locationId, item.Id);
+        if (have <= 0) { Fail($"{item.Name}: {I18n.T("out of stock at this store.")}"); return; }
+        var existing = lines.FirstOrDefault(x => x.ProductId == item.Id);
+        if (existing != null) SetQty(existing, existing.Qty + 1);
+        else lines.Add(new IssueLine { ProductId = item.Id, Qty = 1 });
+        Message = "";
+        if (picker != null) await picker.FocusAsync();
+    }
+
+    private void SetQty(IssueLine line, decimal qty)
+    {
+        var have = Lookups.StockAt(locationId, line.ProductId);
+        var max = Math.Min(have, line.Max ?? decimal.MaxValue);
+        if (qty > max) Fail($"{Lookups.ProductName(line.ProductId)}: {I18n.T("maximum")} {max:0.##}.");
+        line.Qty = Math.Clamp(qty, 0, max);
+    }
+
+    private async Task SaveAsync(bool print)
+    {
+        IsBusy = true;
+        try
+        {
+            var issue = await Inventory.IssueAsync(departmentId, locationId, requisition?.ID, receivedBy, note,
+                lines.Where(x => x.Qty > 0).Select(x => new StoreLineInput(x.ProductId, x.Qty)).ToList(), CurrentUserId);
+            await ReloadLookupsAsync();
+            await LoadListsAsync();
+            await OpenIssueAsync(issue.ID);
+            Success(I18n.IsBangla ? $"ইস্যু স্লিপ #ISS-{issue.ID} সংরক্ষিত হয়েছে।" : $"Issue slip #ISS-{issue.ID} saved; stock updated.");
+            if (print)
+            {
+                StateHasChanged();
+                await Task.Yield();
+                await PrintAsync("store-issue-print", $"ISS-{issue.ID}");
+            }
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task OpenIssueAsync(long id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        saved = await db.StoreIssues.AsNoTracking().FirstOrDefaultAsync(x => x.ID == id);
+        savedItems = saved == null ? [] : await db.StoreIssueItems.AsNoTracking().Where(x => x.IssueNo == id).OrderBy(x => x.SLNO).ToListAsync();
+        requisition = null;
+        lines = [];
+        Message = "";
+    }
+
+    private sealed class IssueLine
+    {
+        public int ProductId { get; init; }
+        public decimal Qty { get; set; }
+        /// <summary>Remaining approved quantity when issuing against a requisition.</summary>
+        public decimal? Max { get; init; }
+    }
+}

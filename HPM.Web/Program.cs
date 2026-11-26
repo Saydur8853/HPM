@@ -66,6 +66,7 @@ builder.Services.AddScoped<HospitalLicenseService>();
 builder.Services.AddScoped<I18nService>();
 builder.Services.AddScoped<PatientSelectionState>();
 builder.Services.AddSingleton<UserWorkspacePreferences>();
+builder.Services.AddSingleton<StoreInventoryService>();
 builder.Services.AddSingleton<IBarcodeQrService, BarcodeQrService>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -180,7 +181,7 @@ await using (var scope = app.Services.CreateAsyncScope())
             await HrmDemoDataSeeder.SeedAsync(db);
 
         var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<int>>>();
-        foreach (var requiredRole in new[] { RoleNames.Administrator, RoleNames.Authorizer, RoleNames.AppOwner, RoleNames.HospitalOwner })
+        foreach (var requiredRole in new[] { RoleNames.Administrator, RoleNames.Authorizer, RoleNames.AppOwner, RoleNames.HospitalOwner, RoleNames.StoreKeeper })
         {
             if (!await roleManager.RoleExistsAsync(requiredRole))
             {
@@ -240,6 +241,172 @@ await using (var scope = app.Services.CreateAsyncScope())
                 INSERT INTO [Pharmacy_Payment_Method] ([Name], [Is_Active], [Sort_Order], [Is_System]) VALUES (N'Bank', 1, 1, 1);
             IF NOT EXISTS (SELECT 1 FROM [Pharmacy_Payment_Method] WHERE [Name] = N'MFS')
                 INSERT INTO [Pharmacy_Payment_Method] ([Name], [Is_Active], [Sort_Order], [Is_System]) VALUES (N'MFS', 1, 2, 1);
+            -- ===== Hospital Store: sub-stores, batch stock, ledger, requisition, movements =====
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Product]') AND name = 'Is_Active')
+                ALTER TABLE [Store_Product] ADD [Is_Active] bit NOT NULL CONSTRAINT [DF_Store_Product_Is_Active] DEFAULT (1);
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Product]') AND name = 'Track_Expiry')
+                ALTER TABLE [Store_Product] ADD [Track_Expiry] bit NOT NULL CONSTRAINT [DF_Store_Product_Track_Expiry] DEFAULT (0);
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Challan]') AND name = 'Location_ID')
+                ALTER TABLE [Store_Challan] ADD [Location_ID] int NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Challan]') AND name = 'Note')
+                ALTER TABLE [Store_Challan] ADD [Note] nvarchar(300) NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Challan_Sub]') AND name = 'Batch_No')
+                ALTER TABLE [Store_Challan_Sub] ADD [Batch_No] nvarchar(50) NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Challan_Sub]') AND name = 'Expire_Date')
+                ALTER TABLE [Store_Challan_Sub] ADD [Expire_Date] date NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Challan_Sub]') AND name = 'Stock_ID')
+                ALTER TABLE [Store_Challan_Sub] ADD [Stock_ID] int NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue]') AND name = 'Location_ID')
+                ALTER TABLE [Store_Issue] ADD [Location_ID] int NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue]') AND name = 'Requisition_ID')
+                ALTER TABLE [Store_Issue] ADD [Requisition_ID] bigint NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue]') AND name = 'Received_By')
+                ALTER TABLE [Store_Issue] ADD [Received_By] nvarchar(100) NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue]') AND name = 'Note')
+                ALTER TABLE [Store_Issue] ADD [Note] nvarchar(300) NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue_Sub]') AND name = 'Stock_ID')
+                ALTER TABLE [Store_Issue_Sub] ADD [Stock_ID] int NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue_Sub]') AND name = 'Batch_No')
+                ALTER TABLE [Store_Issue_Sub] ADD [Batch_No] nvarchar(50) NULL;
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Store_Issue_Sub]') AND name = 'Expire_Date')
+                ALTER TABLE [Store_Issue_Sub] ADD [Expire_Date] date NULL;
+
+            IF OBJECT_ID(N'[Store_Location]', N'U') IS NULL
+                CREATE TABLE [Store_Location] (
+                    [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Location] PRIMARY KEY,
+                    [Name] nvarchar(60) NOT NULL,
+                    [Is_Central] bit NOT NULL CONSTRAINT [DF_Store_Location_Is_Central] DEFAULT (0),
+                    [Is_Active] bit NOT NULL CONSTRAINT [DF_Store_Location_Is_Active] DEFAULT (1),
+                    [Sort_Order] int NOT NULL CONSTRAINT [DF_Store_Location_Sort_Order] DEFAULT (0));
+            IF OBJECT_ID(N'[Store_Department]', N'U') IS NULL
+                CREATE TABLE [Store_Department] (
+                    [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Department] PRIMARY KEY,
+                    [Name] nvarchar(80) NOT NULL,
+                    [Is_Active] bit NOT NULL CONSTRAINT [DF_Store_Department_Is_Active] DEFAULT (1));
+            IF OBJECT_ID(N'[Store_Stock]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Store_Stock] (
+                    [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Stock] PRIMARY KEY,
+                    [Location_ID] int NOT NULL,
+                    [Product_ID] int NOT NULL,
+                    [Batch_No] nvarchar(50) NULL,
+                    [Expire_Date] date NULL,
+                    [Balance] decimal(18,2) NOT NULL,
+                    [Buy_Rate] decimal(18,2) NOT NULL,
+                    [Received_Date] datetime NOT NULL CONSTRAINT [DF_Store_Stock_Received_Date] DEFAULT (GETDATE()));
+                CREATE NONCLUSTERED INDEX [IX_Store_Stock_Location_Product] ON [Store_Stock]([Location_ID], [Product_ID]) INCLUDE ([Balance], [Expire_Date]);
+            END
+            IF OBJECT_ID(N'[Store_Stock_Ledger]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Store_Stock_Ledger] (
+                    [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Stock_Ledger] PRIMARY KEY,
+                    [Trans_Date] datetime NOT NULL,
+                    [Location_ID] int NOT NULL,
+                    [Product_ID] int NOT NULL,
+                    [Stock_ID] int NULL,
+                    [Qty_In] decimal(18,2) NOT NULL,
+                    [Qty_Out] decimal(18,2) NOT NULL,
+                    [Rate] decimal(18,2) NOT NULL,
+                    [Ref_Type] nvarchar(20) NOT NULL,
+                    [Ref_ID] bigint NOT NULL,
+                    [Department_ID] int NULL,
+                    [Note] nvarchar(200) NULL,
+                    [Entered_By] int NOT NULL);
+                CREATE NONCLUSTERED INDEX [IX_Store_Stock_Ledger_Product_Date] ON [Store_Stock_Ledger]([Product_ID], [Trans_Date]);
+                CREATE NONCLUSTERED INDEX [IX_Store_Stock_Ledger_Date_Type] ON [Store_Stock_Ledger]([Trans_Date], [Ref_Type]) INCLUDE ([Department_ID], [Qty_In], [Qty_Out], [Rate], [Product_ID]);
+            END
+            IF OBJECT_ID(N'[Store_Requisition]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Store_Requisition] (
+                    [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Requisition] PRIMARY KEY,
+                    [Department_ID] int NOT NULL,
+                    [Location_ID] int NOT NULL,
+                    [Status] nvarchar(20) NOT NULL,
+                    [Priority] nvarchar(10) NOT NULL,
+                    [Note] nvarchar(300) NULL,
+                    [Requested_By] int NOT NULL,
+                    [Requested_At] datetime NOT NULL,
+                    [Reviewed_By] int NULL,
+                    [Reviewed_At] datetime NULL,
+                    [Review_Note] nvarchar(300) NULL);
+                CREATE NONCLUSTERED INDEX [IX_Store_Requisition_Status] ON [Store_Requisition]([Status], [Requested_At]);
+            END
+            IF OBJECT_ID(N'[Store_Requisition_Sub]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Store_Requisition_Sub] (
+                    [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Requisition_Sub] PRIMARY KEY,
+                    [Requisition_ID] bigint NOT NULL,
+                    [Product_ID] int NOT NULL,
+                    [Qty_Requested] decimal(18,2) NOT NULL,
+                    [Qty_Approved] decimal(18,2) NULL,
+                    [Qty_Issued] decimal(18,2) NOT NULL CONSTRAINT [DF_Store_Requisition_Sub_Qty_Issued] DEFAULT (0));
+                CREATE NONCLUSTERED INDEX [IX_Store_Requisition_Sub_Req] ON [Store_Requisition_Sub]([Requisition_ID]);
+            END
+            IF OBJECT_ID(N'[Store_Movement]', N'U') IS NULL
+                CREATE TABLE [Store_Movement] (
+                    [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Movement] PRIMARY KEY,
+                    [Type] nvarchar(10) NOT NULL,
+                    [Location_ID] int NOT NULL,
+                    [To_Location_ID] int NULL,
+                    [Department_ID] int NULL,
+                    [Reason] nvarchar(40) NULL,
+                    [Note] nvarchar(300) NULL,
+                    [Entered_By] int NOT NULL,
+                    [Trans_Date] datetime NOT NULL);
+            IF OBJECT_ID(N'[Store_Movement_Sub]', N'U') IS NULL
+            BEGIN
+                CREATE TABLE [Store_Movement_Sub] (
+                    [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Store_Movement_Sub] PRIMARY KEY,
+                    [Movement_ID] bigint NOT NULL,
+                    [Product_ID] int NOT NULL,
+                    [Stock_ID] int NULL,
+                    [Batch_No] nvarchar(50) NULL,
+                    [Expire_Date] date NULL,
+                    [Quantity] decimal(18,2) NOT NULL,
+                    [Qty_Before] decimal(18,2) NULL,
+                    [Rate] decimal(18,2) NOT NULL,
+                    [Is_Restocked] bit NOT NULL CONSTRAINT [DF_Store_Movement_Sub_Is_Restocked] DEFAULT (0));
+                CREATE NONCLUSTERED INDEX [IX_Store_Movement_Sub_Movement] ON [Store_Movement_Sub]([Movement_ID]);
+            END
+
+            -- Seed sub-stores
+            IF NOT EXISTS (SELECT 1 FROM [Store_Location])
+                INSERT INTO [Store_Location] ([Name], [Is_Central], [Is_Active], [Sort_Order]) VALUES
+                    (N'Central Store', 1, 1, 0), (N'Laboratory Store', 0, 1, 1), (N'OT Store', 0, 1, 2);
+
+            -- Seed departments / cost centres (clinical departments + common service units)
+            IF NOT EXISTS (SELECT 1 FROM [Store_Department])
+            BEGIN
+                INSERT INTO [Store_Department] ([Name])
+                SELECT DISTINCT LEFT(LTRIM(RTRIM([Name])), 80) FROM [Department]
+                WHERE [Name] IS NOT NULL AND LTRIM(RTRIM([Name])) NOT IN (N'', N'Department');
+                INSERT INTO [Store_Department] ([Name])
+                SELECT v.[Name] FROM (VALUES (N'Laboratory'), (N'Radiology & Imaging'), (N'Operation Theatre'), (N'Emergency'),
+                    (N'ICU'), (N'Ward / Nursing Station'), (N'Housekeeping'), (N'Administration'), (N'Reception & Front Desk'),
+                    (N'Pharmacy'), (N'Kitchen & Canteen'), (N'Maintenance')) v([Name])
+                WHERE NOT EXISTS (SELECT 1 FROM [Store_Department] d WHERE d.[Name] = v.[Name]);
+            END
+
+            -- Seed common item categories
+            INSERT INTO [Store_Product_Category] ([Name])
+            SELECT v.[Name] FROM (VALUES (N'Medical Consumables'), (N'Surgical & OT Items'), (N'Lab Reagents & Kits'),
+                (N'Linen & Uniform'), (N'Housekeeping & Cleaning'), (N'Stationery & Printing'), (N'Equipment & Spare Parts')) v([Name])
+            WHERE NOT EXISTS (SELECT 1 FROM [Store_Product_Category] c WHERE c.[Name] = v.[Name]);
+
+            -- Opening stock: move legacy Store_Product.Balance into the Central Store once
+            DECLARE @central int = (SELECT TOP 1 [ID] FROM [Store_Location] WHERE [Is_Central] = 1 ORDER BY [Sort_Order], [ID]);
+            IF @central IS NOT NULL
+            BEGIN
+                DECLARE @opening TABLE ([StockID] int, [ProductID] int, [Qty] decimal(18,2), [Rate] decimal(18,2));
+                INSERT INTO [Store_Stock] ([Location_ID], [Product_ID], [Batch_No], [Expire_Date], [Balance], [Buy_Rate], [Received_Date])
+                OUTPUT INSERTED.[ID], INSERTED.[Product_ID], INSERTED.[Balance], INSERTED.[Buy_Rate] INTO @opening
+                SELECT @central, p.[ID], N'OPENING', NULL, p.[Balance], p.[Buy_Rate], GETDATE()
+                FROM [Store_Product] p
+                WHERE p.[Balance] > 0 AND NOT EXISTS (SELECT 1 FROM [Store_Stock] s WHERE s.[Product_ID] = p.[ID])
+                  AND NOT EXISTS (SELECT 1 FROM [Store_Stock_Ledger] l WHERE l.[Product_ID] = p.[ID]);
+                INSERT INTO [Store_Stock_Ledger] ([Trans_Date], [Location_ID], [Product_ID], [Stock_ID], [Qty_In], [Qty_Out], [Rate], [Ref_Type], [Ref_ID], [Note], [Entered_By])
+                SELECT GETDATE(), @central, o.[ProductID], o.[StockID], o.[Qty], 0, o.[Rate], N'OPENING', 0, N'Opening balance from legacy store', 1 FROM @opening o;
+            END
             IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Service]') AND name = 'SKU')
             BEGIN
                 ALTER TABLE [Service] ADD [SKU] nvarchar(50) NULL;

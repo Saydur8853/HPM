@@ -1,393 +1,456 @@
 @page "/store/products"
-@attribute [Authorize(Roles = RoleNames.Administrator)]
-@inject IDbContextFactory<HpmDbContext> DbFactory
-@inject IJSRuntime JS
-@inject AuthenticationStateProvider AuthStateProvider
-@implements IDisposable
-@using System.Security.Claims
-@using Microsoft.EntityFrameworkCore
-@using HPM.Web.Data.Entities
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
 
-<PageTitle>@I18n.T("Hospital Store Products & Inventory") | @Branding.HospitalName</PageTitle>
+<PageTitle>@I18n.T("Store Item List & Setup") | @Branding.HospitalName</PageTitle>
 
-<div class="canteen-classic-fit">
-    <!-- Top Action & Status Bar -->
-    <div class="canteen-classic-topbar">
-        <div class="tickets-top-left">
-            <h1 class="tickets-page-title">
-                <span>📋</span>
-                <span>@I18n.T("Hospital Store Products & Inventory", "Hospital Store Products & Inventory")</span>
-            </h1>
-            <span class="tickets-count-pill">
-                @products.Count @I18n.T("Items Listed", "Items Listed")
-            </span>
-            <span class="tickets-count-pill" style="background:#fef3c7; color:#92400e;">
-                @products.Count(p => p.Balance <= p.ReOrderLevel) @I18n.T("Low Stock", "Low Stock")
-            </span>
-            @if (!string.IsNullOrWhiteSpace(message))
-            {
-                <span class="tickets-inline-alert @messageClass" title="@message">
-                    @(messageClass == "success" ? "✓" : "⚠") @message
-                </span>
-            }
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">⚙️ @I18n.T("Item List & Setup")</h1>
+            <div class="px-seg">
+                @foreach (var t in Tabs)
+                {
+                    var tt = t;
+                    <button type="button" class="@(tab == tt.Key ? "on" : "")" @onclick="() => SwitchTab(tt.Key)">@tt.Icon @I18n.T(tt.Label)</button>
+                }
+            </div>
         </div>
-
-        <div class="tickets-top-actions">
-            <a href="/store/challan" class="btn btn-secondary tickets-btn" style="text-decoration:none;" title="@I18n.T("Go to Stock Receiving Challan")">
-                📥 @I18n.T("Receiving Challan", "Receiving Challan")
-            </a>
-            <button type="button" class="btn btn-ghost tickets-btn" @onclick="ResetForm" title="@I18n.T("New Product")">
-                + @I18n.T("New Product", "New Product")
-            </button>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Items")</span><b>@Lookups.Products.Count(p => p.IsActive)</b></div>
+            <div class="px-metric"><span>@I18n.T("Low Stock")</span><b class="bad">@Lookups.Products.Count(p => p.IsActive && p.Balance <= p.ReOrderLevel)</b></div>
         </div>
     </div>
 
-    <!-- Main Workspace Grid -->
-    <div class="canteen-classic-workspace">
-        <!-- Left Panel: Product Editor Card -->
-        <div class="canteen-form-card" style="flex: 1.1;">
-            <div class="canteen-card-header">
-                <h2>@(editor.ID == 0 ? I18n.T("Add Store Consumable / Product", "Add Store Product") : $"{I18n.T("Edit Product", "Edit Product")} #{editor.ID}")</h2>
-                <span class="canteen-badge">
-                    @(editor.ID == 0 ? "NEW ITEM" : $"ID #{editor.ID}")
-                </span>
-            </div>
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
 
-            <EditForm Model="editor" OnValidSubmit="SaveProductAsync" class="canteen-form-wrapper">
-                <DataAnnotationsValidator />
-
-                <div class="canteen-form-body">
-                    <div class="billing-demographics-grid" style="grid-template-columns: 2fr 1fr;">
-                        <label>
-                            <span>@I18n.T("Product / Consumable Name", "Product Name")<span class="req">*</span></span>
-                            <InputText class="classic-input" @bind-Value="editor.Name" placeholder="e.g. Cotton 500g, Disposable Syringe 5ml, Surgical Gloves 7.5" />
-                        </label>
-                        <label>
-                            <span>@I18n.T("Unit of Measurement", "Unit")<span class="req">*</span></span>
-                            <select class="classic-input tickets-select" @bind="editor.Unit">
-                                <option value="Pcs">Pcs</option>
-                                <option value="Box">Box</option>
-                                <option value="Pack">Pack</option>
-                                <option value="Roll">Roll</option>
-                                <option value="Bottle">Bottle</option>
-                                <option value="Set">Set</option>
-                                <option value="Kg">Kg</option>
-                                <option value="Ltr">Ltr</option>
-                                <option value="Dozen">Dozen</option>
-                            </select>
-                        </label>
-                    </div>
-
-                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr; margin-top: 10px;">
-                        <label>
-                            <span>@I18n.T("Product Category", "Category")</span>
-                            <select class="classic-input tickets-select" @bind="editor.CategoryID">
-                                @foreach (var c in categories)
-                                {
-                                    <option value="@c.ID">@c.Name</option>
-                                }
-                            </select>
-                        </label>
-                        <label>
-                            <span>@I18n.T("Preferred Supplier", "Supplier")</span>
-                            <select class="classic-input tickets-select" @bind="editor.Supplier">
-                                <option value="0">-- @I18n.T("Select Supplier", "Select Supplier") --</option>
-                                @foreach (var s in suppliers)
-                                {
-                                    <option value="@s.ID">@s.Name</option>
-                                }
-                            </select>
-                        </label>
-                    </div>
-
-                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr 1fr; margin-top: 10px;">
-                        <label>
-                            <span>@I18n.T("Purchase Buy Rate", "Buy Rate") (@I18n.CurrencySymbol)</span>
-                            <InputNumber class="classic-input bold-number" @bind-Value="editor.BuyRate" />
-                        </label>
-                        <label>
-                            <span>@I18n.T("Issue / Sale Rate", "Sale Rate") (@I18n.CurrencySymbol)</span>
-                            <InputNumber class="classic-input bold-number" @bind-Value="editor.SaleRate" />
-                        </label>
-                        <label>
-                            <span>@I18n.T("Re-Order Threshold", "Re-Order Level")</span>
-                            <InputNumber class="classic-input bold-number" @bind-Value="editor.ReOrderLevel" />
-                        </label>
-                    </div>
-
-                    <div class="billing-demographics-grid" style="grid-template-columns: 1fr 1fr; margin-top: 10px;">
-                        <label>
-                            <span>@I18n.T("Current Balance Stock", "Balance Stock") (@editor.Unit)</span>
-                            <InputNumber class="classic-input bold-number" @bind-Value="editor.Balance" disabled="@(editor.ID > 0)" />
-                            @if (editor.ID > 0)
-                            {
-                                <small style="color:#64748b; font-size:11px;">@I18n.T("Stock adjusts automatically via Receiving Challans.", "Stock adjusts via Challan.")</small>
-                            }
-                        </label>
-                    </div>
-                </div>
-
-                <div class="results-form-footer">
-                    <div>
-                        @if (editor.ID > 0)
+    <div class="pharmacy-classic-workspace">
+        @* ---------------- LEFT: list ---------------- *@
+        <section class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-filter-row">
+                    <div class="px-search-box sm grow">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(search))
                         {
-                            <button type="button" class="btn btn-ghost" style="color:#dc2626;" @onclick="DeleteProductAsync">
-                                🗑 @I18n.T("Delete", "Delete")
-                            </button>
+                            <button type="button" class="px-x" @onclick='() => search = ""'>✕</button>
                         }
                     </div>
-                    <div style="display:flex; gap:8px;">
-                        <button type="button" class="btn btn-ghost tickets-btn" @onclick="ResetForm">
-                            @I18n.T("Clear", "Clear")
-                        </button>
-                        <button type="submit" class="btn btn-primary tickets-btn" disabled="@isSaving">
-                            @(editor.ID == 0 ? I18n.T("Save Product", "Save") : I18n.T("Update Product", "Update"))
-                        </button>
-                    </div>
-                </div>
-            </EditForm>
-        </div>
-
-        <!-- Right Panel: Products Catalog List -->
-        <div class="canteen-queue-card" style="flex: 1.4;">
-            <div class="canteen-queue-top">
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <h2>@I18n.T("Store Inventory Directory", "Store Inventory Directory")</h2>
-                </div>
-                <span class="pill" style="font-size:11px; font-weight:700;">
-                    @FilteredProducts.Count() @I18n.T("Items", "Items")
-                </span>
-            </div>
-
-            <div class="tickets-scanner-bar">
-                <div class="tickets-scanner-input-wrap">
-                    <span class="tickets-scanner-icon"><SearchIcon /></span>
-                    <input type="text"
-                           class="classic-input tickets-scanner-input"
-                           placeholder="@I18n.T("Search product name, category or unit...", "Search product name, category or unit...")"
-                           @bind="searchQuery"
-                           @bind:event="oninput" />
-                    @if (!string.IsNullOrWhiteSpace(searchQuery))
+                    @if (tab == "items")
                     {
-                        <button type="button" class="tickets-scanner-clear" @onclick="() => searchQuery = string.Empty">✕</button>
+                        <select @bind="categoryFilter">
+                            <option value="0">@I18n.T("All categories")</option>
+                            @foreach (var c in Lookups.Categories)
+                            {
+                                <option value="@c.ID">@c.Name</option>
+                            }
+                        </select>
+                        <label class="px-check"><input type="checkbox" checked="@showInactive" @onchange="e => showInactive = e.Value is true" /> <span>@I18n.T("Show inactive")</span></label>
+                    }
+                    <button type="button" class="px-btn primary" @onclick="StartNew">+ @I18n.T("Add New")</button>
+                </div>
+            </header>
+            <div class="px-queue">
+                @{ var tokens = SearchText.Tokenize(search); }
+                @if (tab == "items")
+                {
+                    var items = Lookups.Products.Where(p => (showInactive || p.IsActive) && (categoryFilter == 0 || p.CategoryID == categoryFilter)
+                        && SearchText.MatchesAll(tokens, p.Name, Lookups.CategoryName(p.CategoryID), p.Unit)).ToList();
+                    @if (items.Count == 0) { <div class="px-empty sm">@I18n.T("No item found.")</div> }
+                    @foreach (var p in items.Take(500))
+                    {
+                        var low = p.Balance <= p.ReOrderLevel;
+                        <button type="button" class="px-q-item @(itemEditor?.ID == p.ID ? "active" : "")" @onclick="() => EditItem(p)">
+                            <span class="px-q-id">#@p.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">
+                                    @SearchText.Highlight(p.Name, tokens)
+                                    @if (p.TrackExpiry) { <span class="px-tag amber">EXP</span> }
+                                    @if (!p.IsActive) { <span class="px-tag gray">@I18n.T("Inactive")</span> }
+                                </span>
+                                <span class="px-q-meta">@SearchText.Highlight(Lookups.CategoryName(p.CategoryID), tokens) · @p.Unit · @I18n.T("Reorder") @p.ReOrderLevel · @I18n.FormatCurrency(p.BuyRate)</span>
+                            </span>
+                            <span class="px-stock @(p.Balance <= 0 ? "out" : low ? "low" : "ok")">@p.Balance.ToString("0.##")</span>
+                        </button>
+                    }
+                }
+                else if (tab == "categories")
+                {
+                    @foreach (var c in Lookups.Categories.Where(c => SearchText.MatchesAll(tokens, c.Name)))
+                    {
+                        <button type="button" class="px-q-item @(nameEditorId == c.ID ? "active" : "")" @onclick="() => EditName(c.ID, c.Name, true)">
+                            <span class="px-q-id">#@c.ID</span>
+                            <span class="px-q-info"><span class="px-q-name">@SearchText.Highlight(c.Name, tokens)</span><span class="px-q-meta">@Lookups.Products.Count(p => p.CategoryID == c.ID) @I18n.T("items")</span></span>
+                        </button>
+                    }
+                }
+                else if (tab == "suppliers")
+                {
+                    @foreach (var s in Lookups.Suppliers.Where(s => SearchText.MatchesAll(tokens, s.Name, s.Contact, s.Address)))
+                    {
+                        <button type="button" class="px-q-item @(supplierEditor?.ID == s.ID ? "active" : "")" @onclick="() => EditSupplier(s)">
+                            <span class="px-q-id">#@s.ID</span>
+                            <span class="px-q-info"><span class="px-q-name">@SearchText.Highlight(s.Name, tokens)</span><span class="px-q-meta">@SearchText.Highlight(s.Contact, tokens) @(string.IsNullOrWhiteSpace(s.Address) ? "" : $"· {s.Address}")</span></span>
+                        </button>
+                    }
+                }
+                else if (tab == "stores")
+                {
+                    @foreach (var l in Lookups.Locations.Where(l => SearchText.MatchesAll(tokens, l.Name)))
+                    {
+                        <button type="button" class="px-q-item @(locationEditor?.ID == l.ID ? "active" : "")" @onclick="() => EditLocation(l)">
+                            <span class="px-q-id">#@l.ID</span>
+                            <span class="px-q-info">
+                                <span class="px-q-name">@SearchText.Highlight(l.Name, tokens) @if (l.IsCentral) { <span class="px-tag blue">@I18n.T("Central")</span> } @if (!l.IsActive) { <span class="px-tag gray">@I18n.T("Inactive")</span> }</span>
+                                <span class="px-q-meta">@I18n.T("Usable stock lines"): @Lookups.Stock.Count(kv => kv.Key.Location == l.ID)</span>
+                            </span>
+                        </button>
+                    }
+                }
+                else
+                {
+                    @foreach (var d in Lookups.Departments.Where(d => SearchText.MatchesAll(tokens, d.Name)))
+                    {
+                        <button type="button" class="px-q-item @(departmentEditor?.ID == d.ID ? "active" : "")" @onclick="() => EditDepartment(d)">
+                            <span class="px-q-id">#@d.ID</span>
+                            <span class="px-q-info"><span class="px-q-name">@SearchText.Highlight(d.Name, tokens) @if (!d.IsActive) { <span class="px-tag gray">@I18n.T("Inactive")</span> }</span></span>
+                        </button>
+                    }
+                }
+            </div>
+        </section>
+
+        @* ---------------- RIGHT: editor ---------------- *@
+        <aside class="px-card">
+            @if (tab == "items" && itemEditor != null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@(itemEditor.ID == 0 ? I18n.T("New Item") : $"{I18n.T("Edit Item")} #{itemEditor.ID}")</h2></div></header>
+                <div class="px-card-body">
+                    <div class="px-form-grid two">
+                        <label class="px-field span-all"><span>@I18n.T("Item Name") <i>*</i></span><input @bind="itemEditor.Name" maxlength="50" /></label>
+                        <label class="px-field">
+                            <span>@I18n.T("Category") <i>*</i></span>
+                            <select @bind="itemEditor.CategoryID">
+                                <option value="0">@I18n.T("Select...")</option>
+                                @foreach (var c in Lookups.Categories) { <option value="@c.ID">@c.Name</option> }
+                            </select>
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Unit") <i>*</i></span>
+                            <input @bind="itemEditor.Unit" maxlength="50" list="store-units" placeholder="Pcs, Box, Pack..." />
+                            <datalist id="store-units">@foreach (var u in CommonUnits) { <option value="@u"></option> }</datalist>
+                        </label>
+                        <label class="px-field">
+                            <span>@I18n.T("Main Supplier")</span>
+                            <select @bind="itemEditor.Supplier">
+                                <option value="0">@I18n.T("None")</option>
+                                @foreach (var s in Lookups.Suppliers) { <option value="@s.ID">@s.Name</option> }
+                            </select>
+                        </label>
+                        <label class="px-field"><span>@I18n.T("Reorder Level")</span><input type="number" min="0" @bind="itemEditor.ReOrderLevel" /></label>
+                        <label class="px-field"><span>@I18n.T("Buy Rate")</span><input type="number" min="0" step="0.01" @bind="itemEditor.BuyRate" /></label>
+                        <label class="px-field"><span>@I18n.T("Sale / Charge Rate")</span><input type="number" min="0" step="0.01" @bind="itemEditor.SaleRate" /></label>
+                        <label class="px-check span-all"><input type="checkbox" checked="@itemEditor.TrackExpiry" @onchange="e => itemEditor.TrackExpiry = e.Value is true" /> <span>@I18n.T("Track batch & expiry (reagents, kits, sterile items)")</span></label>
+                        <label class="px-check span-all"><input type="checkbox" checked="@itemEditor.IsActive" @onchange="e => itemEditor.IsActive = e.Value is true" /> <span>@I18n.T("Active (available for requisition & issue)")</span></label>
+                    </div>
+
+                    @if (itemEditor.ID == 0)
+                    {
+                        <h3 class="px-section-title">@I18n.T("Opening Stock") <em class="muted">@I18n.T("optional")</em></h3>
+                        <div class="px-panel px-form-grid two">
+                            <label class="px-field">
+                                <span>@I18n.T("Store")</span>
+                                <select @bind="openingLocationId">@foreach (var l in Lookups.Locations) { <option value="@l.ID">@l.Name</option> }</select>
+                            </label>
+                            <label class="px-field"><span>@I18n.T("Quantity")</span><input type="number" min="0" @bind="openingQty" /></label>
+                            <label class="px-field"><span>@I18n.T("Batch No")</span><input @bind="openingBatch" maxlength="50" /></label>
+                            <label class="px-field"><span>@I18n.T("Expiry")</span><input type="date" @bind="openingExpiry" /></label>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="px-bill-strip">
+                            <div><span>@I18n.T("Total Stock")</span><b>@itemEditor.Balance.ToString("0.##") @itemEditor.Unit</b></div>
+                            @foreach (var l in Lookups.Locations)
+                            {
+                                var q = Lookups.StockAt(l.ID, itemEditor.ID);
+                                if (q > 0) { <div><span>@l.Name</span><b>@q.ToString("0.##")</b></div> }
+                            }
+                        </div>
+                        <small class="muted">@I18n.T("Stock changes only through GRN, issue, return, transfer or stock count.")</small>
                     }
                 </div>
-            </div>
-
-            <div class="billing-queue-list">
-                @if (!FilteredProducts.Any())
-                {
-                    <div class="tickets-queue-empty">
-                        <span style="font-size:2rem;">📋</span>
-                        <span>@I18n.T("No matching products found.", "No matching products found.")</span>
-                    </div>
-                }
-                @foreach (var prod in FilteredProducts)
-                {
-                    var isLow = prod.Balance <= prod.ReOrderLevel;
-                    <div class="billing-queue-item @(editor.ID == prod.ID ? "active" : "")" @onclick="() => SelectProduct(prod)">
-                        <span class="billing-queue-serial">#@prod.ID</span>
-                        <div class="billing-queue-info">
-                            <span class="billing-queue-name">
-                                @prod.Name
-                                <small class="canteen-type-tag">(@prod.Unit)</small>
-                            </span>
-                            <span class="billing-queue-meta">
-                                @I18n.T("Buy"): @I18n.FormatCurrency(prod.BuyRate) &bull; @I18n.T("Sale/Issue"): @I18n.FormatCurrency(prod.SaleRate)
-                            </span>
-                        </div>
-                        <div class="tickets-queue-badges">
-                            @if (isLow)
-                            {
-                                <span class="badge" style="background:#fee2e2; color:#b91c1c; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11px;">
-                                    ⚠ @prod.Balance.ToString("0.##") @prod.Unit
-                                </span>
-                            }
-                            else
-                            {
-                                <span class="badge" style="background:#dcfce7; color:#15803d; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11px;">
-                                    @prod.Balance.ToString("0.##") @prod.Unit
-                                </span>
-                            }
-                        </div>
-                        <div class="tickets-queue-actions" @onclick:stopPropagation="true">
-                            <button type="button" class="tickets-icon-action" title="@I18n.T("Edit")" @onclick="() => SelectProduct(prod)">✏️</button>
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
+                <footer class="px-card-foot">
+                    <button type="button" class="px-btn" @onclick="() => itemEditor = null">@I18n.T("Cancel")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveItemAsync">@(IsBusy ? I18n.T("Saving…") : I18n.T("Save Item"))</button>
+                </footer>
+            }
+            else if (tab == "categories" && nameEditorId != null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@(nameEditorId == 0 ? I18n.T("New Category") : I18n.T("Edit Category"))</h2></div></header>
+                <div class="px-card-body">
+                    <label class="px-field"><span>@I18n.T("Category Name") <i>*</i></span><input @bind="nameEditorValue" maxlength="50" /></label>
+                </div>
+                <footer class="px-card-foot">
+                    <button type="button" class="px-btn" @onclick="() => nameEditorId = null">@I18n.T("Cancel")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveCategoryAsync">@I18n.T("Save")</button>
+                </footer>
+            }
+            else if (tab == "suppliers" && supplierEditor != null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@(supplierEditor.ID == 0 ? I18n.T("New Supplier") : I18n.T("Edit Supplier"))</h2></div></header>
+                <div class="px-card-body">
+                    <label class="px-field"><span>@I18n.T("Supplier Name") <i>*</i></span><input @bind="supplierEditor.Name" maxlength="50" /></label>
+                    <label class="px-field"><span>@I18n.T("Contact")</span><input @bind="supplierEditor.Contact" maxlength="50" /></label>
+                    <label class="px-field"><span>@I18n.T("Address")</span><input @bind="supplierEditor.Address" maxlength="100" /></label>
+                </div>
+                <footer class="px-card-foot">
+                    <button type="button" class="px-btn" @onclick="() => supplierEditor = null">@I18n.T("Cancel")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveSupplierAsync">@I18n.T("Save")</button>
+                </footer>
+            }
+            else if (tab == "stores" && locationEditor != null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@(locationEditor.ID == 0 ? I18n.T("New Sub-store") : I18n.T("Edit Sub-store"))</h2></div></header>
+                <div class="px-card-body">
+                    <label class="px-field"><span>@I18n.T("Store Name") <i>*</i></span><input @bind="locationEditor.Name" maxlength="60" /></label>
+                    <label class="px-field"><span>@I18n.T("Display Order")</span><input type="number" @bind="locationEditor.SortOrder" /></label>
+                    <label class="px-check"><input type="checkbox" checked="@locationEditor.IsCentral" @onchange="e => locationEditor.IsCentral = e.Value is true" /> <span>@I18n.T("Central store (default for receiving & issue)")</span></label>
+                    <label class="px-check"><input type="checkbox" checked="@locationEditor.IsActive" @onchange="e => locationEditor.IsActive = e.Value is true" /> <span>@I18n.T("Active")</span></label>
+                </div>
+                <footer class="px-card-foot">
+                    <button type="button" class="px-btn" @onclick="() => locationEditor = null">@I18n.T("Cancel")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveLocationAsync">@I18n.T("Save")</button>
+                </footer>
+            }
+            else if (tab == "departments" && departmentEditor != null)
+            {
+                <header class="px-card-head"><div class="px-card-title"><h2>@(departmentEditor.ID == 0 ? I18n.T("New Department") : I18n.T("Edit Department"))</h2></div></header>
+                <div class="px-card-body">
+                    <label class="px-field"><span>@I18n.T("Department / Cost Centre") <i>*</i></span><input @bind="departmentEditor.Name" maxlength="80" /></label>
+                    <label class="px-check"><input type="checkbox" checked="@departmentEditor.IsActive" @onchange="e => departmentEditor.IsActive = e.Value is true" /> <span>@I18n.T("Active")</span></label>
+                </div>
+                <footer class="px-card-foot">
+                    <button type="button" class="px-btn" @onclick="() => departmentEditor = null">@I18n.T("Cancel")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveDepartmentAsync">@I18n.T("Save")</button>
+                </footer>
+            }
+            else
+            {
+                <div class="px-finder-empty">
+                    <div class="icon">@Tabs.First(t => t.Key == tab).Icon</div>
+                    <h3>@I18n.T("Select a row to edit, or Add New")</h3>
+                    <ul>
+                        <li>@I18n.T("Items: name, unit, category, reorder level, expiry tracking")</li>
+                        <li>@I18n.T("Sub-stores: Central, Laboratory, OT...")</li>
+                        <li>@I18n.T("Departments: who can request and receive items")</li>
+                    </ul>
+                </div>
+            }
+        </aside>
     </div>
 </div>
 
 @code {
-    private StoreProduct editor = new() { CategoryID = 1, Unit = "Pcs", BuyRate = 0, SaleRate = 0, Balance = 0, ReOrderLevel = 10 };
-    private List<StoreProduct> products = [];
-    private List<StoreProductCategory> categories = [];
-    private List<SupplierStore> suppliers = [];
+    private static readonly (string Key, string Icon, string Label)[] Tabs =
+    [
+        ("items", "📦", "Items"), ("categories", "🏷️", "Categories"), ("suppliers", "🚚", "Suppliers"), ("stores", "🏬", "Sub-stores"), ("departments", "🏥", "Departments")
+    ];
+    private static readonly string[] CommonUnits = ["Pcs", "Box", "Pack", "Pair", "Bottle", "Vial", "Kit", "Test", "Roll", "Ream", "Set", "Litre", "ml", "Kg", "Gm", "Meter"];
 
-    private string searchQuery = "";
-    private string message = "";
-    private string messageClass = "success";
-    private bool isSaving = false;
+    private string tab = "items";
+    private string search = "";
+    private int categoryFilter;
+    private bool showInactive;
 
-    private IEnumerable<StoreProduct> FilteredProducts
+    private StoreProduct? itemEditor;
+    private int openingLocationId;
+    private decimal openingQty;
+    private string? openingBatch;
+    private DateTime? openingExpiry;
+    private int? nameEditorId;
+    private string nameEditorValue = "";
+    private SupplierStore? supplierEditor;
+    private StoreLocation? locationEditor;
+    private StoreDepartment? departmentEditor;
+
+    protected override async Task OnStoreInitializedAsync() => await ReloadLookupsAsync(includeInactive: true);
+
+    private void SwitchTab(string t)
     {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(searchQuery))
-                return products;
+        tab = t;
+        search = "";
+        CloseEditors();
+    }
 
-            var q = searchQuery.Trim().ToLowerInvariant();
-            return products.Where(p =>
-                p.Name.ToLowerInvariant().Contains(q) ||
-                p.Unit.ToLowerInvariant().Contains(q) ||
-                (categories.FirstOrDefault(c => c.ID == p.CategoryID)?.Name.ToLowerInvariant().Contains(q) ?? false)
-            );
+    private void CloseEditors()
+    {
+        itemEditor = null;
+        nameEditorId = null;
+        supplierEditor = null;
+        locationEditor = null;
+        departmentEditor = null;
+        Message = "";
+    }
+
+    private void StartNew()
+    {
+        CloseEditors();
+        switch (tab)
+        {
+            case "items":
+                itemEditor = new StoreProduct { Unit = "Pcs", ReOrderLevel = 10, IsActive = true, CategoryID = categoryFilter };
+                openingLocationId = Lookups.DefaultLocationId;
+                openingQty = 0; openingBatch = null; openingExpiry = null;
+                break;
+            case "categories": nameEditorId = 0; nameEditorValue = ""; break;
+            case "suppliers": supplierEditor = new SupplierStore(); break;
+            case "stores": locationEditor = new StoreLocation { IsActive = true, SortOrder = Lookups.Locations.Count }; break;
+            default: departmentEditor = new StoreDepartment { IsActive = true }; break;
         }
     }
 
-    protected override async Task OnInitializedAsync()
+    private void EditItem(StoreProduct p)
     {
-        I18n.OnLanguageChanged += HandleLanguageChanged;
-        await LoadDataAsync();
-    }
-
-    private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => I18n.OnLanguageChanged -= HandleLanguageChanged;
-
-    private async Task LoadDataAsync()
-    {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        categories = await db.StoreProductCategories.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
-        suppliers = await db.StoreSuppliers.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
-        products = await db.StoreProducts.AsNoTracking().OrderBy(p => p.Name).ToListAsync();
-
-        if (editor.CategoryID == 0 && categories.Count > 0)
-            editor.CategoryID = categories[0].ID;
-    }
-
-    private void SelectProduct(StoreProduct p)
-    {
-        editor = new StoreProduct
+        CloseEditors();
+        itemEditor = new StoreProduct
         {
-            ID = p.ID,
-            Name = p.Name,
-            Unit = p.Unit,
-            CategoryID = p.CategoryID,
-            Supplier = p.Supplier,
-            BuyRate = p.BuyRate,
-            SaleRate = p.SaleRate,
-            Balance = p.Balance,
-            ReOrderLevel = p.ReOrderLevel,
-            EnteredBy = p.EnteredBy,
-            TransDate = p.TransDate
+            ID = p.ID, Name = p.Name, Unit = p.Unit, CategoryID = p.CategoryID, Supplier = p.Supplier, ReOrderLevel = p.ReOrderLevel,
+            Balance = p.Balance, BuyRate = p.BuyRate, SaleRate = p.SaleRate, IsActive = p.IsActive, TrackExpiry = p.TrackExpiry
         };
-        message = "";
     }
 
-    private async Task SaveProductAsync()
+    private void EditName(int id, string name, bool _) { CloseEditors(); nameEditorId = id; nameEditorValue = name; }
+    private void EditSupplier(SupplierStore s) { CloseEditors(); supplierEditor = new SupplierStore { ID = s.ID, Name = s.Name, Contact = s.Contact, Address = s.Address, Amount = s.Amount, TransDate = s.TransDate }; }
+    private void EditLocation(StoreLocation l) { CloseEditors(); locationEditor = new StoreLocation { ID = l.ID, Name = l.Name, IsCentral = l.IsCentral, IsActive = l.IsActive, SortOrder = l.SortOrder }; }
+    private void EditDepartment(StoreDepartment d) { CloseEditors(); departmentEditor = new StoreDepartment { ID = d.ID, Name = d.Name, IsActive = d.IsActive }; }
+
+    private async Task SaveItemAsync()
     {
-        if (string.IsNullOrWhiteSpace(editor.Name))
-        {
-            ShowMsg(I18n.IsBangla ? "প্রোডাক্টের নাম প্রদান করুন।" : "Please provide product name.", "danger");
-            return;
-        }
-
-        isSaving = true;
-        message = "";
-
+        if (itemEditor == null) return;
+        var e = itemEditor;
+        e.Name = (e.Name ?? "").Trim();
+        e.Unit = (e.Unit ?? "").Trim();
+        if (e.Name.Length < 2 || e.Unit.Length == 0 || e.CategoryID <= 0) { Fail(I18n.T("Item name, unit and category are required.")); return; }
+        if (Lookups.Products.Any(p => p.ID != e.ID && string.Equals(p.Name, e.Name, StringComparison.OrdinalIgnoreCase))) { Fail(I18n.T("An item with this name already exists.")); return; }
+        if (e.ReOrderLevel < 0 || e.BuyRate < 0 || e.SaleRate < 0) { Fail(I18n.T("Values cannot be negative.")); return; }
+        IsBusy = true;
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
-            var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
-            var uid = int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var parsed) ? parsed : 1;
-
-            editor.Name = editor.Name.Trim();
-
-            if (editor.ID == 0)
+            int id;
+            await using (var db = await DbFactory.CreateDbContextAsync())
             {
-                editor.EnteredBy = uid;
-                editor.TransDate = DateTime.Now;
-                db.StoreProducts.Add(editor);
+                if (e.ID == 0)
+                {
+                    var entity = new StoreProduct
+                    {
+                        Name = e.Name, Unit = e.Unit, CategoryID = e.CategoryID, Supplier = e.Supplier, ReOrderLevel = e.ReOrderLevel, BuyRate = e.BuyRate,
+                        SaleRate = e.SaleRate, IsActive = e.IsActive, TrackExpiry = e.TrackExpiry, Balance = 0, EnteredBy = CurrentUserId, TransDate = DateTime.Now
+                    };
+                    db.StoreProducts.Add(entity);
+                    await db.SaveChangesAsync();
+                    id = entity.ID;
+                }
+                else
+                {
+                    var entity = await db.StoreProducts.FirstAsync(p => p.ID == e.ID);
+                    entity.Name = e.Name; entity.Unit = e.Unit; entity.CategoryID = e.CategoryID; entity.Supplier = e.Supplier; entity.ReOrderLevel = e.ReOrderLevel;
+                    entity.BuyRate = e.BuyRate; entity.SaleRate = e.SaleRate; entity.IsActive = e.IsActive; entity.TrackExpiry = e.TrackExpiry;
+                    await db.SaveChangesAsync();
+                    id = entity.ID;
+                }
             }
+            if (e.ID == 0 && openingQty > 0)
+                await Inventory.OpeningAsync(id, openingLocationId, openingQty, e.BuyRate, openingBatch, openingExpiry, CurrentUserId);
+            await ReloadLookupsAsync(includeInactive: true);
+            var fresh = Lookups.Products.FirstOrDefault(p => p.ID == id);
+            if (fresh != null) EditItem(fresh);
+            Success(I18n.IsBangla ? $"আইটেম \"{e.Name}\" সংরক্ষিত হয়েছে।" : $"Item \"{e.Name}\" saved.");
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task SaveCategoryAsync()
+    {
+        var name = nameEditorValue.Trim();
+        if (name.Length < 2) { Fail(I18n.T("Enter a category name.")); return; }
+        if (Lookups.Categories.Any(c => c.ID != nameEditorId && string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase))) { Fail(I18n.T("This category already exists.")); return; }
+        await SaveAsync(async db =>
+        {
+            if (nameEditorId == 0) db.StoreProductCategories.Add(new StoreProductCategory { Name = name });
+            else (await db.StoreProductCategories.FirstAsync(c => c.ID == nameEditorId)).Name = name;
+        }, () => nameEditorId = null);
+    }
+
+    private async Task SaveSupplierAsync()
+    {
+        var s = supplierEditor!;
+        s.Name = (s.Name ?? "").Trim();
+        if (s.Name.Length < 2) { Fail(I18n.T("Enter the supplier name.")); return; }
+        await SaveAsync(async db =>
+        {
+            if (s.ID == 0) db.StoreSuppliers.Add(new SupplierStore { Name = s.Name, Contact = s.Contact?.Trim(), Address = s.Address?.Trim(), Amount = 0, TransDate = DateTime.Now });
             else
             {
-                var existing = await db.StoreProducts.FindAsync(editor.ID);
-                if (existing == null) return;
-                existing.Name = editor.Name;
-                existing.Unit = editor.Unit;
-                existing.CategoryID = editor.CategoryID;
-                existing.Supplier = editor.Supplier;
-                existing.BuyRate = editor.BuyRate;
-                existing.SaleRate = editor.SaleRate;
-                existing.ReOrderLevel = editor.ReOrderLevel;
+                var entity = await db.StoreSuppliers.FirstAsync(x => x.ID == s.ID);
+                entity.Name = s.Name; entity.Contact = s.Contact?.Trim(); entity.Address = s.Address?.Trim();
             }
-
-            await db.SaveChangesAsync();
-            ShowMsg(I18n.IsBangla ? "প্রোডাক্ট সফলভাবে সংরক্ষিত হয়েছে।" : "Store product saved successfully.", "success");
-            ResetForm();
-            await LoadDataAsync();
-        }
-        catch (Exception ex)
-        {
-            ShowMsg($"Error saving product: {ex.Message}", "danger");
-        }
-        finally
-        {
-            isSaving = false;
-        }
+        }, () => supplierEditor = null);
     }
 
-    private async Task DeleteProductAsync()
+    private async Task SaveLocationAsync()
     {
-        if (editor.ID <= 0) return;
-        if (!await JS.InvokeAsync<bool>("hpm.confirm", I18n.IsBangla ? $"প্রোডাক্ট {editor.Name} মুছে ফেলতে চান?" : $"Delete product {editor.Name}?")) return;
+        var l = locationEditor!;
+        l.Name = (l.Name ?? "").Trim();
+        if (l.Name.Length < 2) { Fail(I18n.T("Enter the store name.")); return; }
+        if (!l.IsActive && l.ID > 0 && Lookups.Stock.Any(kv => kv.Key.Location == l.ID)) { Fail(I18n.T("This store still has stock. Transfer it out before deactivating.")); return; }
+        await SaveAsync(async db =>
+        {
+            if (l.IsCentral) await db.StoreLocations.Where(x => x.ID != l.ID && x.IsCentral).ExecuteUpdateAsync(x => x.SetProperty(p => p.IsCentral, false));
+            if (l.ID == 0) db.StoreLocations.Add(new StoreLocation { Name = l.Name, IsCentral = l.IsCentral, IsActive = l.IsActive, SortOrder = l.SortOrder });
+            else
+            {
+                var entity = await db.StoreLocations.FirstAsync(x => x.ID == l.ID);
+                entity.Name = l.Name; entity.IsCentral = l.IsCentral; entity.IsActive = l.IsActive; entity.SortOrder = l.SortOrder;
+            }
+        }, () => locationEditor = null);
+    }
 
+    private async Task SaveDepartmentAsync()
+    {
+        var d = departmentEditor!;
+        d.Name = (d.Name ?? "").Trim();
+        if (d.Name.Length < 2) { Fail(I18n.T("Enter the department name.")); return; }
+        if (Lookups.Departments.Any(x => x.ID != d.ID && string.Equals(x.Name, d.Name, StringComparison.OrdinalIgnoreCase))) { Fail(I18n.T("This department already exists.")); return; }
+        await SaveAsync(async db =>
+        {
+            if (d.ID == 0) db.StoreDepartments.Add(new StoreDepartment { Name = d.Name, IsActive = d.IsActive });
+            else
+            {
+                var entity = await db.StoreDepartments.FirstAsync(x => x.ID == d.ID);
+                entity.Name = d.Name; entity.IsActive = d.IsActive;
+            }
+        }, () => departmentEditor = null);
+    }
+
+    private async Task SaveAsync(Func<HpmDbContext, Task> change, Action close)
+    {
+        IsBusy = true;
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync();
-            var used = await db.StoreChallanItems.AnyAsync(i => i.ProductID == editor.ID);
-            if (used)
-            {
-                ShowMsg(I18n.IsBangla ? "এই প্রোডাক্টের ক্রয়ের চালান রয়েছে, এটি মুছে ফেলা যাবে না।" : "Product has purchase challan history and cannot be deleted.", "danger");
-                return;
-            }
-
-            var prod = await db.StoreProducts.FindAsync(editor.ID);
-            if (prod != null)
-            {
-                db.StoreProducts.Remove(prod);
-                await db.SaveChangesAsync();
-            }
-
-            ShowMsg(I18n.IsBangla ? "প্রোডাক্ট সফলভাবে মুছে ফেলা হয়েছে।" : "Product deleted successfully.", "success");
-            ResetForm();
-            await LoadDataAsync();
+            await change(db);
+            await db.SaveChangesAsync();
+            await ReloadLookupsAsync(includeInactive: true);
+            close();
+            Success(I18n.T("Saved."));
         }
-        catch (Exception ex)
-        {
-            ShowMsg($"Error deleting product: {ex.Message}", "danger");
-        }
-    }
-
-    private void ResetForm()
-    {
-        editor = new StoreProduct
-        {
-            CategoryID = categories.FirstOrDefault()?.ID ?? 1,
-            Unit = "Pcs",
-            BuyRate = 0,
-            SaleRate = 0,
-            Balance = 0,
-            ReOrderLevel = 10
-        };
-        message = "";
-    }
-
-    private void ShowMsg(string msg, string cls)
-    {
-        message = msg;
-        messageClass = cls;
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
     }
 }

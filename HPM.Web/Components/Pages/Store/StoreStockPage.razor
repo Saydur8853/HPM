@@ -1,0 +1,255 @@
+@page "/store/stock"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
+
+<PageTitle>@I18n.T("Store Stock & Expiry") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">📦 @I18n.T("Store Stock & Expiry")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Items in Stock")</span><b>@rows.Count(r => r.Qty > 0)</b></div>
+            <div class="px-metric"><span>@I18n.T("Low")</span><b class="@(rows.Any(r => r.Status == "Low") ? "bad" : "")">@rows.Count(r => r.Status == "Low")</b></div>
+            <div class="px-metric"><span>@I18n.T("Out")</span><b class="@(rows.Any(r => r.Status == "Out") ? "bad" : "")">@rows.Count(r => r.Status == "Out")</b></div>
+            <div class="px-metric"><span>@I18n.T("Expiring ≤90d")</span><b>@rows.Count(r => r.Expiring)</b></div>
+            <div class="px-metric"><span>@I18n.T("Stock Value")</span><b class="ok">@I18n.FormatCurrency(rows.Sum(r => r.Value))</b></div>
+        </div>
+    </div>
+
+    <div class="pharmacy-classic-workspace">
+        <section class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-filter-row">
+                    <div class="px-search-box sm grow">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search item or category...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(search))
+                        {
+                            <button type="button" class="px-x" @onclick='() => search = ""'>✕</button>
+                        }
+                    </div>
+                    <select @bind="locationFilter" @bind:after="BuildRows" title="@I18n.T("Store")">
+                        <option value="0">@I18n.T("All stores")</option>
+                        @foreach (var l in Lookups.Locations)
+                        {
+                            <option value="@l.ID">@l.Name</option>
+                        }
+                    </select>
+                    <select @bind="categoryFilter" title="@I18n.T("Category")">
+                        <option value="0">@I18n.T("All categories")</option>
+                        @foreach (var c in Lookups.Categories)
+                        {
+                            <option value="@c.ID">@c.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="px-seg full">
+                    @foreach (var s in new[] { "All", "Low", "Out", "Expiring", "Expired" })
+                    {
+                        var st = s;
+                        <button type="button" class="@(statusFilter == st ? "on" : "")" @onclick="() => statusFilter = st">@I18n.T(st) <span class="px-count">@CountFor(st)</span></button>
+                    }
+                </div>
+            </header>
+            <div class="px-cart flat">
+                <div class="px-cart-head" style="grid-template-columns: minmax(170px,1fr) 100px 70px 100px 100px 90px;">
+                    <div>@I18n.T("Item")</div><div class="r">@I18n.T("Usable Stock")</div><div class="r">@I18n.T("Reorder")</div><div>@I18n.T("Next Expiry")</div><div class="r">@I18n.T("Value")</div><div class="c">@I18n.T("Status")</div>
+                </div>
+                <div class="px-cart-rows">
+                    @{ var tokens = SearchText.Tokenize(search); var view = FilteredRows(tokens).ToList(); }
+                    @if (view.Count == 0)
+                    {
+                        <div class="px-empty"><div class="px-empty-icon">📦</div><div>@I18n.T("No item matches the filters.")</div></div>
+                    }
+                    @foreach (var r in view.Take(400))
+                    {
+                        <div class="px-cart-row clickable @(selected?.ProductId == r.ProductId ? "selected" : "")" style="grid-template-columns: minmax(170px,1fr) 100px 70px 100px 100px 90px;" @onclick="() => SelectAsync(r)">
+                            <div class="px-cart-name stack">
+                                <b>@SearchText.Highlight(r.Name, tokens)</b>
+                                <small>@SearchText.Highlight(r.Category, tokens)@(locationFilter == 0 && r.Breakdown.Length > 0 ? $" · {r.Breakdown}" : "")</small>
+                            </div>
+                            <div class="r strong">@r.Qty.ToString("0.##") <small class="muted">@r.Unit</small></div>
+                            <div class="r muted">@r.Reorder</div>
+                            <div class="@(r.Expiring ? "warn-text" : "muted")">@(r.NextExpiry?.ToString("dd MMM yy") ?? "—")</div>
+                            <div class="r">@I18n.FormatCurrency(r.Value)</div>
+                            <div class="c">
+                                <span class="px-tag @StatusTag(r.Status)">@I18n.T(r.Status)</span>
+                                @if (r.ExpiredQty > 0)
+                                {
+                                    <span class="px-tag red" title="@I18n.T("Expired quantity")">⚠ @r.ExpiredQty.ToString("0.##")</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+            <footer class="px-card-foot">
+                <span class="px-print-fmt">@view.Count @I18n.T("item(s)") @(view.Count > 400 ? $"· {I18n.T("showing first")} 400" : "")</span>
+                <div class="px-foot-actions">
+                    <a class="px-btn" href="/store/stock-control">🔄 @I18n.T("Transfer / Adjust")</a>
+                    <a class="px-btn primary" href="/store/challan">📥 @I18n.T("Receive Stock")</a>
+                </div>
+            </footer>
+        </section>
+
+        <aside class="px-card">
+            @if (selected == null)
+            {
+                <div class="px-finder-empty">
+                    <div class="icon">📋</div>
+                    <h3>@I18n.T("Select an item")</h3>
+                    <ul><li>@I18n.T("See its batches, expiry and stock per store")</li><li>@I18n.T("and the latest stock movements")</li></ul>
+                </div>
+            }
+            else
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>@selected.Name</h2></div>
+                    <span class="px-tag @StatusTag(selected.Status)">@I18n.T(selected.Status)</span>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-bill-strip">
+                        <div><span>@I18n.T("Category")</span><b>@selected.Category</b></div>
+                        <div><span>@I18n.T("Unit")</span><b>@selected.Unit</b></div>
+                        <div><span>@I18n.T("Usable")</span><b>@selected.Qty.ToString("0.##")</b></div>
+                        <div><span>@I18n.T("Reorder Level")</span><b>@selected.Reorder</b></div>
+                    </div>
+
+                    <h3 class="px-section-title">@I18n.T("Batches")</h3>
+                    <div class="px-mini-table">
+                        <div class="px-mini-head" style="grid-template-columns: 1fr 1fr 80px 70px;"><div>@I18n.T("Store")</div><div>@I18n.T("Batch")</div><div>@I18n.T("Expiry")</div><div class="r">@I18n.T("Qty")</div></div>
+                        @if (batches.Count == 0)
+                        {
+                            <div class="px-empty sm">@I18n.T("No stock in any store.")</div>
+                        }
+                        @foreach (var b in batches)
+                        {
+                            var expired = b.ExpireDate.HasValue && b.ExpireDate.Value < DateTime.Today;
+                            <div class="px-mini-row @(expired ? "expired" : "")" style="grid-template-columns: 1fr 1fr 80px 70px;">
+                                <div>@Lookups.LocationName(b.LocationID)</div>
+                                <div class="muted">@(b.BatchNo ?? "—")</div>
+                                <div class="@(expired ? "bad-text" : b.ExpireDate <= DateTime.Today.AddDays(90) ? "warn-text" : "muted")">@(b.ExpireDate?.ToString("MMM yy") ?? "—")</div>
+                                <div class="r strong">@b.Balance.ToString("0.##")</div>
+                            </div>
+                        }
+                    </div>
+
+                    <h3 class="px-section-title">@I18n.T("Recent Movements")</h3>
+                    <div class="px-mini-table">
+                        <div class="px-mini-head" style="grid-template-columns: 80px 1fr 60px 60px;"><div>@I18n.T("Date")</div><div>@I18n.T("Type")</div><div class="r">@I18n.T("In")</div><div class="r">@I18n.T("Out")</div></div>
+                        @if (ledger.Count == 0)
+                        {
+                            <div class="px-empty sm">@I18n.T("No movement yet.")</div>
+                        }
+                        @foreach (var l in ledger)
+                        {
+                            <div class="px-mini-row" style="grid-template-columns: 80px 1fr 60px 60px;">
+                                <div class="muted">@l.TransDate.ToString("dd MMM yy")</div>
+                                <div>
+                                    <span class="px-tag @RefTag(l.RefType)">@RefLabel(l.RefType)</span>
+                                    <small class="muted">@(l.DepartmentID.HasValue ? Lookups.DepartmentName(l.DepartmentID) : Lookups.LocationName(l.LocationID))</small>
+                                </div>
+                                <div class="r ok-text">@(l.QtyIn > 0 ? l.QtyIn.ToString("0.##") : "")</div>
+                                <div class="r bad-text">@(l.QtyOut > 0 ? l.QtyOut.ToString("0.##") : "")</div>
+                            </div>
+                        }
+                    </div>
+                    <a class="px-link" href="/store/reports?tab=ledger&item=@selected.ProductId">@I18n.T("Full item ledger") →</a>
+                </div>
+            }
+        </aside>
+    </div>
+</div>
+
+@code {
+    private List<StockRow> rows = [];
+    private List<StoreStock> allStock = [];
+    private StockRow? selected;
+    private List<StoreStock> batches = [];
+    private List<StoreStockLedger> ledger = [];
+    private string search = "";
+    private int locationFilter;
+    private int categoryFilter;
+    private string statusFilter = "All";
+
+    protected override async Task OnStoreInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        allStock = await db.StoreStocks.AsNoTracking().Where(s => s.Balance > 0).ToListAsync();
+        BuildRows();
+    }
+
+    private void BuildRows()
+    {
+        var today = DateTime.Today;
+        var soon = today.AddDays(90);
+        var byProduct = allStock.Where(s => locationFilter == 0 || s.LocationID == locationFilter).GroupBy(s => s.ProductID).ToDictionary(g => g.Key, g => g.ToList());
+        var byProductAll = allStock.GroupBy(s => s.ProductID).ToDictionary(g => g.Key, g => g.ToList());
+        rows = Lookups.Products.Select(p =>
+        {
+            var list = byProduct.GetValueOrDefault(p.ID) ?? [];
+            var usable = list.Where(s => s.ExpireDate == null || s.ExpireDate >= today).ToList();
+            var qty = usable.Sum(s => s.Balance);
+            var expiredQty = list.Where(s => s.ExpireDate < today).Sum(s => s.Balance);
+            var next = usable.Where(s => s.ExpireDate.HasValue).Min(s => s.ExpireDate);
+            var status = qty <= 0 ? "Out" : qty <= p.ReOrderLevel ? "Low" : "OK";
+            var breakdown = string.Join(" · ", (byProductAll.GetValueOrDefault(p.ID) ?? []).Where(s => s.ExpireDate == null || s.ExpireDate >= today)
+                .GroupBy(s => s.LocationID).Select(g => $"{Lookups.LocationName(g.Key)} {g.Sum(x => x.Balance):0.##}"));
+            return new StockRow(p.ID, p.Name, Lookups.CategoryName(p.CategoryID), p.CategoryID, p.Unit, p.ReOrderLevel, qty, expiredQty, next,
+                next.HasValue && next.Value <= soon, usable.Sum(s => s.Balance * s.BuyRate), status, breakdown);
+        }).ToList();
+        if (selected != null) selected = rows.FirstOrDefault(r => r.ProductId == selected.ProductId);
+    }
+
+    private IEnumerable<StockRow> FilteredRows(string[] tokens) => rows
+        .Where(r => categoryFilter == 0 || r.CategoryId == categoryFilter)
+        .Where(r => InStatus(r, statusFilter))
+        .Where(r => SearchText.MatchesAll(tokens, r.Name, r.Category))
+        .OrderBy(r => r.Status switch { "Out" => 0, "Low" => 1, _ => 2 })
+        .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase);
+
+    private static bool InStatus(StockRow r, string filter) => filter switch
+    {
+        "Low" => r.Status == "Low",
+        "Out" => r.Status == "Out",
+        "Expiring" => r.Expiring,
+        "Expired" => r.ExpiredQty > 0,
+        _ => true
+    };
+
+    private int CountFor(string filter) => rows.Count(r => (categoryFilter == 0 || r.CategoryId == categoryFilter) && InStatus(r, filter));
+
+    private async Task SelectAsync(StockRow row)
+    {
+        selected = row;
+        batches = allStock.Where(s => s.ProductID == row.ProductId).OrderBy(s => s.LocationID).ThenBy(s => s.ExpireDate ?? DateTime.MaxValue).ToList();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        ledger = await db.StoreStockLedger.AsNoTracking().Where(l => l.ProductID == row.ProductId).OrderByDescending(l => l.ID).Take(25).ToListAsync();
+    }
+
+    public static string StatusTag(string status) => status switch { "Out" => "red", "Low" => "amber", _ => "green" };
+
+    public static string RefLabel(string refType) => refType switch
+    {
+        StoreInventoryService.RefOpening => "Opening",
+        StoreInventoryService.RefGrn => "Received",
+        StoreInventoryService.RefIssue => "Issued",
+        StoreInventoryService.RefReturn => "Returned",
+        StoreInventoryService.RefTransferIn => "Transfer in",
+        StoreInventoryService.RefTransferOut => "Transfer out",
+        StoreInventoryService.RefAdjust => "Adjusted",
+        _ => refType
+    };
+
+    public static string RefTag(string refType) => refType switch
+    {
+        StoreInventoryService.RefGrn or StoreInventoryService.RefOpening => "green",
+        StoreInventoryService.RefIssue => "blue",
+        StoreInventoryService.RefReturn => "violet",
+        StoreInventoryService.RefAdjust => "amber",
+        _ => "gray"
+    };
+
+    private sealed record StockRow(int ProductId, string Name, string Category, int CategoryId, string Unit, int Reorder, decimal Qty, decimal ExpiredQty,
+        DateTime? NextExpiry, bool Expiring, decimal Value, string Status, string Breakdown);
+}

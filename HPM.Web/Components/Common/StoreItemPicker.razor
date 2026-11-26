@@ -1,0 +1,152 @@
+@* Type-ahead item picker for the hospital store (multi-word search, keyboard navigation, stock badge). *@
+@inject IJSRuntime JS
+
+<div class="px-typeahead">
+    <div class="px-search-box @(Large ? "" : "sm")">
+        <span class="px-search-icon">🔍</span>
+        <input type="text"
+               @ref="inputRef"
+               placeholder="@Placeholder"
+               @bind="query"
+               @bind:event="oninput"
+               @bind:after="OnInput"
+               @onkeydown="HandleKeyDown"
+               @onfocus="() => open = true"
+               @onblur="() => open = false"
+               disabled="@Disabled"
+               autocomplete="off" />
+        @if (!string.IsNullOrWhiteSpace(query))
+        {
+            <button type="button" class="px-x" @onclick="Clear">✕</button>
+        }
+    </div>
+    @if (open && tokens.Length > 0)
+    {
+        <div class="px-dropdown wide" id="@dropdownId">
+            @if (results.Count == 0)
+            {
+                <div class="px-dd-empty">@I18n.T("No item found for") “@query”</div>
+            }
+            else
+            {
+                <div class="px-dd-head">
+                    <span>@matchCount @I18n.T("match(es)")</span>
+                    <span class="px-dd-keys">↑↓ @I18n.T("move") · Enter @I18n.T("select") · Esc @I18n.T("close")</span>
+                </div>
+            }
+            @for (var i = 0; i < results.Count; i++)
+            {
+                var item = results[i];
+                var idx = i;
+                <div class="px-dd-item @(i == highlighted ? "is-active" : "") @(item.Stock is <= 0 ? "dim" : "")"
+                     @onmousedown:preventDefault
+                     @onmouseover="() => highlighted = idx"
+                     @onclick="() => PickAsync(item)">
+                    <div class="px-dd-main">
+                        <div class="px-dd-name">
+                            @SearchText.Highlight(item.Name, tokens)
+                            @if (item.TrackExpiry)
+                            {
+                                <span class="px-type">EXP</span>
+                            }
+                        </div>
+                        <div class="px-dd-sub">
+                            <span>@SearchText.Highlight(item.Category, tokens)</span>
+                            <span>@item.Unit</span>
+                        </div>
+                    </div>
+                    @if (item.Stock.HasValue)
+                    {
+                        <div class="px-dd-side">
+                            <span class="px-stock @(item.Stock > 0 ? (item.Stock <= item.ReorderLevel ? "low" : "ok") : "out")">
+                                @(item.Stock > 0 ? $"{I18n.T("Stock")} {item.Stock:0.##}" : I18n.T("Out of stock"))
+                            </span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<StorePickItem> Items { get; set; } = [];
+    [Parameter] public EventCallback<StorePickItem> OnPick { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Search item by name or category...";
+    [Parameter] public bool Large { get; set; } = true;
+    [Parameter] public bool Disabled { get; set; }
+
+    private ElementReference inputRef;
+    private readonly string dropdownId = "spk-" + Guid.NewGuid().ToString("N")[..8];
+    private string query = "";
+    private string[] tokens = [];
+    private List<StorePickItem> results = [];
+    private int matchCount;
+    private int highlighted;
+    private bool open;
+
+    public async Task FocusAsync()
+    {
+        try { await inputRef.FocusAsync(); } catch { }
+    }
+
+    private void OnInput()
+    {
+        open = true;
+        highlighted = 0;
+        tokens = SearchText.Tokenize(query);
+        if (tokens.Length == 0) { results = []; matchCount = 0; return; }
+        var q = query.Trim();
+        var matches = Items.Where(x => SearchText.MatchesAll(tokens, x.Name, x.Category)).ToList();
+        matchCount = matches.Count;
+        results = matches
+            .OrderByDescending(x => x.Stock is null or > 0)
+            .ThenByDescending(x => x.Name.StartsWith(q, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(x => x.Name.StartsWith(tokens[0], StringComparison.OrdinalIgnoreCase))
+            .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(40).ToList();
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                open = true;
+                if (highlighted < results.Count - 1) highlighted++;
+                await ScrollAsync();
+                break;
+            case "ArrowUp":
+                if (highlighted > 0) highlighted--;
+                await ScrollAsync();
+                break;
+            case "Enter":
+                if (results.Count > 0 && highlighted < results.Count) await PickAsync(results[highlighted]);
+                break;
+            case "Escape":
+                if (open) open = false; else Clear();
+                break;
+        }
+    }
+
+    private async Task ScrollAsync()
+    {
+        StateHasChanged();
+        await Task.Yield();
+        try { await JS.InvokeVoidAsync("hpm.scrollActiveIntoView", "#" + dropdownId, ".is-active"); } catch { }
+    }
+
+    private async Task PickAsync(StorePickItem item)
+    {
+        Clear();
+        await OnPick.InvokeAsync(item);
+    }
+
+    private void Clear()
+    {
+        query = "";
+        tokens = [];
+        results = [];
+        open = false;
+    }
+}

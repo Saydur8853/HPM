@@ -37,7 +37,7 @@ public static class LicensedModules
         new(Canteen, "Canteen", [], ["CanteenSales", "CanteenProducts", "CanteenChallanPage"]),
         new(Accounts, "Accounts", [], ["Accounts", "FinancialReports"]),
         new(Hrm, "HRM, Rostering & Payroll", [], ["Hrm"]),
-        new(Store, "Supply Chain & Store", [], ["StoreProductsPage", "StoreChallanPage"]),
+        new(Store, "Supply Chain & Store", [], ["StoreProductsPage", "StoreChallanPage", "StoreRequisitions", "StoreIssuePage", "StoreReturns", "StoreStockPage", "StoreStockControl", "StoreReports"]),
         new(Reports, "Operational Reports", [], ["Reports"]),
         new(Mis, "MIS Reports", [Reports], ["MisReports"]),
         new(PatientPortal, "Patient Portal", [Registration], ["PatientPortalQueries"])

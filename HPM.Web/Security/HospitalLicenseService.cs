@@ -145,6 +145,7 @@ public sealed class HospitalLicenseService(IDbContextFactory<HpmDbContext> dbFac
         RoleNames.EmergencyOperator => enabled.Contains(LicensedModules.Emergency),
         RoleNames.OTOperator => enabled.Contains(LicensedModules.Ot),
         RoleNames.Authorizer => enabled.Contains(LicensedModules.Accounts),
+        RoleNames.StoreKeeper => enabled.Contains(LicensedModules.Store),
         _ => false
     };
 }

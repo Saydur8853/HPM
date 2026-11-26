@@ -27,6 +27,14 @@ public static class ModuleAccess
     public static readonly string[] PharmacyStock = [RoleNames.Administrator, RoleNames.PharmacyOperator];
     public static readonly string[] BloodBank = [RoleNames.Administrator, RoleNames.BloodBankOperator, RoleNames.LabTechnician, RoleNames.Doctor, RoleNames.Nurse, RoleNames.IPDOperator];
     public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.Cashier];
+    /// <summary>Runs the hospital store: receive, issue, approve requisitions, stock control, setup.</summary>
+    public static readonly string[] StoreManage = [RoleNames.Administrator, RoleNames.StoreKeeper];
+    /// <summary>Department staff who may raise store requisitions.</summary>
+    public static readonly string[] StoreRequest =
+    [
+        RoleNames.Administrator, RoleNames.StoreKeeper, RoleNames.Nurse, RoleNames.LabTechnician, RoleNames.OTOperator,
+        RoleNames.IPDOperator, RoleNames.EmergencyOperator, RoleNames.Reception, RoleNames.PharmacyOperator
+    ];
     public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
     public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Cashier];
     public static readonly string[] OperationList = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.OTOperator, RoleNames.Nurse];
@@ -45,6 +53,7 @@ public static class ModuleAccess
     public static readonly string[] DoctorGroup = Union(DoctorQueue, PharmacyPrescriptions, AdministratorOnly);
     public static readonly string[] MedicalGroup = Union(DoctorQueue, PharmacyPrescriptions, DiagnosticBilling, OtCashMemos, OperationList, OtNotes, NurseDesk, MedicalCertificates);
     public static readonly string[] PharmacyGroup = Union(PharmacyPos, PharmacyPurchases, PharmacyReturns, PharmacyPrescriptions, PharmacyStock);
+    public static readonly string[] StoreGroup = Union(StoreManage, StoreRequest);
 
     public static bool CanView(ClaimsPrincipal user, IReadOnlyList<string> roles) =>
         roles.Count == 0 || roles.Any(user.IsInRole);
@@ -52,7 +61,8 @@ public static class ModuleAccess
     public static IReadOnlyList<string> LegacyModuleRoles(string? module) => module switch
     {
         "Canteen" => Canteen,
-        "Store" or "Payroll & HRM" => AdministratorOnly,
+        "Store" => StoreManage,
+        "Payroll & HRM" => AdministratorOnly,
         "IPD Services" => IpdOccupancy,
         "Medical Services" => OtCashMemos,
         "Nurse's Desk" or "Certificates & Others" => DoctorQueue,

@@ -1,0 +1,369 @@
+@page "/store/stock-control"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
+
+<PageTitle>@I18n.T("Store Transfer & Stock Count") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">🔄 @I18n.T("Transfer & Stock Count")</h1>
+            <div class="px-seg">
+                <button type="button" class="@(mode == "TRANSFER" ? "on" : "")" @onclick='() => SwitchMode("TRANSFER")'>🔄 @I18n.T("Transfer Between Stores")</button>
+                <button type="button" class="@(mode == "ADJUST" ? "on" : "")" @onclick='() => SwitchMode("ADJUST")'>🧮 @I18n.T("Stock Count / Adjustment")</button>
+            </div>
+        </div>
+        <div class="px-topbar-right">
+            <a class="px-btn ghost" href="/store/stock">📦 @I18n.T("Stock & Expiry")</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <section class="px-card">
+            @if (viewing != null)
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title">
+                        <h2>@(viewing.Type == "TRANSFER" ? I18n.T("Transfer") : I18n.T("Adjustment")) #@(viewing.Type == "TRANSFER" ? "TRF" : "ADJ")-@viewing.ID</h2>
+                        <span class="px-badge paid">@I18n.T("POSTED")</span>
+                    </div>
+                    <button type="button" class="px-btn" @onclick='() => PrintAsync("store-movement-print", $"{viewing.Type}-{viewing.ID}")'>🖨 @I18n.T("Print")</button>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-bill-strip">
+                        <div><span>@(viewing.Type == "TRANSFER" ? I18n.T("From") : I18n.T("Store"))</span><b>@Lookups.LocationName(viewing.LocationID)</b></div>
+                        @if (viewing.Type == "TRANSFER")
+                        {
+                            <div><span>@I18n.T("To")</span><b>@Lookups.LocationName(viewing.ToLocationID)</b></div>
+                        }
+                        else
+                        {
+                            <div><span>@I18n.T("Reason")</span><b>@(viewing.Reason ?? "—")</b></div>
+                        }
+                        <div><span>@I18n.T("Date")</span><b>@viewing.TransDate.ToString("dd MMM yyyy, hh:mm tt")</b></div>
+                        <div><span>@I18n.T("Note")</span><b>@(viewing.Note ?? "—")</b></div>
+                    </div>
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 30px minmax(150px,1fr) 110px 80px @(viewing.Type == "ADJUST" ? "80px " : "")90px;">
+                            <div>#</div><div>@I18n.T("Item")</div><div>@I18n.T("Batch")</div><div>@I18n.T("Expiry")</div>
+                            @if (viewing.Type == "ADJUST") { <div class="r">@I18n.T("Before")</div> }
+                            <div class="r">@(viewing.Type == "ADJUST" ? I18n.T("Change") : I18n.T("Qty"))</div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @for (var i = 0; i < viewing.Items.Count; i++)
+                            {
+                                var it = viewing.Items[i];
+                                <div class="px-cart-row" style="grid-template-columns: 30px minmax(150px,1fr) 110px 80px @(viewing.Type == "ADJUST" ? "80px " : "")90px;">
+                                    <div class="muted">@(i + 1)</div>
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(it.ProductID)</b><small>@Lookups.ProductUnit(it.ProductID)</small></div>
+                                    <div class="muted">@(it.BatchNo ?? "—")</div>
+                                    <div class="muted">@(it.ExpireDate?.ToString("MMM yy") ?? "—")</div>
+                                    @if (viewing.Type == "ADJUST") { <div class="r muted">@(it.QtyBefore?.ToString("0.##"))</div> }
+                                    <div class="r strong @(it.Quantity < 0 ? "bad-text" : viewing.Type == "ADJUST" ? "ok-text" : "")">@(viewing.Type == "ADJUST" && it.Quantity > 0 ? "+" : "")@it.Quantity.ToString("0.##")</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span></span>
+                    <div class="px-foot-actions"><button type="button" class="px-btn primary lg" @onclick="StartNew">+ @(mode == "TRANSFER" ? I18n.T("New Transfer") : I18n.T("New Count"))</button></div>
+                </footer>
+            }
+            else
+            {
+                <header class="px-card-head">
+                    <div class="px-card-title">
+                        <h2>@(mode == "TRANSFER" ? I18n.T("New Transfer") : I18n.T("New Stock Count / Adjustment"))</h2>
+                        <span class="px-badge new">@I18n.T("NEW")</span>
+                    </div>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-panel px-form-grid">
+                        <label class="px-field">
+                            <span>@(mode == "TRANSFER" ? I18n.T("From Store") : I18n.T("Store")) <i>*</i></span>
+                            <select @bind="locationId" @bind:after="LocationChangedAsync" disabled="@(lines.Count > 0)">
+                                @foreach (var l in Lookups.Locations)
+                                {
+                                    <option value="@l.ID">@l.Name</option>
+                                }
+                            </select>
+                        </label>
+                        @if (mode == "TRANSFER")
+                        {
+                            <label class="px-field">
+                                <span>@I18n.T("To Store") <i>*</i></span>
+                                <select @bind="toLocationId">
+                                    <option value="0">@I18n.T("Select destination...")</option>
+                                    @foreach (var l in Lookups.Locations.Where(x => x.ID != locationId))
+                                    {
+                                        <option value="@l.ID">@l.Name</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                        else
+                        {
+                            <label class="px-field">
+                                <span>@I18n.T("Reason") <i>*</i></span>
+                                <select @bind="reason">
+                                    @foreach (var r in AdjustReasons)
+                                    {
+                                        <option value="@r">@I18n.T(r)</option>
+                                    }
+                                </select>
+                            </label>
+                        }
+                        <label class="px-field">
+                            <span>@I18n.T("Note") <em>@I18n.T("optional")</em></span>
+                            <input @bind="note" maxlength="300" />
+                        </label>
+                    </div>
+
+                    <div class="px-field">
+                        <span>
+                            @I18n.T("Add Item") <em>@(mode == "TRANSFER" ? I18n.T("all its batches in the source store are listed; enter quantity per batch") : I18n.T("enter the counted quantity for each batch"))</em>
+                            @if (mode == "ADJUST")
+                            {
+                                <button type="button" class="px-link" @onclick="LoadExpiredAsync">⚠ @I18n.T("Load expired batches")</button>
+                            }
+                        </span>
+                        <StoreItemPicker @ref="picker" Items="@Lookups.PickItems(locationId)" OnPick="AddItemAsync" Placeholder="@I18n.T("Search item...")" />
+                    </div>
+
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: minmax(150px,1fr) 110px 80px 80px 130px 32px;">
+                            <div>@I18n.T("Item")</div><div>@I18n.T("Batch")</div><div>@I18n.T("Expiry")</div><div class="r">@I18n.T("In Stock")</div>
+                            <div class="c">@(mode == "TRANSFER" ? I18n.T("Transfer Qty") : I18n.T("Counted Qty"))</div><div></div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @if (lines.Count == 0)
+                            {
+                                <div class="px-empty"><div class="px-empty-icon">@(mode == "TRANSFER" ? "🔄" : "🧮")</div><div>@I18n.T("No items yet")</div></div>
+                            }
+                            @for (var i = 0; i < lines.Count; i++)
+                            {
+                                var line = lines[i];
+                                var idx = i;
+                                var expired = line.ExpireDate.HasValue && line.ExpireDate.Value < DateTime.Today;
+                                var changed = mode == "ADJUST" && line.Qty != line.Balance;
+                                <div class="px-cart-row @(changed ? "picked" : "") @(expired ? "expired" : "")" style="grid-template-columns: minmax(150px,1fr) 110px 80px 80px 130px 32px;">
+                                    <div class="px-cart-name"><b>@Lookups.ProductName(line.ProductId)</b><small>@Lookups.ProductUnit(line.ProductId)</small></div>
+                                    <div class="muted">@(line.BatchNo ?? "—")</div>
+                                    <div class="@(expired ? "bad-text" : "muted")">@(line.ExpireDate?.ToString("MMM yy") ?? "—")</div>
+                                    <div class="r">@line.Balance.ToString("0.##")</div>
+                                    <div class="c">
+                                        <input type="number" min="0" class="px-qty-input" value="@line.Qty.ToString("0.##")" @onchange="e => SetQty(line, e.Value)" />
+                                        @if (changed)
+                                        {
+                                            <small class="@(line.Qty < line.Balance ? "bad-text" : "ok-text")">@(line.Qty > line.Balance ? "+" : "")@((line.Qty - line.Balance).ToString("0.##"))</small>
+                                        }
+                                    </div>
+                                    <div class="c"><button type="button" class="px-del" @onclick="() => lines.RemoveAt(idx)">✕</button></div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+                <footer class="px-card-foot">
+                    <span class="px-print-fmt">
+                        @if (mode == "TRANSFER")
+                        {
+                            @($"{lines.Count(x => x.Qty > 0)} {I18n.T("batch(es)")} · {lines.Sum(x => x.Qty):0.##} {I18n.T("units")}")
+                        }
+                        else
+                        {
+                            @($"{lines.Count(x => x.Qty != x.Balance)} {I18n.T("change(s)")}")
+                        }
+                    </span>
+                    <div class="px-foot-actions">
+                        <button type="button" class="px-btn" @onclick="StartNew">@I18n.T("Clear")</button>
+                        <button type="button" class="px-btn primary lg" disabled="@(!CanSave)" @onclick="SaveAsync">
+                            @(IsBusy ? I18n.T("Saving…") : mode == "TRANSFER" ? I18n.T("Post Transfer") : I18n.T("Post Adjustment"))
+                        </button>
+                    </div>
+                </footer>
+            }
+        </section>
+
+        <aside class="px-card">
+            <header class="px-card-head stack">
+                <h2 style="margin:0; font-size:13.5px; font-weight:800;">@(mode == "TRANSFER" ? I18n.T("Recent Transfers") : I18n.T("Recent Adjustments"))</h2>
+            </header>
+            <div class="px-queue">
+                @{ var list = recent.Where(x => x.Type == mode).ToList(); }
+                @if (list.Count == 0)
+                {
+                    <div class="px-empty sm">@I18n.T("Nothing posted in the last 60 days.")</div>
+                }
+                @foreach (var x in list)
+                {
+                    <button type="button" class="px-q-item @(viewing?.ID == x.ID ? "active" : "")" @onclick="() => viewing = x">
+                        <span class="px-q-id">@(x.Type == "TRANSFER" ? "TRF" : "ADJ")-@x.ID</span>
+                        <span class="px-q-info">
+                            <span class="px-q-name">@(x.Type == "TRANSFER" ? $"{Lookups.LocationName(x.LocationID)} → {Lookups.LocationName(x.ToLocationID)}" : $"{Lookups.LocationName(x.LocationID)} · {x.Reason}")</span>
+                            <span class="px-q-meta">@x.TransDate.ToString("dd MMM, hh:mm tt") · @x.Items.Count @I18n.T("lines")</span>
+                        </span>
+                    </button>
+                }
+            </div>
+        </aside>
+    </div>
+</div>
+
+@if (viewing != null)
+{
+    <div id="store-movement-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+        <PrintDocumentHeader Title="@(viewing.Type == "TRANSFER" ? I18n.T("Store Transfer Note") : I18n.T("Stock Adjustment Note"))"
+                             DocumentNo="@($"{(viewing.Type == "TRANSFER" ? "TRF" : "ADJ")}-{viewing.ID}")" />
+        <div class="print-grid">
+            <div><span>@(viewing.Type == "TRANSFER" ? I18n.T("From") : I18n.T("Store")):</span> <b>@Lookups.LocationName(viewing.LocationID)</b></div>
+            <div><span>@(viewing.Type == "TRANSFER" ? I18n.T("To") : I18n.T("Reason")):</span> <b>@(viewing.Type == "TRANSFER" ? Lookups.LocationName(viewing.ToLocationID) : viewing.Reason)</b></div>
+            <div><span>@I18n.T("Date"):</span> <b>@viewing.TransDate.ToString("dd MMM yyyy hh:mm tt")</b></div>
+            <div><span>@I18n.T("Note"):</span> <b>@(viewing.Note ?? "—")</b></div>
+        </div>
+        <table class="data-table">
+            <thead><tr><th>#</th><th>@I18n.T("Item")</th><th>@I18n.T("Batch")</th><th>@I18n.T("Expiry")</th>@if (viewing.Type == "ADJUST") { <th class="num">@I18n.T("Before")</th> }<th class="num">@I18n.T("Qty")</th></tr></thead>
+            <tbody>
+                @for (var i = 0; i < viewing.Items.Count; i++)
+                {
+                    var it = viewing.Items[i];
+                    <tr><td>@(i + 1)</td><td><b>@Lookups.ProductName(it.ProductID)</b></td><td>@(it.BatchNo ?? "—")</td><td>@(it.ExpireDate?.ToString("MMM yyyy") ?? "—")</td>@if (viewing.Type == "ADJUST") { <td class="num">@(it.QtyBefore?.ToString("0.##"))</td> }<td class="num">@it.Quantity.ToString("0.##")</td></tr>
+                }
+            </tbody>
+        </table>
+        <PrintDocumentFooter SignTitle1="@I18n.T("Prepared By")" SignTitle2="@I18n.T("Store Keeper")" SignTitle3="@I18n.T("Authorized By")" />
+    </div>
+}
+
+@code {
+    private static readonly string[] AdjustReasons = ["Physical Count", "Damaged", "Expired", "Lost / Missing", "Found / Surplus", "Other"];
+
+    private StoreItemPicker? picker;
+    private string mode = "TRANSFER";
+    private List<StoreMovement> recent = [];
+    private StoreMovement? viewing;
+    private List<BatchLine> lines = [];
+    private int locationId;
+    private int toLocationId;
+    private string reason = "Physical Count";
+    private string note = "";
+
+    private bool CanSave => !IsBusy && (mode == "TRANSFER"
+        ? toLocationId > 0 && toLocationId != locationId && lines.Any(x => x.Qty > 0)
+        : lines.Any(x => x.Qty != x.Balance));
+
+    protected override async Task OnStoreInitializedAsync()
+    {
+        locationId = Lookups.DefaultLocationId;
+        toLocationId = Lookups.Locations.FirstOrDefault(x => x.ID != locationId)?.ID ?? 0;
+        await LoadRecentAsync();
+    }
+
+    private async Task LoadRecentAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var since = DateTime.Today.AddDays(-60);
+        recent = await db.StoreMovements.AsNoTracking().Include(x => x.Items)
+            .Where(x => (x.Type == "TRANSFER" || x.Type == "ADJUST") && x.TransDate >= since)
+            .OrderByDescending(x => x.ID).Take(200).ToListAsync();
+    }
+
+    private void SwitchMode(string m)
+    {
+        mode = m;
+        StartNew();
+    }
+
+    private void StartNew()
+    {
+        viewing = null;
+        lines = [];
+        note = "";
+        Message = "";
+    }
+
+    private Task LocationChangedAsync()
+    {
+        if (toLocationId == locationId) toLocationId = Lookups.Locations.FirstOrDefault(x => x.ID != locationId)?.ID ?? 0;
+        return Task.CompletedTask;
+    }
+
+    private async Task AddItemAsync(StorePickItem item)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var stock = await db.StoreStocks.AsNoTracking()
+            .Where(s => s.LocationID == locationId && s.ProductID == item.Id && (s.Balance > 0 || mode == "ADJUST"))
+            .OrderBy(s => s.ExpireDate ?? DateTime.MaxValue).ToListAsync();
+        if (mode == "TRANSFER") stock = stock.Where(s => s.Balance > 0).ToList();
+        if (stock.Count == 0)
+        {
+            Fail($"{item.Name}: {I18n.T("no stock in this store.")} {(mode == "ADJUST" ? I18n.T("Use Receive Stock (GRN) to add new stock.") : "")}");
+            return;
+        }
+        var added = 0;
+        foreach (var s in stock.Where(s => lines.All(l => l.StockId != s.ID)))
+        {
+            lines.Add(new BatchLine { StockId = s.ID, ProductId = s.ProductID, BatchNo = s.BatchNo, ExpireDate = s.ExpireDate, Balance = s.Balance, Qty = mode == "ADJUST" ? s.Balance : 0 });
+            added++;
+        }
+        Message = added == 0 ? I18n.T("Already in the list.") : "";
+        if (picker != null) await picker.FocusAsync();
+    }
+
+    private async Task LoadExpiredAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var today = DateTime.Today;
+        var expired = await db.StoreStocks.AsNoTracking().Where(s => s.LocationID == locationId && s.Balance > 0 && s.ExpireDate < today).ToListAsync();
+        foreach (var s in expired.Where(s => lines.All(l => l.StockId != s.ID)))
+            lines.Add(new BatchLine { StockId = s.ID, ProductId = s.ProductID, BatchNo = s.BatchNo, ExpireDate = s.ExpireDate, Balance = s.Balance, Qty = 0 });
+        reason = "Expired";
+        if (expired.Count == 0) Success(I18n.T("No expired stock in this store."));
+        else Fail($"{expired.Count} {I18n.T("expired batch(es) loaded with counted quantity 0 — post to write them off.")}");
+    }
+
+    private void SetQty(BatchLine line, object? value)
+    {
+        if (!decimal.TryParse(value?.ToString(), out var q) || q < 0) q = 0;
+        if (mode == "TRANSFER" && q > line.Balance)
+        {
+            Fail($"{Lookups.ProductName(line.ProductId)}: {I18n.T("only")} {line.Balance:0.##} {I18n.T("in this batch")}.");
+            q = line.Balance;
+        }
+        line.Qty = q;
+    }
+
+    private async Task SaveAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            StoreMovement mv = mode == "TRANSFER"
+                ? await Inventory.TransferAsync(locationId, toLocationId, note, lines.Where(x => x.Qty > 0).Select(x => new StoreStockLineInput(x.StockId, x.Qty)).ToList(), CurrentUserId)
+                : await Inventory.AdjustAsync(locationId, reason, note, lines.Where(x => x.Qty != x.Balance).Select(x => new StoreAdjustLineInput(x.StockId, x.Qty)).ToList(), CurrentUserId);
+            await ReloadLookupsAsync();
+            await LoadRecentAsync();
+            viewing = recent.FirstOrDefault(x => x.ID == mv.ID);
+            lines = [];
+            Success(mode == "TRANSFER" ? (I18n.IsBangla ? $"ট্রান্সফার #TRF-{mv.ID} পোস্ট হয়েছে।" : $"Transfer #TRF-{mv.ID} posted.") : (I18n.IsBangla ? $"অ্যাডজাস্টমেন্ট #ADJ-{mv.ID} পোস্ট হয়েছে।" : $"Adjustment #ADJ-{mv.ID} posted."));
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private sealed class BatchLine
+    {
+        public int StockId { get; init; }
+        public int ProductId { get; init; }
+        public string? BatchNo { get; init; }
+        public DateTime? ExpireDate { get; init; }
+        public decimal Balance { get; init; }
+        public decimal Qty { get; set; }
+    }
+}

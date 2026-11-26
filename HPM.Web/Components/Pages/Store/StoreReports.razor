@@ -1,0 +1,285 @@
+@page "/store/reports"
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.StoreKeeper)]
+@inherits StorePageBase
+
+<PageTitle>@I18n.T("Store Consumption Report") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left">
+            <h1 class="px-title">📊 @I18n.T("Store Reports")</h1>
+            <div class="px-seg">
+                <button type="button" class="@(tab == "dept" ? "on" : "")" @onclick='() => SetTab("dept")'>🏥 @I18n.T("By Department")</button>
+                <button type="button" class="@(tab == "item" ? "on" : "")" @onclick='() => SetTab("item")'>📦 @I18n.T("By Item")</button>
+                <button type="button" class="@(tab == "ledger" ? "on" : "")" @onclick='() => SetTab("ledger")'>📒 @I18n.T("Item Ledger")</button>
+            </div>
+        </div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Issued Value")</span><b>@I18n.FormatCurrency(issuedValue)</b></div>
+            <div class="px-metric"><span>@I18n.T("Returned Value")</span><b>@I18n.FormatCurrency(returnedValue)</b></div>
+            <div class="px-metric"><span>@I18n.T("Net Consumption")</span><b class="bad">@I18n.FormatCurrency(issuedValue - returnedValue)</b></div>
+        </div>
+    </div>
+
+    <section class="px-card" style="flex:1 1 auto;">
+        <header class="px-card-head">
+            <div class="px-filter-row">
+                <label class="px-field inline"><span>@I18n.T("From")</span><input type="date" @bind="from" @bind:after="LoadAsync" /></label>
+                <label class="px-field inline"><span>@I18n.T("To")</span><input type="date" @bind="to" @bind:after="LoadAsync" /></label>
+                <div class="px-chips quick">
+                    <button type="button" @onclick="() => QuickRange(0)">@I18n.T("Today")</button>
+                    <button type="button" @onclick="() => QuickRange(7)">7 @I18n.T("days")</button>
+                    <button type="button" @onclick="() => QuickRange(30)">30 @I18n.T("days")</button>
+                    <button type="button" @onclick="ThisMonth">@I18n.T("This month")</button>
+                </div>
+                <select @bind="locationFilter" @bind:after="LoadAsync">
+                    <option value="0">@I18n.T("All stores")</option>
+                    @foreach (var l in Lookups.Locations)
+                    {
+                        <option value="@l.ID">@l.Name</option>
+                    }
+                </select>
+                @if (tab == "item")
+                {
+                    <select @bind="departmentFilter">
+                        <option value="0">@I18n.T("All departments")</option>
+                        @foreach (var d in Lookups.Departments)
+                        {
+                            <option value="@d.ID">@d.Name</option>
+                        }
+                    </select>
+                }
+            </div>
+            <button type="button" class="px-btn" @onclick='() => PrintAsync("store-report-print", "Store report")'>🖨 @I18n.T("Print")</button>
+        </header>
+
+        <div class="px-card-body">
+            @if (tab == "dept")
+            {
+                var rows = DeptRows();
+                <div class="px-cart">
+                    <div class="px-cart-head" style="grid-template-columns: minmax(170px,1fr) 80px 120px 120px 130px 1fr;">
+                        <div>@I18n.T("Department")</div><div class="r">@I18n.T("Issues")</div><div class="r">@I18n.T("Issued")</div><div class="r">@I18n.T("Returned")</div><div class="r">@I18n.T("Net Value")</div><div>@I18n.T("Share")</div>
+                    </div>
+                    <div class="px-cart-rows">
+                        @if (rows.Count == 0)
+                        {
+                            <div class="px-empty"><div class="px-empty-icon">📊</div><div>@I18n.T("No issue in this period.")</div></div>
+                        }
+                        @{ var max = rows.Count == 0 ? 1 : Math.Max(1, rows.Max(r => r.Net)); }
+                        @foreach (var r in rows)
+                        {
+                            <div class="px-cart-row" style="grid-template-columns: minmax(170px,1fr) 80px 120px 120px 130px 1fr;">
+                                <div class="px-cart-name"><b>@r.Name</b></div>
+                                <div class="r muted">@r.Count</div>
+                                <div class="r">@I18n.FormatCurrency(r.Issued)</div>
+                                <div class="r muted">@I18n.FormatCurrency(r.Returned)</div>
+                                <div class="r strong">@I18n.FormatCurrency(r.Net)</div>
+                                <div><div class="px-bar"><span style="width:@(Math.Round(Math.Max(0, r.Net) / max * 100, 1).ToString(System.Globalization.CultureInfo.InvariantCulture))%"></span></div></div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else if (tab == "item")
+            {
+                var rows = ItemRows();
+                <div class="px-search-box sm">
+                    <span class="px-search-icon">🔍</span>
+                    <input type="text" placeholder="@I18n.T("Filter items...")" @bind="itemSearch" @bind:event="oninput" autocomplete="off" />
+                </div>
+                <div class="px-cart">
+                    <div class="px-cart-head" style="grid-template-columns: minmax(170px,1fr) 70px 100px 100px 100px 120px;">
+                        <div>@I18n.T("Item")</div><div>@I18n.T("Unit")</div><div class="r">@I18n.T("Issued")</div><div class="r">@I18n.T("Returned")</div><div class="r">@I18n.T("Net Qty")</div><div class="r">@I18n.T("Net Value")</div>
+                    </div>
+                    <div class="px-cart-rows">
+                        @if (rows.Count == 0)
+                        {
+                            <div class="px-empty"><div class="px-empty-icon">📦</div><div>@I18n.T("No consumption in this period.")</div></div>
+                        }
+                        @foreach (var r in rows)
+                        {
+                            <div class="px-cart-row clickable" style="grid-template-columns: minmax(170px,1fr) 70px 100px 100px 100px 120px;" @onclick="() => OpenLedgerAsync(r.ProductId)" title="@I18n.T("Open item ledger")">
+                                <div class="px-cart-name"><b>@r.Name</b></div>
+                                <div class="muted">@r.Unit</div>
+                                <div class="r">@r.Issued.ToString("0.##")</div>
+                                <div class="r muted">@r.Returned.ToString("0.##")</div>
+                                <div class="r strong">@r.Net.ToString("0.##")</div>
+                                <div class="r">@I18n.FormatCurrency(r.Value)</div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="px-field">
+                    <span>@I18n.T("Item") <em>@(ledgerProductId > 0 ? Lookups.ProductName(ledgerProductId) : I18n.T("pick an item"))</em></span>
+                    <StoreItemPicker Items="@Lookups.PickItems(null)" OnPick="p => OpenLedgerAsync(p.Id)" Placeholder="@I18n.T("Search item for its ledger...")" />
+                </div>
+                @if (ledgerProductId > 0)
+                {
+                    <div class="px-bill-strip">
+                        <div><span>@I18n.T("Opening")</span><b>@ledgerOpening.ToString("0.##")</b></div>
+                        <div><span>@I18n.T("Total In")</span><b class="ok-text">@ledgerRows.Sum(x => x.QtyIn).ToString("0.##")</b></div>
+                        <div><span>@I18n.T("Total Out")</span><b class="bad">@ledgerRows.Sum(x => x.QtyOut).ToString("0.##")</b></div>
+                        <div><span>@I18n.T("Closing")</span><b>@(ledgerOpening + ledgerRows.Sum(x => x.QtyIn - x.QtyOut))</b></div>
+                    </div>
+                    <div class="px-cart">
+                        <div class="px-cart-head" style="grid-template-columns: 120px 110px minmax(150px,1fr) 90px 90px 100px;">
+                            <div>@I18n.T("Date")</div><div>@I18n.T("Type")</div><div>@I18n.T("Store / Department")</div><div class="r">@I18n.T("In")</div><div class="r">@I18n.T("Out")</div><div class="r">@I18n.T("Balance")</div>
+                        </div>
+                        <div class="px-cart-rows">
+                            @if (ledgerRows.Count == 0)
+                            {
+                                <div class="px-empty sm">@I18n.T("No movement in this period.")</div>
+                            }
+                            @{ var running = ledgerOpening; }
+                            @foreach (var l in ledgerRows)
+                            {
+                                running += l.QtyIn - l.QtyOut;
+                                <div class="px-cart-row" style="grid-template-columns: 120px 110px minmax(150px,1fr) 90px 90px 100px;">
+                                    <div class="muted">@l.TransDate.ToString("dd MMM yy, HH:mm")</div>
+                                    <div><span class="px-tag @StoreStockPage.RefTag(l.RefType)">@StoreStockPage.RefLabel(l.RefType)</span></div>
+                                    <div class="px-cart-name stack"><b>@(l.DepartmentID.HasValue ? Lookups.DepartmentName(l.DepartmentID) : Lookups.LocationName(l.LocationID))</b><small>@Lookups.LocationName(l.LocationID) · #@l.RefID @l.Note</small></div>
+                                    <div class="r ok-text">@(l.QtyIn > 0 ? l.QtyIn.ToString("0.##") : "")</div>
+                                    <div class="r bad-text">@(l.QtyOut > 0 ? l.QtyOut.ToString("0.##") : "")</div>
+                                    <div class="r strong">@running.ToString("0.##")</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </section>
+</div>
+
+<div id="store-report-print" class="print-sheet panel print-document print-a4-sheet pharm-print-only">
+    <PrintDocumentHeader Title="@(tab == "dept" ? I18n.T("Department-wise Store Consumption") : tab == "item" ? I18n.T("Item-wise Store Consumption") : $"{I18n.T("Item Ledger")} - {Lookups.ProductName(ledgerProductId)}")"
+                         Subtitle="@($"{from:dd MMM yyyy} – {to:dd MMM yyyy} · {(locationFilter == 0 ? I18n.T("All stores") : Lookups.LocationName(locationFilter))}")" />
+    @if (tab == "dept")
+    {
+        <table class="data-table">
+            <thead><tr><th>@I18n.T("Department")</th><th class="num">@I18n.T("Issues")</th><th class="num">@I18n.T("Issued")</th><th class="num">@I18n.T("Returned")</th><th class="num">@I18n.T("Net Value")</th></tr></thead>
+            <tbody>@foreach (var r in DeptRows()) { <tr><td>@r.Name</td><td class="num">@r.Count</td><td class="num">@I18n.FormatCurrency(r.Issued)</td><td class="num">@I18n.FormatCurrency(r.Returned)</td><td class="num"><b>@I18n.FormatCurrency(r.Net)</b></td></tr> }</tbody>
+        </table>
+    }
+    else if (tab == "item")
+    {
+        <table class="data-table">
+            <thead><tr><th>@I18n.T("Item")</th><th>@I18n.T("Unit")</th><th class="num">@I18n.T("Issued")</th><th class="num">@I18n.T("Returned")</th><th class="num">@I18n.T("Net Qty")</th><th class="num">@I18n.T("Net Value")</th></tr></thead>
+            <tbody>@foreach (var r in ItemRows()) { <tr><td>@r.Name</td><td>@r.Unit</td><td class="num">@r.Issued.ToString("0.##")</td><td class="num">@r.Returned.ToString("0.##")</td><td class="num">@r.Net.ToString("0.##")</td><td class="num">@I18n.FormatCurrency(r.Value)</td></tr> }</tbody>
+        </table>
+    }
+    else
+    {
+        <table class="data-table">
+            <thead><tr><th>@I18n.T("Date")</th><th>@I18n.T("Type")</th><th>@I18n.T("Store / Department")</th><th class="num">@I18n.T("In")</th><th class="num">@I18n.T("Out")</th></tr></thead>
+            <tbody>@foreach (var l in ledgerRows) { <tr><td>@l.TransDate.ToString("dd MMM yy HH:mm")</td><td>@StoreStockPage.RefLabel(l.RefType)</td><td>@(l.DepartmentID.HasValue ? Lookups.DepartmentName(l.DepartmentID) : Lookups.LocationName(l.LocationID))</td><td class="num">@(l.QtyIn > 0 ? l.QtyIn.ToString("0.##") : "")</td><td class="num">@(l.QtyOut > 0 ? l.QtyOut.ToString("0.##") : "")</td></tr> }</tbody>
+        </table>
+    }
+    <PrintDocumentFooter HideSignatures="true" />
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "tab")] public string? QueryTab { get; set; }
+    [SupplyParameterFromQuery(Name = "item")] public int? QueryItem { get; set; }
+
+    private string tab = "dept";
+    private DateTime from = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private DateTime to = DateTime.Today;
+    private int locationFilter;
+    private int departmentFilter;
+    private string itemSearch = "";
+    private List<StoreStockLedger> movements = [];
+    private decimal issuedValue, returnedValue;
+    private int ledgerProductId;
+    private decimal ledgerOpening;
+    private List<StoreStockLedger> ledgerRows = [];
+
+    protected override async Task OnStoreInitializedAsync()
+    {
+        if (QueryTab is "dept" or "item" or "ledger") tab = QueryTab;
+        await LoadAsync();
+        if (QueryItem is > 0) await OpenLedgerAsync(QueryItem.Value);
+    }
+
+    private void SetTab(string t) => tab = t;
+
+    private async Task QuickRange(int days)
+    {
+        to = DateTime.Today;
+        from = DateTime.Today.AddDays(-days);
+        await LoadAsync();
+    }
+
+    private async Task ThisMonth()
+    {
+        to = DateTime.Today;
+        from = new DateTime(to.Year, to.Month, 1);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (to < from) (from, to) = (to, from);
+        var end = to.Date.AddDays(1);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        movements = await db.StoreStockLedger.AsNoTracking()
+            .Where(l => l.TransDate >= from.Date && l.TransDate < end && (l.RefType == StoreInventoryService.RefIssue || l.RefType == StoreInventoryService.RefReturn))
+            .Where(l => locationFilter == 0 || l.LocationID == locationFilter)
+            .ToListAsync();
+        issuedValue = movements.Where(l => l.RefType == StoreInventoryService.RefIssue).Sum(l => l.QtyOut * l.Rate);
+        returnedValue = movements.Where(l => l.RefType == StoreInventoryService.RefReturn).Sum(l => l.QtyIn * l.Rate);
+        if (ledgerProductId > 0) await OpenLedgerAsync(ledgerProductId);
+    }
+
+    private List<DeptRow> DeptRows() => movements
+        .Where(l => l.DepartmentID.HasValue)
+        .GroupBy(l => l.DepartmentID!.Value)
+        .Select(g =>
+        {
+            var issued = g.Where(l => l.RefType == StoreInventoryService.RefIssue).Sum(l => l.QtyOut * l.Rate);
+            var returned = g.Where(l => l.RefType == StoreInventoryService.RefReturn).Sum(l => l.QtyIn * l.Rate);
+            var count = g.Where(l => l.RefType == StoreInventoryService.RefIssue).Select(l => l.RefID).Distinct().Count();
+            return new DeptRow(Lookups.DepartmentName(g.Key), count, issued, returned, issued - returned);
+        })
+        .OrderByDescending(r => r.Net).ToList();
+
+    private List<ItemRow> ItemRows()
+    {
+        var tokens = SearchText.Tokenize(itemSearch);
+        return movements
+            .Where(l => departmentFilter == 0 || l.DepartmentID == departmentFilter)
+            .GroupBy(l => l.ProductID)
+            .Select(g =>
+            {
+                var issued = g.Where(l => l.RefType == StoreInventoryService.RefIssue).Sum(l => l.QtyOut);
+                var returned = g.Where(l => l.RefType == StoreInventoryService.RefReturn).Sum(l => l.QtyIn);
+                var value = g.Where(l => l.RefType == StoreInventoryService.RefIssue).Sum(l => l.QtyOut * l.Rate) - g.Where(l => l.RefType == StoreInventoryService.RefReturn).Sum(l => l.QtyIn * l.Rate);
+                return new ItemRow(g.Key, Lookups.ProductName(g.Key), Lookups.ProductUnit(g.Key), issued, returned, issued - returned, value);
+            })
+            .Where(r => SearchText.MatchesAll(tokens, r.Name))
+            .OrderByDescending(r => r.Value).ToList();
+    }
+
+    private async Task OpenLedgerAsync(int productId)
+    {
+        tab = "ledger";
+        ledgerProductId = productId;
+        var end = to.Date.AddDays(1);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var q = db.StoreStockLedger.AsNoTracking().Where(l => l.ProductID == productId && (locationFilter == 0 || l.LocationID == locationFilter));
+        ledgerOpening = await q.Where(l => l.TransDate < from.Date).SumAsync(l => (decimal?)(l.QtyIn - l.QtyOut)) ?? 0;
+        ledgerRows = await q.Where(l => l.TransDate >= from.Date && l.TransDate < end).OrderBy(l => l.TransDate).ThenBy(l => l.ID).ToListAsync();
+        if (locationFilter == 0)
+        {
+            // Transfers move stock between stores without changing the hospital total; hide the paired rows.
+            ledgerRows = ledgerRows.Where(l => l.RefType is not (StoreInventoryService.RefTransferIn or StoreInventoryService.RefTransferOut)).ToList();
+        }
+    }
+
+    private sealed record DeptRow(string Name, int Count, decimal Issued, decimal Returned, decimal Net);
+    private sealed record ItemRow(int ProductId, string Name, string Unit, decimal Issued, decimal Returned, decimal Net, decimal Value);
+}
