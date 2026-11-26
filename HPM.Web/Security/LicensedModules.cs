@@ -35,7 +35,7 @@ public static class LicensedModules
         new(Nursing, "Nursing", [Ipd], ["NurseDesk"]),
         new(BloodBank, "Blood Bank & Transfusion", [Registration], ["BloodBank"]),
         new(Canteen, "Canteen", [], ["CanteenSales", "CanteenProducts", "CanteenChallanPage", "CanteenDues"]),
-        new(Accounts, "Accounts", [], ["Accounts", "FinancialReports", "AccountsExpenses", "AccountsProfitLoss", "AccountsSetup"]),
+        new(Accounts, "Accounts", [], ["Accounts", "FinancialReports", "AccountsExpenses", "AccountsProfitLoss", "AccountsSetup", "AccountsCostCenters", "AccountsFixedAssets", "AccountsMonthEnd"]),
         new(Hrm, "HRM, Rostering & Payroll", [], ["Hrm"]),
         new(Store, "Supply Chain & Store", [], ["StoreProductsPage", "StoreChallanPage", "StoreRequisitions", "StoreIssuePage", "StoreReturns", "StoreStockPage", "StoreStockControl", "StoreReports"]),
         new(Reports, "Operational Reports", [], ["Reports"]),

@@ -918,6 +918,7 @@
 
                 var isIpdBedCredit = source.PatientType == "2" && (source.IsCredit == true || !await db.CentralCashCollections.AnyAsync(c => c.ModuleFlag == 4 && c.ReferenceID == source.ID && c.Amount > 0));
 
+                decimal restockCost = 0;
                 foreach (var line in lines)
                 {
                     var sold = source.Items.Single(x => x.ID == line.CashMemoSubID);
@@ -931,6 +932,7 @@
                         stock.Balance += line.Quantity;
                     }
                     db.PharmacySalesReturnItems.Add(new PharmacySalesReturnItem { SalesReturnID = header.ID, CashMemoSubID = line.CashMemoSubID, ServiceID = line.ServiceID, StockBalanceID = line.StockBalanceID > 0 ? line.StockBalanceID : null, Quantity = line.Quantity, Rate = line.Rate, BuyRate = buyRate, IsRestocked = line.StockBalanceID > 0 });
+                    if (line.StockBalanceID > 0) restockCost += buyRate * line.Quantity;
                     if (isIpdBedCredit && !string.IsNullOrWhiteSpace(source.RegNo))
                     {
                         var admission = await db.PatientAdmissions.FirstOrDefaultAsync(x => x.RegNo == source.RegNo);
@@ -950,6 +952,10 @@
                     db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 4, HeadID = 4, EnteredBy = uid, TransDate = now, TransDateCL = now, ReferenceID = header.ID });
                 }
                 AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Pharmacy sales return for memo #{source.ID}", $"PHARMACY-SALES-RETURN:{header.ID}", uid, (AccountingPosting.PharmacySales, refund, 0), (!isIpdBedCredit ? AccountingPosting.Cash : AccountingPosting.PatientReceivable, 0, refund));
+                if (Math.Round(restockCost, 2) > 0)
+                    AccountingPosting.AddPostedVoucher(db, "Journal", now, $"Returned medicine back to stock, memo #{source.ID}", $"PHARMACY-RETURN-COST:{header.ID}", uid,
+                        (await AccountingSetup.IdAsync(db, AccountCodes.MedicineInventory), Math.Round(restockCost, 2), 0),
+                        (await AccountingSetup.IdAsync(db, AccountCodes.CostOfMedicineSold), 0, Math.Round(restockCost, 2)));
                 await db.SaveChangesAsync();
                 return (Header: header, Refund: refund);
             }, IsolationLevel.Serializable);

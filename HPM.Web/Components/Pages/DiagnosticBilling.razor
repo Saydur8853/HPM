@@ -2596,7 +2596,8 @@
 
                 await OperationalAccounting.SyncSplitRevenueAsync(db, $"DIAGNOSTIC:{editor.ID}", editor.ID,
                     revenueAmount, editor.Paid, editor.TransDate, userId, $"Diagnostic memo #{editor.ID}", isIpdMode ? null : 12,
-                    await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome));
+                    await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome),
+                    revenueSplit: await DiagnosticSplitAsync(db, editor.Items.Select(x => (x.TestID, (decimal)x.Rate * (decimal)x.Quantity))));
                 // Referring doctor's commission is the hospital's expense and the doctor's payable.
                 await AccountingSetup.SyncDiagnosticCommissionAsync(db, editor.ID, editor.DoctorID ?? 0, editor.TransDate,
                     editor.Items.Select(x => (x.TestID, (decimal)x.Rate, (decimal)x.Quantity)), userId, editor.PatientName ?? "");
@@ -3030,5 +3031,13 @@
     {
         dotNetRef?.Dispose();
         I18n.OnLanguageChanged -= HandleLanguageChanged;
+    }
+
+    /// <summary>Gross of each department (Pathology, Imaging, Cardiology...) on this memo, used to split its income.</summary>
+    private static async Task<List<(int? CostCenterID, decimal Weight)>> DiagnosticSplitAsync(HpmDbContext db, IEnumerable<(int TestId, decimal Gross)> items)
+    {
+        var list = items.ToList();
+        var centers = await AccountingSetup.DiagnosticCentersAsync(db, list.Select(x => x.TestId));
+        return list.GroupBy(x => centers.GetValueOrDefault(x.TestId)).Select(g => (g.Key, g.Sum(x => x.Gross))).ToList();
     }
 }

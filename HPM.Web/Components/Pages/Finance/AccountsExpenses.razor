@@ -141,6 +141,21 @@
                             }
                         </select>
                     </label>
+                    @if (HeadNeedsCenter)
+                    {
+                        <label class="px-field span-all">
+                            <span>@I18n.T("Department (cost center)")</span>
+                            <select @bind="centerId">
+                                <option value="0">@I18n.T("Default for this head") — @DefaultCenterName</option>
+                                @foreach (var g in centers.Where(c => c.IsActive).GroupBy(c => c.CenterType))
+                                {
+                                    <optgroup label="@I18n.T(g.Key)">
+                                        @foreach (var c in g) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                                    </optgroup>
+                                }
+                            </select>
+                        </label>
+                    }
                     @if (NeedsDoctor)
                     {
                         <label class="px-field span-all">
@@ -166,6 +181,10 @@
                             <select @bind="assetCode">
                                 <option value="@AccountCodes.MedicalEquipment">@I18n.T("Medical Equipment & Machines")</option>
                                 <option value="@AccountCodes.Furniture">@I18n.T("Furniture & Fixtures")</option>
+                                <option value="@AccountCodes.Building">@I18n.T("Land & Building")</option>
+                                <option value="@AccountCodes.ComputerIt">@I18n.T("Computer & IT Equipment")</option>
+                                <option value="@AccountCodes.Vehicle">@I18n.T("Vehicle & Ambulance")</option>
+                                <option value="@AccountCodes.Electrical">@I18n.T("Electrical & Generator")</option>
                             </select>
                         </label>
                         <div class="px-note-box span-all">@I18n.T("Depreciation spreads the cost of a machine or furniture over its useful life, e.g. a 12 lakh machine used for 10 years = 10,000 per month. No money leaves the hospital; the asset value goes down.")</div>
@@ -254,6 +273,18 @@
     private string viaCode = AccountCodes.Cash;
     private bool onCredit;
     private string assetCode = AccountCodes.MedicalEquipment;
+    private List<CostCenter> centers = [];
+    private int centerId;
+    private bool HeadNeedsCenter => headId > 0 && Heads.FirstOrDefault(h => h.ID == headId)?.AccountType is "Income" or "Expense";
+    private string DefaultCenterName
+    {
+        get
+        {
+            var h = Heads.FirstOrDefault(x => x.ID == headId);
+            var code = h is null ? null : AccountingSetup.DefaultCenterCode(h.Code, h.AccountType);
+            return centers.FirstOrDefault(c => c.Code == code)?.Name ?? "—";
+        }
+    }
     private bool IsDepreciation => mode == "Expense" && headId > 0 && HeadCode(headId) == AccountCodes.Depreciation;
     private string payee = "", refNo = "", note = "";
 
@@ -263,6 +294,7 @@
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
         await LoadAsync();
     }
 
@@ -365,7 +397,7 @@
     };
 
     private void SetMode(string m) { mode = m; headId = 0; doctorId = 0; onCredit = false; }
-    private void PickHead(int id) { headId = id; if (!NeedsDoctor) doctorId = 0; }
+    private void PickHead(int id) { headId = id; centerId = 0; if (!NeedsDoctor) doctorId = 0; }
 
     private void ResetForm()
     {
@@ -385,7 +417,7 @@
             var head = Heads.First(h => h.ID == headId);
             int otherId;
             if (IsDepreciation)
-                otherId = await AccountingSetup.IdAsync(db, assetCode);
+                otherId = await AccountingSetup.IdAsync(db, AccountingSetup.AccumulatedDepreciationCode(assetCode));
             else if (mode == "Expense" && onCredit)
             {
                 var payableCode = head.Code switch
@@ -412,8 +444,8 @@
             if (!string.IsNullOrWhiteSpace(refNo)) reference = reference is null ? refNo.Trim() : $"{reference}|{refNo.Trim()}";
 
             var lines = mode == "Receipt"
-                ? new List<AccountVoucherLine> { new() { AccountID = otherId, Debit = amount }, new() { AccountID = headId, Credit = amount } }
-                : new List<AccountVoucherLine> { new() { AccountID = headId, Debit = amount }, new() { AccountID = otherId, Credit = amount } };
+                ? new List<AccountVoucherLine> { new() { AccountID = otherId, Debit = amount }, new() { AccountID = headId, Credit = amount, CostCenterID = HeadNeedsCenter && centerId > 0 ? centerId : null } }
+                : new List<AccountVoucherLine> { new() { AccountID = headId, Debit = amount, CostCenterID = HeadNeedsCenter && centerId > 0 ? centerId : null }, new() { AccountID = otherId, Credit = amount } };
 
             if (IsAdmin) await FinancialControl.EnsurePostingAllowedAsync(db, entryDate, CurrentUserId);
             var voucher = new AccountVoucher

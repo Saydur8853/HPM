@@ -13,6 +13,7 @@
             <div class="px-metric"><span>@(NetProfit >= 0 ? I18n.T("Net Profit") : I18n.T("Net Loss"))</span><b class="@(NetProfit >= 0 ? "ok" : "bad")">@I18n.FormatCurrency(Math.Abs(NetProfit))</b></div>
             <div class="px-metric"><span>@I18n.T("Margin")</span><b>@(totalIncome == 0 ? "—" : (NetProfit / totalIncome).ToString("P1"))</b></div>
             <button type="button" class="px-btn" @onclick='() => PrintAsync("fin-print", $"Profit & Loss {FromDate:dd MMM yyyy} - {ToDate:dd MMM yyyy}")'>🖨 @I18n.T("Print")</button>
+            <button type="button" class="px-btn" disabled="@(tab == "dues")" @onclick="ExportCsvAsync">⬇ CSV</button>
         </div>
     </div>
 
@@ -33,7 +34,7 @@
         <span class="muted">→</span>
         <input type="date" value="@ToDate.ToString("yyyy-MM-dd")" @onchange="SetToAsync" />
         <div class="px-seg fin-tabs">
-            @foreach (var t in new[] { ("pl", "📊 Profit & Loss"), ("daily", "📅 Daily Book"), ("dept", "🏥 Department-wise"), ("tb", "⚖️ Trial Balance"), ("dues", "🤝 Payables & Dues") })
+            @foreach (var t in new[] { ("pl", "📊 Profit & Loss"), ("daily", "📅 Daily Book"), ("dept", "🏥 Department-wise"), ("tb", "⚖️ Trial Balance"), ("bs", "🏦 Balance Sheet"), ("dues", "🤝 Payables & Dues") })
             {
                 var key = t.Item1;
                 <button type="button" class="@(tab == key ? "on" : "")" @onclick="() => tab = key">@I18n.T(t.Item2)</button>
@@ -181,6 +182,29 @@
                 </table>
             </section>
         }
+        else if (tab == "bs")
+        {
+            <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Balance Sheet as on") @ToDate.ToString("dd MMM yyyy")</div></div>
+            <div class="fin-grid">
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>🏦 @I18n.T("Assets")</h2></div><b>@I18n.FormatCurrency(bsAssets.Sum(x => x.Amount))</b></header>
+                    @BsTable(bsAssets)
+                </section>
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>📜 @I18n.T("Liabilities & Equity")</h2></div><b>@I18n.FormatCurrency(bsLiabilities.Sum(x => x.Amount) + bsEquity.Sum(x => x.Amount) + profitBefore + profitInPeriod)</b></header>
+                    @BsTable(bsLiabilities)
+                    @BsTable(bsEquity)
+                    <table class="fin-table">
+                        <tbody>
+                            <tr><td class="indent">@I18n.T("Profit of earlier periods")</td><td class="r">@I18n.FormatCurrency(profitBefore)</td></tr>
+                            <tr><td class="indent">@I18n.T("Profit for this period") (@FromDate.ToString("dd MMM") – @ToDate.ToString("dd MMM"))</td><td class="r">@I18n.FormatCurrency(profitInPeriod)</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+            </div>
+            var diff = bsAssets.Sum(x => x.Amount) - (bsLiabilities.Sum(x => x.Amount) + bsEquity.Sum(x => x.Amount) + profitBefore + profitInPeriod);
+            <div class="px-note-box @(diff == 0 ? "" : "review")">@(diff == 0 ? "✓ " + I18n.T("Assets = Liabilities + Equity. The books balance.") : "⚠️ " + I18n.T("Difference") + ": " + I18n.FormatCurrency(diff))</div>
+        }
         else if (tab == "tb")
         {
             <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Trial Balance as on") @ToDate.ToString("dd MMM yyyy")</div></div>
@@ -291,6 +315,9 @@
     private decimal totalIncome, totalExpense, capitalPurchases, sharedCost;
     private List<DeptRow> deptRows = [];
     private List<TbRow> tbRows = [];
+    private sealed record BsRow(string Group, string Code, string Name, decimal Amount);
+    private List<BsRow> bsAssets = [], bsLiabilities = [], bsEquity = [];
+    private decimal profitBefore, profitInPeriod;
     private List<AmountRow> payables = [], receivables = [], moneyBalances = [];
     private List<MonthRow> trend = [];
     private List<DoctorRow> doctorRows = [];
@@ -356,6 +383,18 @@
                 })
                 .Where(r => r.Debit != 0 || r.Credit != 0)
                 .OrderBy(r => r.Code).ToList();
+
+            // balance sheet as on the end date (profit of all periods sits in equity)
+            var allBalance = allToDate.GroupBy(l => l.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Debit - x.Credit));
+            List<BsRow> Side(string type, int sign) => Heads.Where(h => h.AccountType == type && allBalance.GetValueOrDefault(h.ID) != 0)
+                .Select(h => new BsRow(AccountingSetup.GroupOf(h), h.Code, h.Name, sign * allBalance[h.ID]))
+                .OrderBy(r => r.Code).ToList();
+            bsAssets = Side("Asset", 1);
+            bsLiabilities = Side("Liability", -1);
+            bsEquity = Side("Equity", -1);
+            decimal Profit(IEnumerable<PostedLine> ls) => ls.Where(l => incomeIds.Contains(l.AccountID)).Sum(l => l.Credit - l.Debit) - ls.Where(l => expenseIds.Contains(l.AccountID)).Sum(l => l.Debit - l.Credit);
+            profitInPeriod = Profit(period);
+            profitBefore = Profit(allToDate.Where(l => l.Date < FromDate.Date));
 
             // balances
             var balance = allToDate.GroupBy(l => l.AccountID).ToDictionary(g => g.Key, g => g.Sum(x => x.Debit - x.Credit));
@@ -509,4 +548,60 @@
     private static string Pct(decimal v, decimal max) => (max <= 0 ? 0 : Math.Clamp(v / max * 100, 0, 100)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
     private static string Short(decimal v) => Math.Abs(v) >= 100000 ? $"{v / 100000:0.#}L" : Math.Abs(v) >= 1000 ? $"{v / 1000:0.#}K" : v.ToString("0");
     private static string TypeTag(string t) => t switch { "Asset" => "blue", "Liability" => "amber", "Income" => "green", "Expense" => "red", _ => "violet" };
+
+    private RenderFragment BsTable(List<BsRow> rows) => __builder =>
+    {
+        <table class="fin-table">
+            <tbody>
+                @foreach (var g in rows.GroupBy(r => r.Group))
+                {
+                    <tr class="group"><td>@I18n.T(g.Key)</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Amount))</td></tr>
+                    @foreach (var r in g)
+                    {
+                        <tr><td class="indent">@r.Name <small class="muted">@r.Code</small></td><td class="r">@I18n.FormatCurrency(r.Amount)</td></tr>
+                    }
+                }
+            </tbody>
+        </table>
+    };
+
+    private async Task ExportCsvAsync()
+    {
+        var sb = new System.Text.StringBuilder();
+        static string Q(string? v) => "\"" + (v ?? "").Replace("\"", "\"\"") + "\"";
+        static string N(decimal v) => v.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+        switch (tab)
+        {
+            case "daily":
+                sb.AppendLine("Date,Income,Expense,Profit,Cash In,Bank In,MFS In,Total Collection,Paid Out");
+                foreach (var d in dailyRows)
+                    sb.AppendLine(string.Join(",", d.Date.ToString("yyyy-MM-dd"), N(d.Income), N(d.Expense), N(d.Income - d.Expense), N(d.CashIn), N(d.BankIn), N(d.MfsIn), N(d.CashIn + d.BankIn + d.MfsIn), N(d.PaidOut)));
+                break;
+            case "dept":
+                sb.AppendLine("Department,Income,Direct Cost,Contribution");
+                foreach (var d in deptRows) sb.AppendLine(string.Join(",", Q(d.Name), N(d.Income), N(d.Cost), N(d.Income - d.Cost)));
+                sb.AppendLine(string.Join(",", Q("Shared costs"), "", N(sharedCost), N(-sharedCost)));
+                break;
+            case "tb":
+                sb.AppendLine("Code,Account Head,Type,Debit,Credit");
+                foreach (var r in tbRows) sb.AppendLine(string.Join(",", Q(r.Code), Q(r.Name), Q(r.Type), N(r.Debit), N(r.Credit)));
+                break;
+            case "bs":
+                sb.AppendLine("Side,Group,Code,Account Head,Amount");
+                foreach (var r in bsAssets) sb.AppendLine(string.Join(",", Q("Assets"), Q(r.Group), Q(r.Code), Q(r.Name), N(r.Amount)));
+                foreach (var r in bsLiabilities) sb.AppendLine(string.Join(",", Q("Liabilities"), Q(r.Group), Q(r.Code), Q(r.Name), N(r.Amount)));
+                foreach (var r in bsEquity) sb.AppendLine(string.Join(",", Q("Equity"), Q(r.Group), Q(r.Code), Q(r.Name), N(r.Amount)));
+                sb.AppendLine(string.Join(",", Q("Equity"), Q("Profit"), "", Q("Profit of earlier periods"), N(profitBefore)));
+                sb.AppendLine(string.Join(",", Q("Equity"), Q("Profit"), "", Q("Profit for this period"), N(profitInPeriod)));
+                break;
+            default:
+                sb.AppendLine("Section,Group,Code,Account Head,This Period,Previous");
+                foreach (var r in incomeRows) sb.AppendLine(string.Join(",", Q("Income"), Q(r.Group), Q(r.Code), Q(r.Name), N(r.Amount), N(prevIncome.GetValueOrDefault(r.HeadId))));
+                foreach (var r in expenseRows) sb.AppendLine(string.Join(",", Q("Expense"), Q(r.Group), Q(r.Code), Q(r.Name), N(r.Amount), N(prevExpense.GetValueOrDefault(r.HeadId))));
+                sb.AppendLine(string.Join(",", Q("Net Profit"), "", "", "", N(NetProfit), ""));
+                break;
+        }
+        var bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+        await JS.InvokeVoidAsync("hpm.downloadFile", $"{tab}-{FromDate:yyyyMMdd}-{ToDate:yyyyMMdd}.csv", "text/csv", Convert.ToBase64String(bytes));
+    }
 }

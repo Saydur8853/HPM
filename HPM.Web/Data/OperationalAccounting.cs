@@ -16,7 +16,8 @@ public static class OperationalAccounting
         string narration,
         int? cashModuleFlag = null,
         int revenueAccountId = AccountingPosting.HospitalRevenue,
-        int cashAccountId = AccountingPosting.Cash)
+        int cashAccountId = AccountingPosting.Cash,
+        IReadOnlyList<(int? CostCenterID, decimal Weight)>? revenueSplit = null)
     {
         if (revenueAmount < 0) throw new InvalidOperationException("Revenue amount cannot be negative.");
         if (cashAmount < 0 || cashAmount > revenueAmount)
@@ -46,10 +47,13 @@ public static class OperationalAccounting
 
         if (!matches && revenueAmount > 0)
         {
-            var lines = new List<(int AccountID, decimal Debit, decimal Credit)>();
-            if (cashAmount > 0) lines.Add((cashAccountId, cashAmount, 0));
-            if (receivableAmount > 0) lines.Add((AccountingPosting.PatientReceivable, receivableAmount, 0));
-            lines.Add((revenueAccountId, 0, revenueAmount));
+            var lines = new List<AccountingPosting.PostingLine>();
+            if (cashAmount > 0) lines.Add(new(cashAccountId, cashAmount, 0));
+            if (receivableAmount > 0) lines.Add(new(AccountingPosting.PatientReceivable, receivableAmount, 0));
+            // income spread over the departments that earned it (e.g. Pathology / Imaging), by gross weight
+            var shares = revenueSplit is null ? [] : AccountingPosting.Split(revenueAmount, revenueSplit.Select(x => (x.CostCenterID ?? 0, x.Weight)));
+            if (shares.Count == 0) lines.Add(new(revenueAccountId, 0, revenueAmount));
+            else foreach (var (cc, amt) in shares) lines.Add(new(revenueAccountId, 0, amt, cc == 0 ? null : cc));
             AccountingPosting.AddPostedVoucher(
                 db,
                 cashAmount > 0 ? "Receipt" : "Journal",
@@ -212,16 +216,32 @@ public static class OperationalAccounting
     /// Same lines: nothing happens. Different lines: the old voucher is reversed and a new one posted.
     /// No lines (or all zero): the old voucher, if any, is reversed.
     /// </summary>
-    public static async Task SyncJournalAsync(
+    public static Task SyncJournalAsync(
         HpmDbContext db,
         string reference,
         DateTime transactionDate,
         int userId,
         string narration,
         IReadOnlyList<(int AccountID, decimal Debit, decimal Credit)> lines,
+        string voucherType = "Journal") =>
+        SyncJournalAsync(db, reference, transactionDate, userId, narration,
+            lines.Select(x => new AccountingPosting.PostingLine(x.AccountID, x.Debit, x.Credit)).ToList(), voucherType);
+
+    /// <summary>
+    /// Same as above with a department on each line. Lines without a department are compared on the account only,
+    /// because the head's default department is filled in when the voucher is saved.
+    /// </summary>
+    public static async Task SyncJournalAsync(
+        HpmDbContext db,
+        string reference,
+        DateTime transactionDate,
+        int userId,
+        string narration,
+        IReadOnlyList<AccountingPosting.PostingLine> lines,
         string voucherType = "Journal")
     {
-        var wanted = Net(lines.Select(x => (x.AccountID, x.Debit - x.Credit)));
+        var explicitCenters = lines.Any(x => x.CostCenterID.HasValue);
+        var wanted = Net(lines.Select(x => (x.AccountID, explicitCenters ? x.CostCenterID : null, x.Debit - x.Credit)));
         var active = await db.AccountVouchers
             .Where(x => x.Reference == reference && x.IsPosted && x.Status != "Cancelled")
             .OrderByDescending(x => x.ID)
@@ -229,20 +249,20 @@ public static class OperationalAccounting
         if (active is not null)
         {
             var postedLines = await db.AccountVoucherLines.AsNoTracking().Where(x => x.VoucherID == active.ID).ToListAsync();
-            var posted = Net(postedLines.Select(x => (x.AccountID, x.Debit - x.Credit)));
+            var posted = Net(postedLines.Select(x => (x.AccountID, explicitCenters ? x.CostCenterID : null, x.Debit - x.Credit)));
             if (posted.SequenceEqual(wanted)) return;
             await AccountingPosting.ReversePostedVoucherAsync(db, active, "Source document revised", userId, DateTime.Now);
         }
         if (wanted.Count == 0) return;
         await FinancialControl.EnsurePostingAllowedAsync(db, transactionDate, userId);
         AccountingPosting.AddPostedVoucher(db, voucherType, transactionDate, narration, reference, userId,
-            wanted.Select(x => (x.AccountID, x.Net > 0 ? x.Net : 0m, x.Net < 0 ? -x.Net : 0m)).ToArray());
+            wanted.Select(x => new AccountingPosting.PostingLine(x.AccountID, x.Net > 0 ? x.Net : 0m, x.Net < 0 ? -x.Net : 0m, x.CostCenterID)).ToArray());
 
-        static List<(int AccountID, decimal Net)> Net(IEnumerable<(int AccountID, decimal Amount)> rows) =>
-            rows.GroupBy(x => x.AccountID)
-                .Select(g => (AccountID: g.Key, Net: Math.Round(g.Sum(x => x.Amount), 2)))
+        static List<(int AccountID, int? CostCenterID, decimal Net)> Net(IEnumerable<(int AccountID, int? CostCenterID, decimal Amount)> rows) =>
+            rows.GroupBy(x => (x.AccountID, x.CostCenterID))
+                .Select(g => (g.Key.AccountID, g.Key.CostCenterID, Net: Math.Round(g.Sum(x => x.Amount), 2)))
                 .Where(x => x.Net != 0)
-                .OrderBy(x => x.AccountID)
+                .OrderBy(x => x.AccountID).ThenBy(x => x.CostCenterID ?? 0)
                 .ToList();
     }
 

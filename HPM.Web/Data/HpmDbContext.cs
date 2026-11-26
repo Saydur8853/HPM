@@ -85,6 +85,12 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public DbSet<AccountVoucher> AccountVouchers => Set<AccountVoucher>();
     public DbSet<AccountVoucherLine> AccountVoucherLines => Set<AccountVoucherLine>();
     public DbSet<AccountSetting> AccountSettings => Set<AccountSetting>();
+    public DbSet<CostCenter> CostCenters => Set<CostCenter>();
+    public DbSet<FixedAsset> FixedAssets => Set<FixedAsset>();
+    public DbSet<FixedAssetTransfer> FixedAssetTransfers => Set<FixedAssetTransfer>();
+    public DbSet<FixedAssetDepreciation> FixedAssetDepreciations => Set<FixedAssetDepreciation>();
+    public DbSet<AllocationRule> AllocationRules => Set<AllocationRule>();
+    public DbSet<AllocationRun> AllocationRuns => Set<AllocationRun>();
     public DbSet<CashierHandover> CashierHandovers => Set<CashierHandover>();
     public DbSet<FinancialPeriodLock> FinancialPeriodLocks => Set<FinancialPeriodLock>();
     public DbSet<FinancialReversal> FinancialReversals => Set<FinancialReversal>();
@@ -382,6 +388,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         await ValidateFinancialPostingControlsAsync(cancellationToken);
+        var newVoucherLines = ChangeTracker.Entries<AccountVoucherLine>().Where(x => x.State == EntityState.Added).Select(x => x.Entity).ToList();
+        if (newVoucherLines.Count > 0) await AccountingSetup.FillMissingCentersAsync(this, newVoucherLines);
 
         var pending = ChangeTracker.Entries()
             .Where(x => x.Entity is not AuditLog
@@ -846,6 +854,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
 
         var category = b.Entity<ServiceCategory>();
         category.ToTable("Service_Category");
+        category.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
         category.HasKey(x => x.ID);
         category.Property(x => x.ID).ValueGeneratedNever();
         category.Property(x => x.Name).HasMaxLength(200);
@@ -954,6 +963,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
 
         var category = b.Entity<BedCategory>();
         category.ToTable("Bed_Category");
+        category.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
         category.HasKey(x => x.ID);
         category.Property(x => x.ID).ValueGeneratedNever();
         category.Property(x => x.Name).HasMaxLength(50);
@@ -1563,6 +1573,7 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         line.HasKey(x => x.ID);
         line.Property(x => x.VoucherID).HasColumnName("Voucher_ID");
         line.Property(x => x.AccountID).HasColumnName("Account_ID");
+        line.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
         line.Property(x => x.Debit).HasColumnType("numeric(18,2)");
         line.Property(x => x.Credit).HasColumnType("numeric(18,2)");
         line.HasOne(x => x.Voucher).WithMany(x => x.Lines).HasForeignKey(x => x.VoucherID).OnDelete(DeleteBehavior.Cascade);
@@ -1575,6 +1586,80 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         accountSetting.Property(x => x.Key).HasColumnName("Setting_Key").HasMaxLength(80);
         accountSetting.Property(x => x.Value).HasColumnName("Setting_Value").HasMaxLength(400);
         accountSetting.Property(x => x.UpdatedAt).HasColumnName("Updated_At").HasColumnType("datetime");
+
+        // Cost centers, fixed assets and month-end allocation: tables created by AccountingSetup.EnsureAsync (idempotent SQL).
+        var cc = b.Entity<CostCenter>();
+        cc.ToTable("Accounts_Cost_Center", t => t.ExcludeFromMigrations());
+        cc.HasKey(x => x.ID);
+        cc.Property(x => x.Code).HasMaxLength(20);
+        cc.Property(x => x.Name).HasMaxLength(100);
+        cc.Property(x => x.CenterType).HasColumnName("Center_Type").HasMaxLength(20);
+        cc.Property(x => x.Incharge).HasMaxLength(100);
+        cc.Property(x => x.AreaSqFt).HasColumnName("Area_Sq_Ft").HasColumnType("numeric(18,2)");
+        cc.Property(x => x.IsActive).HasColumnName("Is_Active");
+        cc.Property(x => x.IsSystem).HasColumnName("Is_System");
+
+        var asset = b.Entity<FixedAsset>();
+        asset.ToTable("Accounts_Fixed_Asset", t => t.ExcludeFromMigrations());
+        asset.HasKey(x => x.ID);
+        asset.Property(x => x.AssetCode).HasColumnName("Asset_Code").HasMaxLength(30);
+        asset.Property(x => x.Name).HasMaxLength(150);
+        asset.Property(x => x.SerialNo).HasColumnName("Serial_No").HasMaxLength(100);
+        asset.Property(x => x.AssetAccountID).HasColumnName("Asset_Account_ID");
+        asset.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
+        asset.Property(x => x.Location).HasMaxLength(150);
+        asset.Property(x => x.Supplier).HasMaxLength(150);
+        asset.Property(x => x.InvoiceNo).HasColumnName("Invoice_No").HasMaxLength(50);
+        asset.Property(x => x.PurchaseDate).HasColumnName("Purchase_Date").HasColumnType("date");
+        asset.Property(x => x.InServiceDate).HasColumnName("In_Service_Date").HasColumnType("date");
+        asset.Property(x => x.Cost).HasColumnType("numeric(18,2)");
+        asset.Property(x => x.SalvageValue).HasColumnName("Salvage_Value").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.UsefulLifeYears).HasColumnName("Useful_Life_Years");
+        asset.Property(x => x.OpeningAccumulatedDepreciation).HasColumnName("Opening_Acc_Depreciation").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.Status).HasMaxLength(20);
+        asset.Property(x => x.WarrantyEnd).HasColumnName("Warranty_End").HasColumnType("date");
+        asset.Property(x => x.DisposedDate).HasColumnName("Disposed_Date").HasColumnType("date");
+        asset.Property(x => x.DisposalAmount).HasColumnName("Disposal_Amount").HasColumnType("numeric(18,2)");
+        asset.Property(x => x.PurchaseVoucherID).HasColumnName("Purchase_Voucher_ID");
+        asset.Property(x => x.DisposalVoucherID).HasColumnName("Disposal_Voucher_ID");
+        asset.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+        asset.Property(x => x.TransDate).HasColumnName("Trans_Date").HasColumnType("datetime");
+
+        var transfer = b.Entity<FixedAssetTransfer>();
+        transfer.ToTable("Accounts_Fixed_Asset_Transfer", t => t.ExcludeFromMigrations());
+        transfer.HasKey(x => x.ID);
+        transfer.Property(x => x.AssetID).HasColumnName("Asset_ID");
+        transfer.Property(x => x.FromCostCenterID).HasColumnName("From_Cost_Center_ID");
+        transfer.Property(x => x.ToCostCenterID).HasColumnName("To_Cost_Center_ID");
+        transfer.Property(x => x.TransferDate).HasColumnName("Transfer_Date").HasColumnType("date");
+        transfer.Property(x => x.Reason).HasMaxLength(300);
+        transfer.Property(x => x.EnteredBy).HasColumnName("Entered_By");
+
+        var dep = b.Entity<FixedAssetDepreciation>();
+        dep.ToTable("Accounts_Fixed_Asset_Depreciation", t => t.ExcludeFromMigrations());
+        dep.HasKey(x => x.ID);
+        dep.Property(x => x.AssetID).HasColumnName("Asset_ID");
+        dep.Property(x => x.PeriodMonth).HasColumnName("Period_Month").HasColumnType("date");
+        dep.Property(x => x.Amount).HasColumnType("numeric(18,2)");
+        dep.Property(x => x.CostCenterID).HasColumnName("Cost_Center_ID");
+        dep.Property(x => x.VoucherID).HasColumnName("Voucher_ID");
+
+        var rule = b.Entity<AllocationRule>();
+        rule.ToTable("Accounts_Allocation_Rule", t => t.ExcludeFromMigrations());
+        rule.HasKey(x => x.ID);
+        rule.Property(x => x.SourceCostCenterID).HasColumnName("Source_Cost_Center_ID");
+        rule.Property(x => x.Basis).HasMaxLength(20);
+        rule.Property(x => x.TargetCostCenterID).HasColumnName("Target_Cost_Center_ID");
+        rule.Property(x => x.Weight).HasColumnType("numeric(18,4)");
+        rule.Property(x => x.IsActive).HasColumnName("Is_Active");
+
+        var run = b.Entity<AllocationRun>();
+        run.ToTable("Accounts_Allocation_Run", t => t.ExcludeFromMigrations());
+        run.HasKey(x => x.ID);
+        run.Property(x => x.PeriodMonth).HasColumnName("Period_Month").HasColumnType("date");
+        run.Property(x => x.VoucherID).HasColumnName("Voucher_ID");
+        run.Property(x => x.RunBy).HasColumnName("Run_By");
+        run.Property(x => x.RunAt).HasColumnName("Run_At").HasColumnType("datetime");
 
         var handover = b.Entity<CashierHandover>();
         handover.ToTable("Cashier_Handover");

@@ -189,6 +189,8 @@ public sealed class ServiceCategory
     public int? GroupSubID { get; set; }
     public int? InvestigationSLNO { get; set; }
     public string? DiagnosticType { get; set; }
+    /// <summary>Accounts: department whose income these services are.</summary>
+    public int? CostCenterID { get; set; }
 }
 
 public sealed class Service

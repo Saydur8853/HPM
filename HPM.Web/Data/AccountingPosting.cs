@@ -25,6 +25,9 @@ public static class AccountingPosting
         public const int BloodBank = 15;
     }
 
+    /// <summary>One journal line. CostCenterID is the department the amount belongs to (null: the head's default department).</summary>
+    public readonly record struct PostingLine(int AccountID, decimal Debit, decimal Credit, int? CostCenterID = null);
+
     public static void AddPostedVoucher(
         HpmDbContext db,
         string voucherType,
@@ -32,8 +35,20 @@ public static class AccountingPosting
         string narration,
         string reference,
         int enteredBy,
-        params (int AccountID, decimal Debit, decimal Credit)[] lines)
+        params (int AccountID, decimal Debit, decimal Credit)[] lines) =>
+        AddPostedVoucher(db, voucherType, voucherDate, narration, reference, enteredBy,
+            lines.Select(x => new PostingLine(x.AccountID, x.Debit, x.Credit)).ToArray());
+
+    public static AccountVoucher AddPostedVoucher(
+        HpmDbContext db,
+        string voucherType,
+        DateTime voucherDate,
+        string narration,
+        string reference,
+        int enteredBy,
+        PostingLine[] lines)
     {
+        lines = lines.Where(x => x.Debit != 0 || x.Credit != 0).ToArray();
         var debit = lines.Sum(x => x.Debit);
         var credit = lines.Sum(x => x.Credit);
         if (lines.Length < 2 || debit <= 0 || debit != credit)
@@ -59,10 +74,28 @@ public static class AccountingPosting
             {
                 AccountID = line.AccountID,
                 Debit = line.Debit,
-                Credit = line.Credit
+                Credit = line.Credit,
+                CostCenterID = line.CostCenterID
             });
 
         db.AccountVouchers.Add(voucher);
+        return voucher;
+    }
+
+    /// <summary>Splits an amount over weights, rounded to paisa, the rounding remainder on the largest share.</summary>
+    public static List<(TKey Key, decimal Amount)> Split<TKey>(decimal amount, IEnumerable<(TKey Key, decimal Weight)> weights)
+    {
+        var list = weights.Where(x => x.Weight > 0).ToList();
+        var total = list.Sum(x => x.Weight);
+        if (amount == 0 || total <= 0) return [];
+        var result = list.Select(x => (x.Key, Amount: Math.Round(amount * x.Weight / total, 2))).ToList();
+        var diff = amount - result.Sum(x => x.Amount);
+        if (diff != 0)
+        {
+            var i = result.FindIndex(x => x.Amount == result.Max(y => y.Amount));
+            result[i] = (result[i].Key, result[i].Amount + diff);
+        }
+        return result;
     }
 
     public static async Task<AccountVoucher> ReversePostedVoucherAsync(
@@ -70,7 +103,8 @@ public static class AccountingPosting
         AccountVoucher original,
         string reason,
         int userId,
-        DateTime reversedAt)
+        DateTime reversedAt,
+        DateTime? reversalVoucherDate = null)
     {
         if (!original.IsPosted || original.Status is "Pending" or "Rejected")
             throw new InvalidOperationException("Only an approved voucher can be reversed.");
@@ -91,7 +125,7 @@ public static class AccountingPosting
         {
             VoucherNo = $"R{DateTime.UtcNow:yyMMddHHmmssfff}{Guid.NewGuid():N}"[..20],
             VoucherType = "Reversal",
-            VoucherDate = reversedAt.Date,
+            VoucherDate = (reversalVoucherDate ?? reversedAt).Date,
             Narration = $"Reversal of {original.VoucherNo}: {reason.Trim()}",
             Reference = $"REV:{original.ID}",
             IsPosted = true,
@@ -105,7 +139,8 @@ public static class AccountingPosting
             {
                 AccountID = x.AccountID,
                 Debit = x.Credit,
-                Credit = x.Debit
+                Credit = x.Debit,
+                CostCenterID = x.CostCenterID
             }).ToList()
         };
 

@@ -1,0 +1,488 @@
+@page "/accounts/fixed-assets"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Fixed Asset Register") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">🏗️ @I18n.T("Fixed Asset Register")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Active assets")</span><b>@assets.Count(a => a.Status == "Active")</b></div>
+            <div class="px-metric"><span>@I18n.T("Total cost")</span><b>@I18n.FormatCurrency(assets.Where(a => a.Status == "Active").Sum(a => a.Cost))</b></div>
+            <div class="px-metric"><span>@I18n.T("Book value")</span><b class="ok">@I18n.FormatCurrency(assets.Where(a => a.Status == "Active").Sum(BookValue))</b></div>
+            <div class="px-metric"><span>@I18n.T("Monthly depreciation")</span><b class="bad">@I18n.FormatCurrency(assets.Where(a => a.Status == "Active" && a.PurchaseVoucherID != null).Sum(MonthlyCharge))</b></div>
+            <a class="px-btn" href="/accounts/month-end">🗓️ @I18n.T("Month-End Close")</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="pharmacy-classic-workspace">
+        <!-- Register list -->
+        <section class="px-card">
+            <header class="px-card-head stack">
+                <div class="px-filter-row">
+                    <div class="px-search-box sm grow">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search tag, name, serial or supplier...")" @bind="search" @bind:event="oninput" autocomplete="off" />
+                        @if (!string.IsNullOrWhiteSpace(search)) { <button type="button" class="px-x" @onclick='() => search = ""'>✕</button> }
+                    </div>
+                    <select @bind="ccFilter" title="@I18n.T("Department")">
+                        <option value="0">@I18n.T("All departments")</option>
+                        @foreach (var c in centers) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                    </select>
+                    <div class="px-seg">
+                        @foreach (var st in new[] { "Active", "Disposed", "All" })
+                        {
+                            var s = st;
+                            <button type="button" class="@(statusFilter == s ? "on" : "")" @onclick="() => statusFilter = s">@I18n.T(s)</button>
+                        }
+                    </div>
+                </div>
+            </header>
+            <div class="px-cart flat">
+                <div class="px-cart-head" style="grid-template-columns: 80px minmax(160px,1fr) 150px 110px 110px 90px 80px;">
+                    <div>@I18n.T("Tag")</div><div>@I18n.T("Asset")</div><div>@I18n.T("Department")</div><div class="r">@I18n.T("Cost")</div><div class="r">@I18n.T("Book value")</div><div class="r">@I18n.T("Per month")</div><div></div>
+                </div>
+                <div class="px-cart-rows">
+                    @{ var view = FilteredAssets().ToList(); }
+                    @if (view.Count == 0)
+                    {
+                        <div class="px-empty"><div class="px-empty-icon">🏗️</div><div>@I18n.T("No assets")</div><small>@I18n.T("Register machines, furniture, computers, vehicles and buildings from the form.")</small></div>
+                    }
+                    @foreach (var a in view)
+                    {
+                        var row = a;
+                        <div class="px-cart-row clickable @(editor.ID == row.ID ? "selected" : "") @(row.Status != "Active" ? "expired" : "")" style="grid-template-columns: 80px minmax(160px,1fr) 150px 110px 110px 90px 80px;" @onclick="() => Select(row)">
+                            <div class="strong">@row.AssetCode</div>
+                            <div class="px-cart-name stack">
+                                <b>@row.Name</b>
+                                <small class="muted">@HeadName(row.AssetAccountID)@(string.IsNullOrWhiteSpace(row.SerialNo) ? "" : $" · SN {row.SerialNo}") · @row.UsefulLifeYears @I18n.T("yrs")@(row.PurchaseVoucherID == null ? " · " + I18n.T("register only") : "")</small>
+                            </div>
+                            <div class="muted">@CenterName(row.CostCenterID)</div>
+                            <div class="r">@I18n.FormatCurrency(row.Cost)</div>
+                            <div class="r strong">@(row.Status == "Active" ? I18n.FormatCurrency(BookValue(row)) : I18n.T("Disposed"))</div>
+                            <div class="r">@(row.Status == "Active" ? I18n.FormatCurrency(MonthlyCharge(row)) : "—")</div>
+                            <div class="c" @onclick:stopPropagation="true">
+                                @if (row.Status == "Active")
+                                {
+                                    <button type="button" class="px-btn sm" title="@I18n.T("Move to another department")" @onclick="() => OpenAction(row, true)">⇄</button>
+                                    <button type="button" class="px-del" title="@I18n.T("Sell or scrap")" @onclick="() => OpenAction(row, false)">🗑</button>
+                                }
+                            </div>
+                        </div>
+                        @if (actionAsset?.ID == row.ID)
+                        {
+                            <div class="px-reason-row">
+                                @if (actionIsTransfer)
+                                {
+                                    <select @bind="transferTo">
+                                        <option value="0">@I18n.T("Move to department...")</option>
+                                        @foreach (var c in centers.Where(c => c.IsActive && c.ID != row.CostCenterID)) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                                    </select>
+                                    <input placeholder="@I18n.T("Reason (optional)")" @bind="actionReason" maxlength="300" />
+                                    <button type="button" class="px-btn sm primary" disabled="@(IsBusy || transferTo <= 0)" @onclick="TransferAsync">@I18n.T("Transfer")</button>
+                                }
+                                else
+                                {
+                                    <input type="date" value="@disposeDate.ToString("yyyy-MM-dd")" @onchange="e => disposeDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : disposeDate" />
+                                    <input type="number" min="0" step="0.01" placeholder="@I18n.T("Sale amount (0 if scrapped)")" value="@(disposeAmount == 0 ? "" : disposeAmount.ToString("0.##"))" @onchange="e => disposeAmount = decimal.TryParse(e.Value?.ToString(), out var v) && v > 0 ? v : 0" />
+                                    <select @bind="disposeIn">
+                                        <option value="@AccountCodes.Cash">@I18n.T("Cash")</option>
+                                        <option value="@AccountCodes.Bank">@I18n.T("Bank")</option>
+                                        <option value="@AccountCodes.Mfs">@I18n.T("MFS")</option>
+                                    </select>
+                                    <input placeholder="@I18n.T("Reason")" @bind="actionReason" maxlength="300" />
+                                    <button type="button" class="px-btn sm danger" disabled="@(IsBusy || string.IsNullOrWhiteSpace(actionReason))" @onclick="DisposeAsync">@I18n.T("Dispose")</button>
+                                }
+                                <button type="button" class="px-btn sm" @onclick="() => actionAsset = null">@I18n.T("Cancel")</button>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+            <footer class="px-card-foot">
+                <span class="px-print-fmt">@view.Count @I18n.T("assets") · @I18n.T("Cost") @I18n.FormatCurrency(view.Sum(x => x.Cost)) · @I18n.T("Book value") @I18n.FormatCurrency(view.Where(x => x.Status == "Active").Sum(BookValue))</span>
+                <div class="px-foot-actions"><a class="px-btn" href="/accounts/cost-centers">🏥 @I18n.T("Cost Centers")</a></div>
+            </footer>
+        </section>
+
+        <!-- Editor -->
+        <section class="px-card">
+            <header class="px-card-head">
+                <div class="px-card-title"><h2>@(editor.ID == 0 ? I18n.T("Register Fixed Asset") : I18n.T("Edit Fixed Asset"))</h2>@if (editor.ID != 0) { <span class="px-badge new">@editor.AssetCode</span> }</div>
+                @if (editor.ID != 0) { <button type="button" class="px-btn" @onclick="ResetEditor">+ @I18n.T("New")</button> }
+            </header>
+            <div class="px-card-body">
+                @if (financialLocked)
+                {
+                    <div class="px-note-box review">🔒 @I18n.T("This asset is already in the accounts (purchase voucher or depreciation). Cost, dates and life can no longer change; tag, name, serial, location, supplier and warranty can.")</div>
+                }
+                <div class="px-form-grid two">
+                    <label class="px-field">
+                        <span>@I18n.T("Asset tag") <i>*</i></span>
+                        <input @bind="editor.AssetCode" maxlength="30" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Asset type (head)") <i>*</i></span>
+                        <select @bind="editor.AssetAccountID" disabled="@financialLocked">
+                            <option value="0">@I18n.T("Select...")</option>
+                            @foreach (var h in AssetHeads) { <option value="@h.ID">@h.Code · @h.Name</option> }
+                        </select>
+                    </label>
+                    <label class="px-field span-all">
+                        <span>@I18n.T("Name") <i>*</i></span>
+                        <input @bind="editor.Name" maxlength="150" placeholder="@I18n.T("e.g. Ultrasound machine, Cabin bed set, Ambulance")" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Department") <i>*</i></span>
+                        <select @bind="editor.CostCenterID" disabled="@(editor.ID != 0)">
+                            <option value="0">@I18n.T("Select...")</option>
+                            @foreach (var c in centers.Where(c => c.IsActive || c.ID == editor.CostCenterID)) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                        </select>
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Serial no.")</span>
+                        <input @bind="editor.SerialNo" maxlength="100" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Location")</span>
+                        <input @bind="editor.Location" maxlength="150" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Supplier")</span>
+                        <input @bind="editor.Supplier" maxlength="150" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Invoice no.")</span>
+                        <input @bind="editor.InvoiceNo" maxlength="50" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Warranty end")</span>
+                        <input type="date" value="@(editor.WarrantyEnd?.ToString("yyyy-MM-dd") ?? "")" @onchange="e => editor.WarrantyEnd = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : null" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Purchase date") <i>*</i></span>
+                        <input type="date" disabled="@financialLocked" value="@editor.PurchaseDate.ToString("yyyy-MM-dd")" @onchange="e => editor.PurchaseDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : editor.PurchaseDate" max="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("In service from") <i>*</i></span>
+                        <input type="date" disabled="@financialLocked" value="@editor.InServiceDate.ToString("yyyy-MM-dd")" @onchange="e => editor.InServiceDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : editor.InServiceDate" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Cost") <i>*</i></span>
+                        <input type="number" min="0" step="0.01" disabled="@financialLocked" @bind="editor.Cost" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Salvage value")</span>
+                        <input type="number" min="0" step="0.01" disabled="@financialLocked" @bind="editor.SalvageValue" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Useful life (years)") <i>*</i></span>
+                        <input type="number" min="1" max="100" disabled="@financialLocked" @bind="editor.UsefulLifeYears" />
+                    </label>
+                    <label class="px-field">
+                        <span>@I18n.T("Depreciation already charged")</span>
+                        <input type="number" min="0" step="0.01" disabled="@financialLocked" @bind="editor.OpeningAccumulatedDepreciation" />
+                    </label>
+                    @if (editor.ID == 0)
+                    {
+                        <div class="px-field span-all">
+                            <span>@I18n.T("How was it paid?")</span>
+                            <div class="px-reason-chips">
+                                @foreach (var f in Fundings)
+                                {
+                                    var code = f.Code;
+                                    <button type="button" class="@(fundingCode == code ? "on" : "")" @onclick="() => fundingCode = code">@I18n.T(f.Label)</button>
+                                }
+                            </div>
+                            <small class="muted">@FundingHint</small>
+                        </div>
+                    }
+                </div>
+                @if (editor.Cost > 0 && editor.UsefulLifeYears > 0)
+                {
+                    <div class="px-note-box">
+                        @I18n.T("Monthly depreciation"): <b>@I18n.FormatCurrency(MonthlyCharge(editor))</b>
+                        · @I18n.T("Yearly"): <b>@I18n.FormatCurrency(MonthlyCharge(editor) * 12)</b>
+                        · @I18n.T("Value left to depreciate"): <b>@I18n.FormatCurrency(Math.Max(0, editor.Cost - editor.SalvageValue - editor.OpeningAccumulatedDepreciation - charged.GetValueOrDefault(editor.ID)))</b>
+                    </div>
+                }
+            </div>
+            <footer class="px-card-foot">
+                <span class="px-print-fmt"></span>
+                <div class="px-foot-actions">
+                    <button type="button" class="px-btn" @onclick="ResetEditor">@I18n.T("Clear")</button>
+                    <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveAsync">@(IsBusy ? I18n.T("Saving…") : I18n.T("Save Asset"))</button>
+                </div>
+            </footer>
+        </section>
+    </div>
+</div>
+
+@code {
+    private sealed record Funding(string Code, string Label);
+    private static readonly Funding[] Fundings =
+    [
+        new(AccountCodes.StoreSupplierPayable, "Supplier due (pay later)"),
+        new(AccountCodes.Cash, "Paid in cash"),
+        new(AccountCodes.Bank, "Paid from bank"),
+        new(AccountCodes.Capital, "Owner capital / existing asset"),
+        new("", "Register only (no voucher)")
+    ];
+
+    private List<FixedAsset> assets = [];
+    private List<CostCenter> centers = [];
+    private Dictionary<int, decimal> charged = [];
+    private FixedAsset editor = NewAsset();
+    private string fundingCode = AccountCodes.StoreSupplierPayable, actionReason = "", disposeIn = AccountCodes.Cash, search = "", statusFilter = "Active";
+    private int ccFilter, transferTo;
+    private FixedAsset? actionAsset;
+    private bool actionIsTransfer;
+    private DateTime disposeDate = DateTime.Today;
+    private decimal disposeAmount;
+
+    /// <summary>Largest value a numeric(18,2) column can hold.</summary>
+    private const decimal MaxAmount = 9_999_999_999_999.99m;
+    private static readonly string[] AssetCodes = [AccountCodes.MedicalEquipment, AccountCodes.Furniture, AccountCodes.Building, AccountCodes.ComputerIt, AccountCodes.Vehicle, AccountCodes.Electrical];
+
+    private IEnumerable<AccountHead> AssetHeads => Heads.Where(h => AssetCodes.Contains(h.Code) && h.IsActive).OrderBy(h => h.Code);
+    private bool financialLocked => editor.ID != 0 && (editor.PurchaseVoucherID.HasValue || charged.GetValueOrDefault(editor.ID) > 0);
+
+    private string FundingHint => fundingCode switch
+    {
+        AccountCodes.Capital => I18n.T("For an asset the hospital already owned before using this software: its cost goes in as owner capital, and \"Depreciation already charged\" is booked too."),
+        "" => I18n.T("Only kept in the register; no accounts entry and no monthly depreciation."),
+        AccountCodes.StoreSupplierPayable => I18n.T("Recorded as owed to the supplier; pay it later from Expense & Payments → Pay Dues."),
+        _ => I18n.T("Money left the hospital now; the machine is an asset, not an expense. It becomes expense month by month through depreciation.")
+    };
+
+    private static FixedAsset NewAsset() => new() { PurchaseDate = DateTime.Today, InServiceDate = DateTime.Today, UsefulLifeYears = 10, Status = "Active" };
+
+    protected override async Task OnFinanceInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        assets = await db.FixedAssets.AsNoTracking().OrderBy(x => x.Status).ThenBy(x => x.AssetCode).ToListAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        charged = (await db.FixedAssetDepreciations.AsNoTracking().GroupBy(x => x.AssetID).Select(g => new { g.Key, Sum = g.Sum(x => x.Amount) }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Sum);
+        if (editor.ID == 0 && string.IsNullOrWhiteSpace(editor.AssetCode)) editor.AssetCode = NextTag();
+    }
+
+    private IEnumerable<FixedAsset> FilteredAssets()
+    {
+        var q = assets.AsEnumerable();
+        if (statusFilter != "All") q = q.Where(x => x.Status == statusFilter);
+        if (ccFilter > 0) q = q.Where(x => x.CostCenterID == ccFilter);
+        var tokens = SearchText.Tokenize(search);
+        if (tokens.Length > 0) q = q.Where(x => SearchText.MatchesAll(tokens, x.AssetCode, x.Name, x.SerialNo, x.Supplier, x.Location));
+        return q;
+    }
+
+    private string NextTag()
+    {
+        var max = assets.Select(x => x.AssetCode.StartsWith("FA-") && int.TryParse(x.AssetCode[3..], out var n) ? n : 0).DefaultIfEmpty(0).Max();
+        return $"FA-{max + 1:0000}";
+    }
+
+    private decimal BookValue(FixedAsset a) => a.Cost - a.OpeningAccumulatedDepreciation - charged.GetValueOrDefault(a.ID);
+
+    /// <summary>Straight-line monthly depreciation: (cost − salvage) ÷ (life × 12).</summary>
+    public static decimal MonthlyCharge(FixedAsset a) => a.UsefulLifeYears <= 0 ? 0 : Math.Round((a.Cost - a.SalvageValue) / (a.UsefulLifeYears * 12m), 2);
+
+    private string CenterName(int id) => centers.FirstOrDefault(x => x.ID == id) is { } c ? c.Name : "—";
+
+    private void ResetEditor() { editor = NewAsset(); editor.AssetCode = NextTag(); fundingCode = AccountCodes.StoreSupplierPayable; }
+
+    private void Select(FixedAsset a) => editor = new()
+    {
+        ID = a.ID, AssetCode = a.AssetCode, Name = a.Name, SerialNo = a.SerialNo, AssetAccountID = a.AssetAccountID, CostCenterID = a.CostCenterID,
+        Location = a.Location, Supplier = a.Supplier, InvoiceNo = a.InvoiceNo, PurchaseDate = a.PurchaseDate, InServiceDate = a.InServiceDate,
+        Cost = a.Cost, SalvageValue = a.SalvageValue, UsefulLifeYears = a.UsefulLifeYears, OpeningAccumulatedDepreciation = a.OpeningAccumulatedDepreciation,
+        Status = a.Status, WarrantyEnd = a.WarrantyEnd, PurchaseVoucherID = a.PurchaseVoucherID
+    };
+
+    private void OpenAction(FixedAsset a, bool transfer)
+    {
+        actionAsset = a; actionIsTransfer = transfer; actionReason = ""; transferTo = 0; disposeDate = DateTime.Today; disposeAmount = 0; disposeIn = AccountCodes.Cash;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!IsAdmin || IsBusy) return;
+        editor.AssetCode = (editor.AssetCode ?? "").Trim().ToUpperInvariant();
+        editor.Name = (editor.Name ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(editor.AssetCode) || string.IsNullOrWhiteSpace(editor.Name)) { Fail(I18n.T("Asset tag and name are required.")); return; }
+        if (editor.AssetAccountID <= 0 || editor.CostCenterID <= 0) { Fail(I18n.T("Select the asset type and the department.")); return; }
+        if (editor.Cost <= 0 || editor.UsefulLifeYears <= 0 || editor.UsefulLifeYears > 100) { Fail(I18n.T("Enter the cost and a useful life between 1 and 100 years.")); return; }
+        if (editor.SalvageValue < 0 || editor.SalvageValue >= editor.Cost) { Fail(I18n.T("Salvage value must be below the cost.")); return; }
+        if (editor.OpeningAccumulatedDepreciation < 0 || editor.OpeningAccumulatedDepreciation > editor.Cost - editor.SalvageValue) { Fail(I18n.T("Depreciation already charged cannot exceed cost − salvage.")); return; }
+        editor.SerialNo = editor.SerialNo?.Trim(); editor.Location = editor.Location?.Trim(); editor.Supplier = editor.Supplier?.Trim(); editor.InvoiceNo = editor.InvoiceNo?.Trim();
+        if (editor.AssetCode.Length > 30 || editor.Name.Length > 150 || (editor.SerialNo?.Length ?? 0) > 100 || (editor.Location?.Length ?? 0) > 150
+            || (editor.Supplier?.Length ?? 0) > 150 || (editor.InvoiceNo?.Length ?? 0) > 50)
+        { Fail(I18n.T("Too long: tag max 30, name 150, serial 100, location 150, supplier 150, invoice 50 characters.")); return; }
+        if (editor.Cost > MaxAmount || editor.SalvageValue > MaxAmount || editor.OpeningAccumulatedDepreciation > MaxAmount) { Fail(I18n.T("An amount cannot exceed 9,999,999,999,999.99.")); return; }
+        if (!financialLocked && (editor.PurchaseDate.Date > DateTime.Today || editor.PurchaseDate.Date < new DateTime(2000, 1, 1))) { Fail(I18n.T("The purchase date must be between 01 Jan 2000 and today.")); return; }
+        if (editor.WarrantyEnd.HasValue && editor.WarrantyEnd.Value.Date < editor.PurchaseDate.Date) { Fail(I18n.T("Warranty end cannot be before the purchase date.")); return; }
+        if (editor.InServiceDate.Date < editor.PurchaseDate.Date) { Fail(I18n.T("In-service date cannot be before the purchase date.")); return; }
+        if (editor.ID == 0 && editor.OpeningAccumulatedDepreciation > 0 && fundingCode is not (AccountCodes.Capital or ""))
+        { Fail(I18n.T("\"Depreciation already charged\" is only for an asset the hospital already owned (Owner capital / existing asset). For a new purchase leave it 0.")); return; }
+
+        IsBusy = true;
+        try
+        {
+            await using (var check = await DbFactory.CreateDbContextAsync())
+                if (await check.FixedAssets.AnyAsync(x => x.AssetCode == editor.AssetCode && x.ID != editor.ID)) { Fail(I18n.T("This asset tag already exists.")); return; }
+            var lockedNow = financialLocked;
+            var form = editor;
+            var funding = fundingCode;
+            var uid = CurrentUserId;
+            var headCode = HeadCode(form.AssetAccountID);
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                if (form.ID == 0)
+                {
+                    // The purchase voucher is dated on the purchase date: that day must still be open.
+                    if (!string.IsNullOrEmpty(funding))
+                        await FinancialControl.EnsurePostingAllowedAsync(db, form.PurchaseDate.Date, uid);
+                    var asset = new FixedAsset
+                    {
+                        AssetCode = form.AssetCode, Name = form.Name, SerialNo = form.SerialNo, AssetAccountID = form.AssetAccountID, CostCenterID = form.CostCenterID,
+                        Location = form.Location, Supplier = form.Supplier, InvoiceNo = form.InvoiceNo, PurchaseDate = form.PurchaseDate.Date,
+                        InServiceDate = form.InServiceDate.Date, Cost = form.Cost, SalvageValue = form.SalvageValue, UsefulLifeYears = form.UsefulLifeYears,
+                        OpeningAccumulatedDepreciation = form.OpeningAccumulatedDepreciation, Status = "Active", WarrantyEnd = form.WarrantyEnd,
+                        EnteredBy = uid, TransDate = DateTime.Now
+                    };
+                    db.FixedAssets.Add(asset);
+                    await db.SaveChangesAsync();
+                    if (!string.IsNullOrEmpty(funding))
+                    {
+                        var fundId = await AccountingSetup.IdAsync(db, funding);
+                        var lines = new List<AccountingPosting.PostingLine> { new(asset.AssetAccountID, asset.Cost, 0, asset.CostCenterID) };
+                        if (funding == AccountCodes.Capital && asset.OpeningAccumulatedDepreciation > 0)
+                        {
+                            // Existing asset: book its depreciation to date too; the net value goes to capital.
+                            lines.Add(new(await AccountingSetup.IdAsync(db, AccountingSetup.AccumulatedDepreciationCode(headCode)), 0, asset.OpeningAccumulatedDepreciation, asset.CostCenterID));
+                            lines.Add(new(fundId, 0, asset.Cost - asset.OpeningAccumulatedDepreciation));
+                        }
+                        else lines.Add(new(fundId, 0, asset.Cost));
+                        var voucher = AccountingPosting.AddPostedVoucher(db, funding == AccountCodes.Capital ? "Journal" : "Purchase", asset.PurchaseDate,
+                            $"Fixed asset {asset.AssetCode} {asset.Name}{(string.IsNullOrWhiteSpace(asset.Supplier) ? "" : " from " + asset.Supplier)}",
+                            $"FIXED-ASSET:{asset.ID}", uid, lines.ToArray());
+                        await db.SaveChangesAsync();
+                        asset.PurchaseVoucherID = voucher.ID;
+                        await db.SaveChangesAsync();
+                    }
+                }
+                else
+                {
+                    var x = await db.FixedAssets.FindAsync(form.ID);
+                    if (x is null) return false;
+                    x.AssetCode = form.AssetCode; x.Name = form.Name; x.SerialNo = form.SerialNo; x.Location = form.Location;
+                    x.Supplier = form.Supplier; x.InvoiceNo = form.InvoiceNo; x.WarrantyEnd = form.WarrantyEnd;
+                    if (!lockedNow)
+                    {
+                        x.AssetAccountID = form.AssetAccountID; x.PurchaseDate = form.PurchaseDate.Date; x.InServiceDate = form.InServiceDate.Date;
+                        x.Cost = form.Cost; x.SalvageValue = form.SalvageValue; x.UsefulLifeYears = form.UsefulLifeYears;
+                        x.OpeningAccumulatedDepreciation = form.OpeningAccumulatedDepreciation;
+                    }
+                    await db.SaveChangesAsync();
+                }
+                return true;
+            });
+            Success(I18n.T("Fixed asset saved."));
+            await LoadAsync();
+            ResetEditor();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task TransferAsync()
+    {
+        if (!IsAdmin || actionAsset is null || IsBusy) return;
+        if (transferTo <= 0) { Fail(I18n.T("Select the new department.")); return; }
+        if (actionReason.Trim().Length > 300) { Fail(I18n.T("Keep the reason within 300 characters.")); return; }
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var x = await db.FixedAssets.FindAsync(actionAsset.ID);
+            if (x is null || x.Status != "Active") throw new InvalidOperationException(I18n.T("Asset is no longer active."));
+            if (x.CostCenterID == transferTo) throw new InvalidOperationException(I18n.T("The asset is already in that department."));
+            db.FixedAssetTransfers.Add(new FixedAssetTransfer { AssetID = x.ID, FromCostCenterID = x.CostCenterID, ToCostCenterID = transferTo, TransferDate = DateTime.Today, Reason = actionReason.Trim(), EnteredBy = CurrentUserId });
+            x.CostCenterID = transferTo;
+            await db.SaveChangesAsync();
+            Success($"{x.AssetCode} {I18n.T("moved. Depreciation is charged to the new department from now on.")}");
+            actionAsset = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task DisposeAsync()
+    {
+        if (!IsAdmin || actionAsset is null || IsBusy) return;
+        if (disposeAmount < 0 || string.IsNullOrWhiteSpace(actionReason)) { Fail(I18n.T("Enter the sale amount (0 if scrapped) and a reason.")); return; }
+        if (actionReason.Trim().Length > 300) { Fail(I18n.T("Keep the reason within 300 characters.")); return; }
+        if (disposeAmount > MaxAmount) { Fail(I18n.T("The sale amount cannot exceed 9,999,999,999,999.99.")); return; }
+        if (disposeDate.Date > DateTime.Today) { Fail(I18n.T("The disposal date cannot be in the future.")); return; }
+        if (disposeDate.Date < actionAsset.PurchaseDate.Date) { Fail(I18n.T("The disposal date cannot be before the purchase date.")); return; }
+        IsBusy = true;
+        try
+        {
+            var assetId = actionAsset.ID;
+            var date = disposeDate.Date;
+            var amount = disposeAmount;
+            var moneyCode = disposeIn;
+            var reason = actionReason.Trim();
+            var uid = CurrentUserId;
+            var headCode = HeadCode(actionAsset.AssetAccountID);
+            var afterDepreciation = I18n.T("Depreciation is already posted for a later month. Choose a date in or after that month.");
+            var notActive = I18n.T("Asset is no longer active.");
+            var (code, gainLoss) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                // Claim the asset first: a second click waits on this row and then finds it no longer Active.
+                var claimed = await db.FixedAssets.Where(a => a.ID == assetId && a.Status == "Active").ExecuteUpdateAsync(u => u.SetProperty(a => a.Status, "Disposed"));
+                if (claimed == 0) throw new InvalidOperationException(notActive);
+                var x = await db.FixedAssets.SingleAsync(a => a.ID == assetId);
+                var lastMonth = await db.FixedAssetDepreciations.Where(d => d.AssetID == x.ID).MaxAsync(d => (DateTime?)d.PeriodMonth);
+                if (lastMonth.HasValue && date < lastMonth.Value) throw new InvalidOperationException(afterDepreciation);
+                if (x.PurchaseVoucherID is null)
+                {
+                    // Register-only asset: its cost was never posted, so the disposal is recorded without a voucher.
+                    x.DisposedDate = date; x.DisposalAmount = amount;
+                    await db.SaveChangesAsync();
+                    return (x.AssetCode, 0m);
+                }
+                var accumulated = x.OpeningAccumulatedDepreciation + (await db.FixedAssetDepreciations.Where(d => d.AssetID == x.ID).SumAsync(d => (decimal?)d.Amount) ?? 0);
+                var bookValue = x.Cost - accumulated;
+                var gl = amount - bookValue;
+                await FinancialControl.EnsurePostingAllowedAsync(db, date, uid);
+                var lines = new List<AccountingPosting.PostingLine>();
+                if (accumulated > 0) lines.Add(new(await AccountingSetup.IdAsync(db, AccountingSetup.AccumulatedDepreciationCode(headCode)), accumulated, 0, x.CostCenterID));
+                if (amount > 0) lines.Add(new(await AccountingSetup.IdAsync(db, moneyCode), amount, 0));
+                if (gl > 0) lines.Add(new(await AccountingSetup.IdAsync(db, AccountCodes.OtherIncome), 0, gl, x.CostCenterID));
+                if (gl < 0) lines.Add(new(await AccountingSetup.IdAsync(db, AccountCodes.Misc), -gl, 0, x.CostCenterID));
+                lines.Add(new(x.AssetAccountID, 0, x.Cost, x.CostCenterID));
+                var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", date, $"Disposal of {x.AssetCode} {x.Name}: {reason}", $"FIXED-ASSET-DISPOSAL:{x.ID}", uid, lines.ToArray());
+                await db.SaveChangesAsync();
+                x.DisposedDate = date; x.DisposalAmount = amount; x.DisposalVoucherID = voucher.ID;
+                await db.SaveChangesAsync();
+                return (x.AssetCode, gl);
+            });
+            Success($"{code} {I18n.T("disposed.")} {(gainLoss >= 0 ? I18n.T("Gain") : I18n.T("Loss"))}: {I18n.FormatCurrency(Math.Abs(gainLoss))}");
+            actionAsset = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+}

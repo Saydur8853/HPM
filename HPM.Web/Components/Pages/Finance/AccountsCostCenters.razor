@@ -1,0 +1,562 @@
+@page "/accounts/cost-centers"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Cost Centers") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root fin-page">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">🏢 @I18n.T("Cost Centers")</h1></div>
+        <div class="px-topbar-right">
+            <div class="px-metric"><span>@I18n.T("Departments")</span><b>@centers.Count(c => c.IsActive)</b></div>
+            <div class="px-metric"><span>@I18n.T("Income")</span><b class="ok">@I18n.FormatCurrency(rows.Sum(r => r.Income))</b></div>
+            <div class="px-metric"><span>@I18n.T("Expense")</span><b class="bad">@I18n.FormatCurrency(rows.Sum(r => r.Expense))</b></div>
+            <div class="px-metric"><span>@I18n.T("Not assigned")</span><b class="@(unassignedIncome != 0 || unassignedExpense != 0 ? "bad" : "")">@I18n.FormatCurrency(unassignedIncome + unassignedExpense)</b></div>
+            <button type="button" class="px-btn" @onclick='() => PrintAsync("cc-print", $"Department result {FromDate:dd MMM yyyy} - {ToDate:dd MMM yyyy}")'>🖨 @I18n.T("Print")</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="fin-toolbar">
+        <div class="px-seg">
+            @foreach (var p in new[] { ("today", "Today"), ("7days", "7 Days"), ("month", "This Month"), ("lastmonth", "Last Month"), ("year", "This Year") })
+            {
+                var key = p.Item1;
+                <button type="button" class="@(Preset == key ? "on" : "")" @onclick="() => ApplyPresetAsync(key)">@I18n.T(p.Item2)</button>
+            }
+        </div>
+        <input type="date" value="@FromDate.ToString("yyyy-MM-dd")" @onchange="SetFromAsync" />
+        <span class="muted">→</span>
+        <input type="date" value="@ToDate.ToString("yyyy-MM-dd")" @onchange="SetToAsync" />
+        <div class="px-seg fin-tabs">
+            @foreach (var t in new[] { ("result", "📊 Department Result"), ("setup", "🏢 Departments"), ("map", "🔗 Service → Department"), ("rules", "⚖️ Allocation Rules") })
+            {
+                var key = t.Item1;
+                <button type="button" class="@(tab == key ? "on" : "")" @onclick="() => tab = key">@I18n.T(t.Item2)</button>
+            }
+        </div>
+    </div>
+
+    <div class="fin-scroll">
+        @if (loading)
+        {
+            <div class="px-loading">@I18n.T("Loading…")</div>
+        }
+        else if (tab == "result")
+        {
+            <div id="cc-print">
+                <div class="fin-print-head"><h2>@Branding.HospitalName</h2><div>@I18n.T("Department Result") · @FromDate.ToString("dd MMM yyyy") – @ToDate.ToString("dd MMM yyyy")</div></div>
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>📊 @I18n.T("Department result")</h2></div><span class="muted">@I18n.T("Shared costs move to revenue departments when the month-end allocation is posted")</span></header>
+                    <div class="fin-table-wrap">
+                        <table class="fin-table">
+                            <thead><tr><th>@I18n.T("Department")</th><th class="r">@I18n.T("Income")</th><th class="r">@I18n.T("Direct Expense")</th><th class="r">@I18n.T("Allocated In / Out")</th><th class="r">@I18n.T("Net")</th></tr></thead>
+                            <tbody>
+                                @foreach (var g in rows.GroupBy(r => r.Type))
+                                {
+                                    <tr class="group"><td>@TypeIcon(g.Key) @I18n.T(TypeLabel(g.Key))</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Income))</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Expense))</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Allocated))</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Net))</td></tr>
+                                    @foreach (var r in g)
+                                    {
+                                        <tr>
+                                            <td class="indent">@r.Name <small class="muted">@r.Code</small></td>
+                                            <td class="r">@Money(r.Income)</td>
+                                            <td class="r">@Money(r.Expense)</td>
+                                            <td class="r @(r.Allocated > 0 ? "bad-text" : r.Allocated < 0 ? "ok-text" : "")">@(r.Allocated == 0 ? "—" : (r.Allocated > 0 ? "+" : "−") + I18n.FormatCurrency(Math.Abs(r.Allocated)))</td>
+                                            <td class="r strong @(r.Net >= 0 ? "ok-text" : "bad-text")">@I18n.FormatCurrency(r.Net)</td>
+                                        </tr>
+                                    }
+                                }
+                                @if (unassignedIncome != 0 || unassignedExpense != 0)
+                                {
+                                    <tr class="group"><td>⚠️ @I18n.T("Not assigned")</td><td class="r">@Money(unassignedIncome)</td><td class="r">@Money(unassignedExpense)</td><td class="r">—</td><td class="r">@I18n.FormatCurrency(unassignedIncome - unassignedExpense)</td></tr>
+                                }
+                                @if (rows.Count == 0 && unassignedIncome == 0 && unassignedExpense == 0) { <tr><td colspan="5" class="muted">@I18n.T("Nothing recorded in this period.")</td></tr> }
+                            </tbody>
+                            <tfoot>
+                                <tr class="grand">
+                                    <td>@I18n.T("Total")</td>
+                                    <td class="r">@I18n.FormatCurrency(rows.Sum(x => x.Income) + unassignedIncome)</td>
+                                    <td class="r">@I18n.FormatCurrency(rows.Sum(x => x.Expense) + unassignedExpense)</td>
+                                    <td class="r">@I18n.FormatCurrency(rows.Sum(x => x.Allocated))</td>
+                                    <td class="r">@I18n.FormatCurrency(rows.Sum(x => x.Net) + unassignedIncome - unassignedExpense)</td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                    <div class="fin-card-foot muted">@I18n.T("Allocated: + means shared cost received, − means cost spread out to other departments. Net = income − direct expense − allocated.")</div>
+                </section>
+            </div>
+        }
+        else if (tab == "setup")
+        {
+            <div class="fin-grid">
+                <section class="px-card fin-card">
+                    <header class="px-card-head">
+                        <div class="px-card-title"><h2>🏢 @I18n.T("Departments")</h2></div>
+                        <div class="px-seg">
+                            @foreach (var t in new[] { "ALL", "Revenue", "Service", "Admin" })
+                            {
+                                var key = t;
+                                <button type="button" class="@(typeFilter == key ? "on" : "")" @onclick="() => typeFilter = key">@I18n.T(key == "ALL" ? "All" : TypeLabel(key))</button>
+                            }
+                        </div>
+                    </header>
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("Code")</th><th>@I18n.T("Name")</th><th>@I18n.T("Type")</th><th class="r">@I18n.T("Area (sq ft)")</th><th>@I18n.T("Status")</th></tr></thead>
+                        <tbody>
+                            @foreach (var c in centers.Where(c => typeFilter == "ALL" || c.CenterType == typeFilter))
+                            {
+                                var row = c;
+                                <tr style="cursor:pointer" @onclick="() => Select(row)">
+                                    <td class="muted">@c.Code</td>
+                                    <td><b>@c.Name</b>@if (!string.IsNullOrWhiteSpace(c.Incharge)) { <small class="muted d-block">@c.Incharge</small> }</td>
+                                    <td>@TypeIcon(c.CenterType) @I18n.T(TypeLabel(c.CenterType))</td>
+                                    <td class="r">@(c.AreaSqFt?.ToString("N0") ?? "—")</td>
+                                    <td>
+                                        <span class="px-tag @(c.IsActive ? "green" : "red")">@I18n.T(c.IsActive ? "Active" : "Inactive")</span>
+                                        @if (c.IsSystem) { <span class="px-tag blue">@I18n.T("standard")</span> }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </section>
+
+                <section class="px-card fin-card">
+                    <header class="px-card-head"><div class="px-card-title"><h2>@(editor.ID == 0 ? I18n.T("New department") : I18n.T("Edit department"))</h2></div>
+                        @if (editor.ID != 0) { <button type="button" class="px-btn sm" @onclick="ResetEditor">+ @I18n.T("New")</button> }
+                    </header>
+                    <div class="px-card-body">
+                        <div class="px-form-grid two">
+                            <label class="px-field">
+                                <span>@I18n.T("Code") <i>*</i></span>
+                                <input @bind="editor.Code" maxlength="20" disabled="@editor.IsSystem" placeholder="CC-113" />
+                            </label>
+                            <label class="px-field">
+                                <span>@I18n.T("Type") <i>*</i></span>
+                                <select @bind="editor.CenterType" disabled="@editor.IsSystem">
+                                    <option value="Revenue">@I18n.T("Revenue (earns income)")</option>
+                                    <option value="Service">@I18n.T("Service (supports others)")</option>
+                                    <option value="Admin">@I18n.T("Admin (runs the hospital)")</option>
+                                </select>
+                            </label>
+                            <label class="px-field span-all">
+                                <span>@I18n.T("Name") <i>*</i></span>
+                                <input @bind="editor.Name" maxlength="100" />
+                            </label>
+                            <label class="px-field">
+                                <span>@I18n.T("In-charge") <em>@I18n.T("optional")</em></span>
+                                <input @bind="editor.Incharge" maxlength="100" />
+                            </label>
+                            <label class="px-field">
+                                <span>@I18n.T("Floor area (sq ft)") <em>@I18n.T("for area-based allocation")</em></span>
+                                <input type="number" min="0" step="1" @bind="editor.AreaSqFt" />
+                            </label>
+                            <div class="px-field span-all">
+                                <label class="px-toggle"><input type="checkbox" @bind="editor.IsActive" disabled="@editor.IsSystem" /> @I18n.T("Active")</label>
+                            </div>
+                        </div>
+                        @if (editor.IsSystem)
+                        {
+                            <small class="muted">@I18n.T("Standard department: automatic posting uses its code, so code and type are fixed and it always stays active.")</small>
+                        }
+                    </div>
+                    <footer class="px-card-foot">
+                        <span class="px-print-fmt"></span>
+                        <div class="px-foot-actions">
+                            <button type="button" class="px-btn primary lg" disabled="@IsBusy" @onclick="SaveCenterAsync">@(IsBusy ? I18n.T("Saving…") : I18n.T("Save"))</button>
+                        </div>
+                    </footer>
+                </section>
+            </div>
+        }
+        else if (tab == "map")
+        {
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>🔗 @I18n.T("Which department earns each service")</h2></div>
+                    <div class="px-seg">
+                        <button type="button" class="@(mapTab == "service" ? "on" : "")" @onclick='() => mapTab = "service"'>@I18n.T("Service categories")</button>
+                        <button type="button" class="@(mapTab == "bed" ? "on" : "")" @onclick='() => mapTab = "bed"'>@I18n.T("Bed categories")</button>
+                    </div>
+                </header>
+                <div class="px-card-body">
+                    <div class="px-note-box">@I18n.T("Leave blank to use the default: diagnostic tests go to Pathology, Imaging or Cardiology by test type, beds go to IPD Ward & Cabin.")</div>
+                    <div class="px-search-box sm">
+                        <span class="px-search-icon">🔍</span>
+                        <input type="text" placeholder="@I18n.T("Search category...")" @bind="mapSearch" @bind:event="oninput" />
+                    </div>
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("Category")</th><th style="width:320px">@I18n.T("Department")</th></tr></thead>
+                        <tbody>
+                            @{ var tokens = SearchText.Tokenize(mapSearch); }
+                            @if (mapTab == "service")
+                            {
+                                @foreach (var c in serviceCategories.Where(c => SearchText.MatchesAll(tokens, c.Name)))
+                                {
+                                    var cat = c;
+                                    <tr>
+                                        <td>@c.Name @if (!string.IsNullOrWhiteSpace(c.DiagnosticType)) { <small class="muted">@c.DiagnosticType</small> }</td>
+                                        <td>@CenterSelect(cat.CostCenterID, v => SetServiceCategoryAsync(cat, v))</td>
+                                    </tr>
+                                }
+                            }
+                            else
+                            {
+                                @foreach (var b in bedCategories.Where(b => SearchText.MatchesAll(tokens, b.Name)))
+                                {
+                                    var bed = b;
+                                    <tr>
+                                        <td>@b.Name</td>
+                                        <td>@CenterSelect(bed.CostCenterID, v => SetBedCategoryAsync(bed, v))</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+        else
+        {
+            <section class="px-card fin-card">
+                <header class="px-card-head"><div class="px-card-title"><h2>⚖️ @I18n.T("Month-end cost allocation rules")</h2></div><a class="px-btn sm" href="/accounts/month-end">🗓️ @I18n.T("Month-End Close")</a></header>
+                <div class="px-card-body">
+                    <div class="px-note-box">@I18n.T("Service and admin departments earn nothing themselves. At month end their expenses are spread over the revenue departments using the basis below. The posting happens on the Month-End Close page.")</div>
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("Department (cost source)")</th><th style="width:200px">@I18n.T("Spread by")</th><th>@I18n.T("Details")</th></tr></thead>
+                        <tbody>
+                            @foreach (var src in centers.Where(c => c.IsActive && c.CenterType != "Revenue"))
+                            {
+                                var source = src;
+                                var basis = BasisOf(source.ID);
+                                var fixedRules = rules.Where(r => r.SourceCostCenterID == source.ID && r.Basis == "Fixed" && r.IsActive && r.TargetCostCenterID != null).ToList();
+                                <tr>
+                                    <td><b>@source.Name</b> <small class="muted">@source.Code</small></td>
+                                    <td>
+                                        <select value="@basis" @onchange='e => SetBasisAsync(source.ID, e.Value?.ToString() ?? "None")' disabled="@IsBusy">
+                                            <option value="None">@I18n.T("Not spread")</option>
+                                            <option value="Revenue">@I18n.T("Income share")</option>
+                                            <option value="Area">@I18n.T("Floor area")</option>
+                                            <option value="BillCount">@I18n.T("Number of bills")</option>
+                                            <option value="Fixed">@I18n.T("Fixed percentages")</option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        @if (basis == "Fixed")
+                                        {
+                                            @foreach (var r in fixedRules)
+                                            {
+                                                var rule = r;
+                                                <span class="px-tag blue">@CenterName(r.TargetCostCenterID) · @(r.Weight?.ToString("0.##"))% <button type="button" class="px-x" title="@I18n.T("Remove")" @onclick="() => RemoveRuleAsync(rule)">✕</button></span>
+                                            }
+                                            <span class="@(fixedRules.Sum(x => x.Weight ?? 0) == 100 ? "ok-text" : "warn-text")"> @I18n.T("Total") @fixedRules.Sum(x => x.Weight ?? 0).ToString("0.##")%</span>
+                                            @if (addFor == source.ID)
+                                            {
+                                                <div class="px-filter-row">
+                                                    <select @bind="fixedTarget">
+                                                        <option value="0">@I18n.T("Receiving department...")</option>
+                                                        @foreach (var t in centers.Where(c => c.IsActive && c.CenterType == "Revenue")) { <option value="@t.ID">@t.Code · @t.Name</option> }
+                                                    </select>
+                                                    <input type="number" min="0" max="100" step="0.01" class="px-qty-input" @bind="fixedWeight" />
+                                                    <span>%</span>
+                                                    <button type="button" class="px-btn sm primary" disabled="@IsBusy" @onclick="() => AddFixedTargetAsync(source.ID)">@I18n.T("Add")</button>
+                                                    <button type="button" class="px-btn sm" @onclick="() => addFor = 0">@I18n.T("Close")</button>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="px-btn sm" @onclick="() => { addFor = source.ID; fixedTarget = 0; fixedWeight = 0; }">+ @I18n.T("Receiving department")</button>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <small class="muted">@BasisHint(basis)</small>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+    </div>
+</div>
+
+@code {
+    private sealed record ResultRow(int ID, string Code, string Name, string Type, decimal Income, decimal Expense, decimal Allocated)
+    {
+        public decimal Net => Income - Expense - Allocated;
+    }
+
+    private string tab = "result", typeFilter = "ALL", mapTab = "service", mapSearch = "";
+    private bool loading = true;
+    private List<CostCenter> centers = [];
+    private List<ServiceCategory> serviceCategories = [];
+    private List<BedCategory> bedCategories = [];
+    private List<AllocationRule> rules = [];
+    private List<ResultRow> rows = [];
+    private decimal unassignedIncome, unassignedExpense;
+    private CostCenter editor = new() { CenterType = "Revenue", IsActive = true };
+    private int addFor, fixedTarget;
+    private decimal fixedWeight;
+
+    protected override async Task OnFinanceInitializedAsync() => await LoadAsync();
+    protected override Task OnRangeChangedAsync() => LoadResultAsync();
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+            serviceCategories = await db.ServiceCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+            bedCategories = await db.BedCategories.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+            rules = await db.AllocationRules.AsNoTracking().ToListAsync();
+            await LoadResultCoreAsync(db);
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { loading = false; }
+    }
+
+    private async Task LoadResultAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await LoadResultCoreAsync(db);
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+    }
+
+    private async Task LoadResultCoreAsync(HpmDbContext db)
+    {
+        var fromDay = FromDate.Date;
+        var end = ToDate.Date.AddDays(1);
+        var lines = await (from l in db.AccountVoucherLines.AsNoTracking()
+                           join v in db.AccountVouchers.AsNoTracking() on l.VoucherID equals v.ID
+                           join o in db.AccountVouchers.AsNoTracking() on v.ReversalOfVoucherID equals (long?)o.ID into oj
+                           from o in oj.DefaultIfEmpty()
+                           join a in db.AccountHeads.AsNoTracking() on l.AccountID equals a.ID
+                           where v.IsPosted && v.Status != "Pending" && v.Status != "Rejected"
+                                 && v.VoucherDate >= fromDay && v.VoucherDate < end
+                                 && (a.AccountType == "Income" || a.AccountType == "Expense")
+                           select new
+                           {
+                               l.CostCenterID, a.AccountType, l.Debit, l.Credit,
+                               Reference = o != null ? o.Reference : v.Reference
+                           }).ToListAsync();
+
+        bool IsAllocation(string? r) => r != null && r.StartsWith("ALLOCATION:", StringComparison.Ordinal);
+        unassignedIncome = lines.Where(x => x.CostCenterID == null && x.AccountType == "Income").Sum(x => x.Credit - x.Debit);
+        unassignedExpense = lines.Where(x => x.CostCenterID == null && x.AccountType == "Expense").Sum(x => x.Debit - x.Credit);
+        var byCenter = lines.Where(x => x.CostCenterID != null).GroupBy(x => x.CostCenterID!.Value).ToDictionary(g => g.Key, g => g.ToList());
+
+        var order = new[] { "Revenue", "Service", "Admin" };
+        rows = centers
+            .Select(c =>
+            {
+                var cl = byCenter.GetValueOrDefault(c.ID) ?? [];
+                return new ResultRow(c.ID, c.Code, c.Name, c.CenterType,
+                    cl.Where(x => x.AccountType == "Income").Sum(x => x.Credit - x.Debit),
+                    cl.Where(x => x.AccountType == "Expense" && !IsAllocation(x.Reference)).Sum(x => x.Debit - x.Credit),
+                    cl.Where(x => x.AccountType == "Expense" && IsAllocation(x.Reference)).Sum(x => x.Debit - x.Credit));
+            })
+            .Where(r => r.Income != 0 || r.Expense != 0 || r.Allocated != 0 || centers.First(c => c.ID == r.ID).IsActive)
+            .OrderBy(r => Array.IndexOf(order, r.Type) is var i && i < 0 ? 9 : i).ThenBy(r => r.Code)
+            .ToList();
+    }
+
+    // ---------------- departments ----------------
+    private void Select(CostCenter c) => editor = new()
+    {
+        ID = c.ID, Code = c.Code, Name = c.Name, CenterType = c.CenterType, Incharge = c.Incharge,
+        AreaSqFt = c.AreaSqFt, IsActive = c.IsActive, IsSystem = c.IsSystem
+    };
+
+    private void ResetEditor() => editor = new() { CenterType = "Revenue", IsActive = true };
+
+    private async Task SaveCenterAsync()
+    {
+        if (IsBusy) return;
+        editor.Code = (editor.Code ?? "").Trim().ToUpperInvariant();
+        editor.Name = (editor.Name ?? "").Trim();
+        editor.Incharge = string.IsNullOrWhiteSpace(editor.Incharge) ? null : editor.Incharge.Trim();
+        if (editor.Code.Length == 0 || editor.Name.Length == 0) { Fail(I18n.T("Code and name are required.")); return; }
+        if (editor.Code.Length > 20 || editor.Name.Length > 100 || (editor.Incharge?.Length ?? 0) > 100) { Fail(I18n.T("Keep the code within 20 and the name and in-charge within 100 characters.")); return; }
+        if (editor.AreaSqFt is < 0 or > 10_000_000) { Fail(I18n.T("Area must be between 0 and 10,000,000 sq ft.")); return; }
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.CostCenters.AnyAsync(x => x.Code == editor.Code && x.ID != editor.ID)) { Fail(I18n.T("This code already exists.")); return; }
+            if (editor.ID == 0)
+            {
+                db.CostCenters.Add(new CostCenter { Code = editor.Code, Name = editor.Name, CenterType = editor.CenterType, Incharge = editor.Incharge, AreaSqFt = editor.AreaSqFt, IsActive = editor.IsActive });
+            }
+            else
+            {
+                var x = await db.CostCenters.FindAsync(editor.ID);
+                if (x is null) return;
+                if (!x.IsSystem) { x.Code = editor.Code; x.CenterType = editor.CenterType; }
+                x.Name = editor.Name; x.Incharge = editor.Incharge; x.AreaSqFt = editor.AreaSqFt;
+                x.IsActive = x.IsSystem || editor.IsActive; // a standard department always stays active
+            }
+            await db.SaveChangesAsync();
+            AccountingSetup.InvalidateCenters();
+            Success(I18n.T("Department saved."));
+            ResetEditor();
+            centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+            await LoadResultCoreAsync(db);
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    // ---------------- service / bed → department ----------------
+    private RenderFragment CenterSelect(int? current, Func<string?, Task> onChange) => __builder =>
+    {
+        <select value="@(current?.ToString() ?? "")" @onchange="e => onChange(e.Value?.ToString())" disabled="@IsBusy">
+            <option value="">@I18n.T("Default")</option>
+            @foreach (var g in centers.Where(c => c.IsActive).GroupBy(c => c.CenterType))
+            {
+                <optgroup label="@I18n.T(TypeLabel(g.Key))">
+                    @foreach (var c in g) { <option value="@c.ID">@c.Code · @c.Name</option> }
+                </optgroup>
+            }
+        </select>
+    };
+
+    private async Task SetServiceCategoryAsync(ServiceCategory c, string? value)
+    {
+        await RunAsync(async db =>
+        {
+            var x = await db.ServiceCategories.FindAsync(c.ID);
+            if (x is null) return;
+            x.CostCenterID = int.TryParse(value, out var id) && id > 0 ? id : null;
+            await db.SaveChangesAsync();
+            c.CostCenterID = x.CostCenterID;
+            Success($"{c.Name}: {I18n.T("department updated.")}");
+        });
+    }
+
+    private async Task SetBedCategoryAsync(BedCategory b, string? value)
+    {
+        await RunAsync(async db =>
+        {
+            var x = await db.BedCategories.FindAsync(b.ID);
+            if (x is null) return;
+            x.CostCenterID = int.TryParse(value, out var id) && id > 0 ? id : null;
+            await db.SaveChangesAsync();
+            b.CostCenterID = x.CostCenterID;
+            Success($"{b.Name}: {I18n.T("department updated.")}");
+        });
+    }
+
+    // ---------------- allocation rules ----------------
+    private string BasisOf(int sourceId)
+    {
+        var active = rules.Where(r => r.SourceCostCenterID == sourceId && r.IsActive).ToList();
+        return active.Count == 0 ? "None" : active.Any(r => r.Basis == "Fixed") ? "Fixed" : active[0].Basis;
+    }
+
+    private async Task SetBasisAsync(int sourceId, string basis)
+    {
+        await RunAsync(async db =>
+        {
+            var existing = await db.AllocationRules.Where(x => x.SourceCostCenterID == sourceId).ToListAsync();
+            if (basis == "Fixed" && existing.Any(x => x.Basis == "Fixed"))
+            {
+                foreach (var r in existing) r.IsActive = r.Basis == "Fixed";
+            }
+            else
+            {
+                db.AllocationRules.RemoveRange(existing);
+                if (basis != "None")
+                    db.AllocationRules.Add(new AllocationRule { SourceCostCenterID = sourceId, Basis = basis, IsActive = true });
+            }
+            await db.SaveChangesAsync();
+            rules = await db.AllocationRules.AsNoTracking().ToListAsync();
+            if (basis == "Fixed") { addFor = sourceId; fixedTarget = 0; fixedWeight = 0; }
+            Success(I18n.T("Allocation rule saved."));
+        });
+    }
+
+    private async Task AddFixedTargetAsync(int sourceId)
+    {
+        if (fixedTarget <= 0 || fixedWeight <= 0) { Fail(I18n.T("Choose a receiving department and a percentage above zero.")); return; }
+        if (fixedWeight > 100) { Fail(I18n.T("A percentage cannot exceed 100.")); return; }
+        await RunAsync(async db =>
+        {
+            var otherTotal = await db.AllocationRules
+                .Where(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.IsActive && x.TargetCostCenterID != null && x.TargetCostCenterID != fixedTarget)
+                .SumAsync(x => x.Weight ?? 0);
+            if (otherTotal + fixedWeight > 100)
+            {
+                Fail($"{I18n.T("The percentages of one department cannot exceed 100%. Left:")} {100 - otherTotal:0.##}%");
+                return;
+            }
+            // placeholder rows (Fixed chosen but no target yet) are replaced by real targets
+            db.AllocationRules.RemoveRange(await db.AllocationRules.Where(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.TargetCostCenterID == null).ToListAsync());
+            var same = await db.AllocationRules.FirstOrDefaultAsync(x => x.SourceCostCenterID == sourceId && x.Basis == "Fixed" && x.TargetCostCenterID == fixedTarget);
+            if (same is null) db.AllocationRules.Add(new AllocationRule { SourceCostCenterID = sourceId, Basis = "Fixed", TargetCostCenterID = fixedTarget, Weight = fixedWeight, IsActive = true });
+            else { same.Weight = fixedWeight; same.IsActive = true; }
+            await db.SaveChangesAsync();
+            rules = await db.AllocationRules.AsNoTracking().ToListAsync();
+            fixedTarget = 0; fixedWeight = 0;
+            Success(I18n.T("Receiving department added."));
+        });
+    }
+
+    private async Task RemoveRuleAsync(AllocationRule r)
+    {
+        await RunAsync(async db =>
+        {
+            var x = await db.AllocationRules.FindAsync(r.ID);
+            if (x is null) return;
+            var sourceId = x.SourceCostCenterID;
+            db.AllocationRules.Remove(x);
+            await db.SaveChangesAsync();
+            // keep "Fixed" selected for the source even with no targets left
+            if (!await db.AllocationRules.AnyAsync(y => y.SourceCostCenterID == sourceId))
+            {
+                db.AllocationRules.Add(new AllocationRule { SourceCostCenterID = sourceId, Basis = "Fixed", IsActive = true });
+                await db.SaveChangesAsync();
+            }
+            rules = await db.AllocationRules.AsNoTracking().ToListAsync();
+            Success(I18n.T("Receiving department removed."));
+        });
+    }
+
+    /// <summary>One action at a time; a database error becomes a message.</summary>
+    private async Task RunAsync(Func<HpmDbContext, Task> work)
+    {
+        if (IsBusy) return;
+        IsBusy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            await work(db);
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private string CenterName(int? id) => centers.FirstOrDefault(x => x.ID == id) is { } c ? c.Name : "—";
+    private string Money(decimal v) => v == 0 ? "—" : I18n.FormatCurrency(v);
+    private static string TypeLabel(string t) => t switch { "Revenue" => "Revenue departments", "Service" => "Service departments", "Admin" => "Admin departments", _ => t };
+    private static string TypeIcon(string t) => t switch { "Revenue" => "💰", "Service" => "🛠️", _ => "🏛️" };
+    private string BasisHint(string basis) => basis switch
+    {
+        "Revenue" => I18n.T("Spread over revenue departments by their income this month."),
+        "Area" => I18n.T("Spread by the floor area set on each revenue department."),
+        "BillCount" => I18n.T("Spread by how many bills each revenue department made this month."),
+        _ => I18n.T("Stays in this department; not spread.")
+    };
+}

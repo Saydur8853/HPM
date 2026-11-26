@@ -40,6 +40,8 @@ public sealed class AccountVoucherLine
     public int AccountID { get; set; }
     public decimal Debit { get; set; }
     public decimal Credit { get; set; }
+    /// <summary>Department (cost center) the amount belongs to; set for income and expense lines.</summary>
+    public int? CostCenterID { get; set; }
     public AccountVoucher? Voucher { get; set; }
 }
 
@@ -91,4 +93,87 @@ public sealed class FinancialReversal
     public long? ReversalVoucherID { get; set; }
     public int ReversedBy { get; set; }
     public DateTime ReversedAt { get; set; }
+}
+
+/// <summary>A hospital department that earns income (Revenue), serves others (Service) or runs the hospital (Admin).</summary>
+public sealed class CostCenter
+{
+    public int ID { get; set; }
+    [Required, StringLength(20)] public string Code { get; set; } = string.Empty;
+    [Required, StringLength(100)] public string Name { get; set; } = string.Empty;
+    [Required, StringLength(20)] public string CenterType { get; set; } = "Revenue";
+    [StringLength(100)] public string? Incharge { get; set; }
+    public decimal? AreaSqFt { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsSystem { get; set; }
+}
+
+public sealed class FixedAsset
+{
+    public int ID { get; set; }
+    [Required, StringLength(30)] public string AssetCode { get; set; } = string.Empty;
+    [Required, StringLength(150)] public string Name { get; set; } = string.Empty;
+    [StringLength(100)] public string? SerialNo { get; set; }
+    public int AssetAccountID { get; set; }
+    public int CostCenterID { get; set; }
+    [StringLength(150)] public string? Location { get; set; }
+    [StringLength(150)] public string? Supplier { get; set; }
+    [StringLength(50)] public string? InvoiceNo { get; set; }
+    public DateTime PurchaseDate { get; set; }
+    public DateTime InServiceDate { get; set; }
+    public decimal Cost { get; set; }
+    public decimal SalvageValue { get; set; }
+    public int UsefulLifeYears { get; set; } = 10;
+    public decimal OpeningAccumulatedDepreciation { get; set; }
+    [Required, StringLength(20)] public string Status { get; set; } = "Active";
+    public DateTime? WarrantyEnd { get; set; }
+    public DateTime? DisposedDate { get; set; }
+    public decimal? DisposalAmount { get; set; }
+    public long? PurchaseVoucherID { get; set; }
+    public long? DisposalVoucherID { get; set; }
+    public int EnteredBy { get; set; }
+    public DateTime TransDate { get; set; }
+}
+
+public sealed class FixedAssetTransfer
+{
+    public int ID { get; set; }
+    public int AssetID { get; set; }
+    public int FromCostCenterID { get; set; }
+    public int ToCostCenterID { get; set; }
+    public DateTime TransferDate { get; set; }
+    [StringLength(300)] public string? Reason { get; set; }
+    public int EnteredBy { get; set; }
+}
+
+public sealed class FixedAssetDepreciation
+{
+    public long ID { get; set; }
+    public int AssetID { get; set; }
+    public DateTime PeriodMonth { get; set; }
+    public decimal Amount { get; set; }
+    public int CostCenterID { get; set; }
+    public long VoucherID { get; set; }
+}
+
+/// <summary>How the month-end close spreads one service/admin cost center's expenses over the revenue cost centers.</summary>
+public sealed class AllocationRule
+{
+    public int ID { get; set; }
+    public int SourceCostCenterID { get; set; }
+    /// <summary>Revenue, Area, BillCount or Fixed.</summary>
+    [Required, StringLength(20)] public string Basis { get; set; } = "Revenue";
+    /// <summary>Only for Basis = Fixed: the receiving cost center and its percentage.</summary>
+    public int? TargetCostCenterID { get; set; }
+    public decimal? Weight { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public sealed class AllocationRun
+{
+    public int ID { get; set; }
+    public DateTime PeriodMonth { get; set; }
+    public long VoucherID { get; set; }
+    public int RunBy { get; set; }
+    public DateTime RunAt { get; set; }
 }

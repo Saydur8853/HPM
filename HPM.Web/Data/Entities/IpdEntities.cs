@@ -58,6 +58,8 @@ public sealed class BedCategory
     public decimal? AdmissionFee { get; set; }
     public decimal? ServiceCharge { get; set; }
     public decimal? Food { get; set; }
+    /// <summary>Accounts: department (Ward / ICU / Cabin) whose income this bed category is.</summary>
+    public int? CostCenterID { get; set; }
 }
 
 public sealed class BedCabin

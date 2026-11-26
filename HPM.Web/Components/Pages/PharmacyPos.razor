@@ -1798,6 +1798,7 @@
                     throw new BillNumberCollisionException(memo.ID);
 
                 var sl = 1;
+                decimal memoCost = 0;
                 foreach (var line in curLines)
                 {
                     var med = await db.Services.FindAsync(line.ServiceID);
@@ -1823,6 +1824,7 @@
                     }
                     if (remaining > 0) throw new InvalidOperationException($"Insufficient stock for {med?.Name}.");
                     soldItem.BuyRate = line.Quantity <= 0 ? 0 : Math.Round(totalCost / line.Quantity, 2);
+                    memoCost += totalCost;
 
                     line.BatchNo = string.Join(", ", soldItem.BatchAllocations.Select(b => b.BatchNo).Where(b => !string.IsNullOrEmpty(b)));
                     line.ExpireDate = soldItem.BatchAllocations.OrderBy(b => b.ExpireDate).FirstOrDefault()?.ExpireDate;
@@ -1868,7 +1870,9 @@
                         uid,
                         (curIsIpdCredit ? AccountingPosting.PatientReceivable
                             : curIsNonCash ? await AccountingSetup.PaymentAccountIdAsync(db, curPaymentMethod) : AccountingPosting.Cash, curNet, 0),
-                        (AccountingPosting.PharmacySales, 0, curNet));
+                        (AccountingPosting.PharmacySales, 0, curNet),
+                        (await AccountingSetup.IdAsync(db, AccountCodes.CostOfMedicineSold), Math.Round(memoCost, 2), 0),
+                        (await AccountingSetup.IdAsync(db, AccountCodes.MedicineInventory), 0, Math.Round(memoCost, 2)));
                 }
 
                 await db.SaveChangesAsync();

@@ -14,8 +14,20 @@ public static class AccountCodes
     public const string Mfs = "1020";
     public const string PatientReceivable = "1100";
     public const string CanteenReceivable = "1110";
+    public const string MedicineInventory = "1200";
     public const string MedicalEquipment = "1500";
     public const string Furniture = "1510";
+    public const string Building = "1520";
+    public const string ComputerIt = "1530";
+    public const string Vehicle = "1540";
+    public const string Electrical = "1550";
+    // Accumulated depreciation (contra assets): 15x0 -> 16x0
+    public const string AccDepMedicalEquipment = "1600";
+    public const string AccDepFurniture = "1610";
+    public const string AccDepBuilding = "1620";
+    public const string AccDepComputerIt = "1630";
+    public const string AccDepVehicle = "1640";
+    public const string AccDepElectrical = "1650";
     // Liabilities
     public const string SupplierPayable = "2000";
     public const string StoreSupplierPayable = "2010";
@@ -25,6 +37,7 @@ public static class AccountCodes
     public const string SalaryPayable = "2300";
     // Equity
     public const string Capital = "3000";
+    public const string RetainedEarnings = "3200";
     // Income
     public const string HospitalRevenue = "4000";
     public const string PharmacySales = "4010";
@@ -39,6 +52,7 @@ public static class AccountCodes
     public const string OtherIncome = "4900";
     // Expenses
     public const string MedicinePurchase = "5000";
+    public const string CostOfMedicineSold = "5005";
     public const string LabSupplies = "5010";
     public const string CanteenPurchase = "5020";
     public const string StorePurchase = "5030";
@@ -73,8 +87,19 @@ public static class AccountingSetup
         new(AccountCodes.Mfs, "Mobile Banking (MFS)", "Asset", "Cash & Bank"),
         new(AccountCodes.PatientReceivable, "Patient Receivable", "Asset", "Receivables"),
         new(AccountCodes.CanteenReceivable, "Canteen Staff Receivable", "Asset", "Receivables"),
+        new(AccountCodes.MedicineInventory, "Medicine Inventory", "Asset", "Inventory"),
         new(AccountCodes.MedicalEquipment, "Medical Equipment & Machines", "Asset", "Fixed Assets"),
         new(AccountCodes.Furniture, "Furniture & Fixtures", "Asset", "Fixed Assets"),
+        new(AccountCodes.Building, "Land & Building", "Asset", "Fixed Assets"),
+        new(AccountCodes.ComputerIt, "Computer & IT Equipment", "Asset", "Fixed Assets"),
+        new(AccountCodes.Vehicle, "Vehicle & Ambulance", "Asset", "Fixed Assets"),
+        new(AccountCodes.Electrical, "Electrical & Generator", "Asset", "Fixed Assets"),
+        new(AccountCodes.AccDepMedicalEquipment, "Acc. Depreciation - Medical Equipment", "Asset", "Accumulated Depreciation"),
+        new(AccountCodes.AccDepFurniture, "Acc. Depreciation - Furniture", "Asset", "Accumulated Depreciation"),
+        new(AccountCodes.AccDepBuilding, "Acc. Depreciation - Building", "Asset", "Accumulated Depreciation"),
+        new(AccountCodes.AccDepComputerIt, "Acc. Depreciation - Computer & IT", "Asset", "Accumulated Depreciation"),
+        new(AccountCodes.AccDepVehicle, "Acc. Depreciation - Vehicle", "Asset", "Accumulated Depreciation"),
+        new(AccountCodes.AccDepElectrical, "Acc. Depreciation - Electrical", "Asset", "Accumulated Depreciation"),
         new(AccountCodes.SupplierPayable, "Supplier Payable", "Liability", "Payables"),
         new(AccountCodes.StoreSupplierPayable, "Store Supplier Payable", "Liability", "Payables"),
         new(AccountCodes.CanteenSupplierPayable, "Canteen Supplier Payable", "Liability", "Payables"),
@@ -82,6 +107,7 @@ public static class AccountingSetup
         new(AccountCodes.DoctorPayable, "Doctor Fee & Commission Payable", "Liability", "Payables"),
         new(AccountCodes.SalaryPayable, "Salary Payable", "Liability", "Payables"),
         new(AccountCodes.Capital, "Owner's Capital", "Equity", "Equity"),
+        new(AccountCodes.RetainedEarnings, "Retained Earnings", "Equity", "Equity"),
         new(AccountCodes.HospitalRevenue, "Hospital Service Revenue", "Income", "Other Services"),
         new(AccountCodes.PharmacySales, "Pharmacy Sales", "Income", "Pharmacy"),
         new(AccountCodes.OpdIncome, "OPD Consultation Income", "Income", "OPD"),
@@ -94,6 +120,7 @@ public static class AccountingSetup
         new(AccountCodes.CanteenSales, "Canteen Sales", "Income", "Canteen"),
         new(AccountCodes.OtherIncome, "Other Income", "Income", "Other Services"),
         new(AccountCodes.MedicinePurchase, "Medicine Purchase", "Expense", "Pharmacy"),
+        new(AccountCodes.CostOfMedicineSold, "Cost of Medicine Sold", "Expense", "Pharmacy"),
         new(AccountCodes.LabSupplies, "Lab Reagents & Diagnostic Supplies", "Expense", "Diagnostics & Lab"),
         new(AccountCodes.CanteenPurchase, "Canteen Food & Raw Materials", "Expense", "Canteen"),
         new(AccountCodes.StorePurchase, "Medical & General Consumables", "Expense", "Operations"),
@@ -137,6 +164,8 @@ public static class AccountingSetup
                 ALTER TABLE [Blood_Issue] ADD [PaymentRef] nvarchar(60) NULL;
             """;
         await db.Database.ExecuteSqlRawAsync(schemaSql);
+        await db.Database.ExecuteSqlRawAsync(CostCenterSchemaSql);
+        await db.Database.ExecuteSqlRawAsync(CostCenterSeedSql);
 
         var existing = (await db.AccountHeads.AsNoTracking().Select(x => x.Code).ToListAsync()).ToHashSet();
         foreach (var seed in Chart().Where(x => !existing.Contains(x.Code)))
@@ -175,7 +204,264 @@ public static class AccountingSetup
             """;
         await db.Database.ExecuteSqlRawAsync(reclassSql);
         IdCache.Clear();
+        InvalidateCenters();
+
+        // One-time: give every old income/expense line its department, from the head it was posted to.
+        await LoadCenterMapAsync(db);
+        var map = centerByHead!;
+        foreach (var g in map.Where(x => x.Value.HasValue).GroupBy(x => x.Value!.Value))
+        {
+            var headIds = string.Join(",", g.Select(x => x.Key));
+            await db.Database.ExecuteSqlRawAsync(
+                $"UPDATE [Accounts_Voucher_Line] SET [Cost_Center_ID] = {g.Key} WHERE [Cost_Center_ID] IS NULL AND [Account_ID] IN ({headIds})");
+        }
     }
+
+    // ---------------------------------------------------------------- cost centers (departments)
+    // Ideas and table layout taken from the cost-center accounting branch; account codes follow this chart.
+    private const string CostCenterSchemaSql = """
+        IF COL_LENGTH(N'Accounts_Voucher_Line', N'Cost_Center_ID') IS NULL
+        BEGIN
+            ALTER TABLE [Accounts_Voucher_Line] ADD [Cost_Center_ID] int NULL;
+            EXEC(N'CREATE INDEX [IX_Accounts_Voucher_Line_Cost_Center] ON [Accounts_Voucher_Line] ([Cost_Center_ID], [Account_ID])');
+        END
+        IF OBJECT_ID(N'[Service_Category]', N'U') IS NOT NULL AND COL_LENGTH(N'Service_Category', N'Cost_Center_ID') IS NULL
+            ALTER TABLE [Service_Category] ADD [Cost_Center_ID] int NULL;
+        IF OBJECT_ID(N'[Bed_Category]', N'U') IS NOT NULL AND COL_LENGTH(N'Bed_Category', N'Cost_Center_ID') IS NULL
+            ALTER TABLE [Bed_Category] ADD [Cost_Center_ID] int NULL;
+
+        IF OBJECT_ID(N'[Accounts_Cost_Center]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [Accounts_Cost_Center] (
+                [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Cost_Center] PRIMARY KEY,
+                [Code] nvarchar(20) NOT NULL,
+                [Name] nvarchar(100) NOT NULL,
+                [Center_Type] nvarchar(20) NOT NULL,
+                [Incharge] nvarchar(100) NULL,
+                [Area_Sq_Ft] numeric(18,2) NULL,
+                [Is_Active] bit NOT NULL CONSTRAINT [DF_Accounts_Cost_Center_Active] DEFAULT 1,
+                [Is_System] bit NOT NULL CONSTRAINT [DF_Accounts_Cost_Center_System] DEFAULT 0);
+            CREATE UNIQUE INDEX [IX_Accounts_Cost_Center_Code] ON [Accounts_Cost_Center] ([Code]);
+        END
+
+        IF OBJECT_ID(N'[Accounts_Fixed_Asset]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [Accounts_Fixed_Asset] (
+                [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Fixed_Asset] PRIMARY KEY,
+                [Asset_Code] nvarchar(30) NOT NULL,
+                [Name] nvarchar(150) NOT NULL,
+                [Serial_No] nvarchar(100) NULL,
+                [Asset_Account_ID] int NOT NULL,
+                [Cost_Center_ID] int NOT NULL,
+                [Location] nvarchar(150) NULL,
+                [Supplier] nvarchar(150) NULL,
+                [Invoice_No] nvarchar(50) NULL,
+                [Purchase_Date] date NOT NULL,
+                [In_Service_Date] date NOT NULL,
+                [Cost] numeric(18,2) NOT NULL,
+                [Salvage_Value] numeric(18,2) NOT NULL,
+                [Useful_Life_Years] int NOT NULL,
+                [Opening_Acc_Depreciation] numeric(18,2) NOT NULL,
+                [Status] nvarchar(20) NOT NULL,
+                [Warranty_End] date NULL,
+                [Disposed_Date] date NULL,
+                [Disposal_Amount] numeric(18,2) NULL,
+                [Purchase_Voucher_ID] bigint NULL,
+                [Disposal_Voucher_ID] bigint NULL,
+                [Entered_By] int NOT NULL,
+                [Trans_Date] datetime NOT NULL);
+            CREATE UNIQUE INDEX [IX_Accounts_Fixed_Asset_Code] ON [Accounts_Fixed_Asset] ([Asset_Code]);
+        END
+
+        IF OBJECT_ID(N'[Accounts_Fixed_Asset_Transfer]', N'U') IS NULL
+            CREATE TABLE [Accounts_Fixed_Asset_Transfer] (
+                [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Fixed_Asset_Transfer] PRIMARY KEY,
+                [Asset_ID] int NOT NULL,
+                [From_Cost_Center_ID] int NOT NULL,
+                [To_Cost_Center_ID] int NOT NULL,
+                [Transfer_Date] date NOT NULL,
+                [Reason] nvarchar(300) NULL,
+                [Entered_By] int NOT NULL);
+
+        IF OBJECT_ID(N'[Accounts_Fixed_Asset_Depreciation]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [Accounts_Fixed_Asset_Depreciation] (
+                [ID] bigint IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Fixed_Asset_Depreciation] PRIMARY KEY,
+                [Asset_ID] int NOT NULL,
+                [Period_Month] date NOT NULL,
+                [Amount] numeric(18,2) NOT NULL,
+                [Cost_Center_ID] int NOT NULL,
+                [Voucher_ID] bigint NOT NULL);
+            CREATE UNIQUE INDEX [IX_Accounts_FA_Depreciation_Asset_Month] ON [Accounts_Fixed_Asset_Depreciation] ([Asset_ID], [Period_Month]);
+        END
+
+        IF OBJECT_ID(N'[Accounts_Allocation_Rule]', N'U') IS NULL
+            CREATE TABLE [Accounts_Allocation_Rule] (
+                [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Allocation_Rule] PRIMARY KEY,
+                [Source_Cost_Center_ID] int NOT NULL,
+                [Basis] nvarchar(20) NOT NULL,
+                [Target_Cost_Center_ID] int NULL,
+                [Weight] numeric(18,4) NULL,
+                [Is_Active] bit NOT NULL CONSTRAINT [DF_Accounts_Allocation_Rule_Active] DEFAULT 1);
+
+        IF OBJECT_ID(N'[Accounts_Allocation_Run]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [Accounts_Allocation_Run] (
+                [ID] int IDENTITY(1,1) NOT NULL CONSTRAINT [PK_Accounts_Allocation_Run] PRIMARY KEY,
+                [Period_Month] date NOT NULL,
+                [Voucher_ID] bigint NOT NULL,
+                [Run_By] int NOT NULL,
+                [Run_At] datetime NOT NULL);
+            CREATE UNIQUE INDEX [IX_Accounts_Allocation_Run_Month] ON [Accounts_Allocation_Run] ([Period_Month]);
+        END
+        """;
+
+    // Standard departments; shared (service/admin) costs are spread over revenue departments by income until changed.
+    private const string CostCenterSeedSql = """
+        DECLARE @cc TABLE ([Code] nvarchar(20), [Name] nvarchar(100), [Type] nvarchar(20));
+        INSERT INTO @cc VALUES
+            (N'CC-101', N'OPD (Outpatient)', N'Revenue'),
+            (N'CC-102', N'Emergency', N'Revenue'),
+            (N'CC-103', N'IPD Ward & Cabin', N'Revenue'),
+            (N'CC-104', N'ICU / CCU / NICU', N'Revenue'),
+            (N'CC-105', N'Operation Theatre (OT)', N'Revenue'),
+            (N'CC-106', N'Pathology (Laboratory)', N'Revenue'),
+            (N'CC-107', N'Radiology & Imaging', N'Revenue'),
+            (N'CC-108', N'Cardiology & Procedures', N'Revenue'),
+            (N'CC-109', N'Pharmacy', N'Revenue'),
+            (N'CC-110', N'Blood Bank', N'Revenue'),
+            (N'CC-111', N'Ambulance', N'Revenue'),
+            (N'CC-112', N'Canteen', N'Revenue'),
+            (N'CC-201', N'Reception & Billing', N'Service'),
+            (N'CC-202', N'Nursing Administration', N'Service'),
+            (N'CC-203', N'Housekeeping & Laundry', N'Service'),
+            (N'CC-204', N'Maintenance & Biomedical', N'Service'),
+            (N'CC-205', N'Store & Procurement', N'Service'),
+            (N'CC-206', N'Kitchen (Patient Food)', N'Service'),
+            (N'CC-301', N'Administration & Management', N'Admin'),
+            (N'CC-302', N'Accounts & Finance', N'Admin'),
+            (N'CC-303', N'HR', N'Admin'),
+            (N'CC-304', N'IT', N'Admin'),
+            (N'CC-399', N'General (Shared Cost)', N'Admin');
+        INSERT INTO [Accounts_Cost_Center] ([Code], [Name], [Center_Type], [Is_Active], [Is_System])
+        SELECT c.[Code], c.[Name], c.[Type], 1, 1 FROM @cc c
+        WHERE NOT EXISTS (SELECT 1 FROM [Accounts_Cost_Center] x WHERE x.[Code] = c.[Code]);
+
+        IF NOT EXISTS (SELECT 1 FROM [Accounts_Allocation_Rule])
+            INSERT INTO [Accounts_Allocation_Rule] ([Source_Cost_Center_ID], [Basis], [Is_Active])
+            SELECT [ID], N'Revenue', 1 FROM [Accounts_Cost_Center] WHERE [Center_Type] IN (N'Service', N'Admin');
+        """;
+
+    public static class Centers
+    {
+        public const string Opd = "CC-101", Emergency = "CC-102", Ward = "CC-103", Ot = "CC-105", Pathology = "CC-106",
+            Imaging = "CC-107", Cardiology = "CC-108", Pharmacy = "CC-109", BloodBank = "CC-110", Ambulance = "CC-111",
+            Canteen = "CC-112", Housekeeping = "CC-203", Maintenance = "CC-204", Store = "CC-205", General = "CC-399";
+    }
+
+    /// <summary>The department an income/expense head belongs to when the posting does not say. Null for balance-sheet heads.</summary>
+    public static string? DefaultCenterCode(string headCode, string headType)
+    {
+        if (headType is not ("Income" or "Expense")) return null;
+        return headCode switch
+        {
+            AccountCodes.OpdIncome or AccountCodes.DoctorSalary => Centers.Opd,
+            AccountCodes.EmergencyIncome => Centers.Emergency,
+            AccountCodes.IpdBedIncome or AccountCodes.IpdServiceIncome => Centers.Ward,
+            AccountCodes.OtIncome => Centers.Ot,
+            AccountCodes.DiagnosticIncome or AccountCodes.LabSupplies or AccountCodes.DoctorCommission => Centers.Pathology,
+            AccountCodes.PharmacySales or AccountCodes.MedicinePurchase or AccountCodes.CostOfMedicineSold => Centers.Pharmacy,
+            AccountCodes.BloodBankIncome => Centers.BloodBank,
+            AccountCodes.CanteenSales or AccountCodes.CanteenPurchase => Centers.Canteen,
+            AccountCodes.Cleaning => Centers.Housekeeping,
+            AccountCodes.Repair => Centers.Maintenance,
+            AccountCodes.StorePurchase => Centers.Store,
+            _ => Centers.General
+        };
+    }
+
+    private static Dictionary<int, int?>? centerByHead;
+    private static Dictionary<string, int>? centerByCode;
+    private static readonly SemaphoreSlim CenterGate = new(1, 1);
+
+    public static void InvalidateCenters() { centerByHead = null; centerByCode = null; }
+
+    private static async Task LoadCenterMapAsync(HpmDbContext db)
+    {
+        if (centerByHead is not null && centerByCode is not null) return;
+        await CenterGate.WaitAsync();
+        try
+        {
+            if (centerByHead is not null && centerByCode is not null) return;
+            var codes = await db.CostCenters.AsNoTracking().Where(x => x.IsActive).ToDictionaryAsync(x => x.Code, x => x.ID, StringComparer.OrdinalIgnoreCase);
+            var heads = await db.AccountHeads.AsNoTracking().Select(x => new { x.ID, x.Code, x.AccountType }).ToListAsync();
+            centerByHead = heads.ToDictionary(h => h.ID, h => DefaultCenterCode(h.Code, h.AccountType) is { } c && codes.TryGetValue(c, out var id) ? id : (int?)null);
+            centerByCode = codes;
+        }
+        finally { CenterGate.Release(); }
+    }
+
+    /// <summary>Active cost center ID by code, or null.</summary>
+    public static async Task<int?> CenterIdAsync(HpmDbContext db, string code)
+    {
+        await LoadCenterMapAsync(db);
+        return centerByCode!.TryGetValue(code, out var id) ? id : null;
+    }
+
+    /// <summary>Fills the department of new income/expense voucher lines that were posted without one. Called from SaveChangesAsync.</summary>
+    public static async Task FillMissingCentersAsync(HpmDbContext db, IEnumerable<AccountVoucherLine> lines)
+    {
+        var missing = lines.Where(x => x.CostCenterID is null).ToList();
+        if (missing.Count == 0) return;
+        await LoadCenterMapAsync(db);
+        foreach (var l in missing)
+        {
+            if (!centerByHead!.TryGetValue(l.AccountID, out var cc))
+            {
+                InvalidateCenters(); // a head added after the map was built
+                await LoadCenterMapAsync(db);
+                centerByHead!.TryGetValue(l.AccountID, out cc);
+            }
+            l.CostCenterID = cc;
+        }
+    }
+
+    /// <summary>Income department of each diagnostic test: its category's cost center, else Pathology / Imaging / Cardiology by test type.</summary>
+    public static async Task<Dictionary<int, int?>> DiagnosticCentersAsync(HpmDbContext db, IEnumerable<int> serviceIds)
+    {
+        var ids = serviceIds.Distinct().ToArray();
+        var services = await db.Services.AsNoTracking().Where(x => ids.Contains(x.ID)).ToListAsync();
+        var catIds = services.Where(x => x.CategoryID.HasValue).Select(x => x.CategoryID!.Value).Distinct().ToArray();
+        var categories = await db.ServiceCategories.AsNoTracking().Where(x => catIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID);
+        var result = new Dictionary<int, int?>();
+        foreach (var id in ids)
+        {
+            var service = services.FirstOrDefault(x => x.ID == id);
+            var category = service?.CategoryID is int c && categories.TryGetValue(c, out var cat) ? cat : null;
+            if (category?.CostCenterID is int own) { result[id] = own; continue; }
+            var code = service is null ? Centers.Pathology
+                : DiagnosticTestRouting.IsImaging(service, category) ? Centers.Imaging
+                : DiagnosticTestRouting.IsProcedure(service, category) ? Centers.Cardiology
+                : Centers.Pathology;
+            result[id] = await CenterIdAsync(db, code);
+        }
+        return result;
+    }
+
+    /// <summary>Department of a bed: its category's cost center, else the general ward.</summary>
+    public static async Task<int?> BedCenterAsync(HpmDbContext db, int? bedCabinId)
+    {
+        if (bedCabinId is int bedId)
+        {
+            var cc = await (from b in db.BedCabins join c in db.BedCategories on b.CategoryID equals c.ID where b.ID == bedId select c.CostCenterID).FirstOrDefaultAsync();
+            if (cc.HasValue) return cc;
+        }
+        return await CenterIdAsync(db, Centers.Ward);
+    }
+
+    /// <summary>Accumulated-depreciation head paired with an asset head: 15x0 -> 16x0.</summary>
+    public static string AccumulatedDepreciationCode(string assetCode) =>
+        assetCode.Length == 4 && assetCode.StartsWith("15", StringComparison.Ordinal) ? "16" + assetCode[2..] : AccountCodes.AccDepMedicalEquipment;
 
     // ---------------------------------------------------------------- account lookup
     private static readonly ConcurrentDictionary<string, int> IdCache = new();

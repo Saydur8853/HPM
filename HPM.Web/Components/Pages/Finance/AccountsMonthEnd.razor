@@ -1,0 +1,500 @@
+@page "/accounts/month-end"
+@attribute [Authorize(Roles = RoleNames.Administrator)]
+@inherits FinancePageBase
+
+<PageTitle>@I18n.T("Month-End Close") | @Branding.HospitalName</PageTitle>
+
+<div class="pharmacy-classic-fit px-root fin-page">
+    <div class="px-topbar">
+        <div class="px-topbar-left"><h1 class="px-title">🗓️ @I18n.T("Month-End Close")</h1></div>
+        <div class="px-topbar-right">
+            <label class="px-field inline">
+                <span>@I18n.T("Month")</span>
+                <input type="month" value="@month.ToString("yyyy-MM")" max="@DateTime.Today.ToString("yyyy-MM")" @onchange="OnMonthChanged" />
+            </label>
+            <div class="px-metric"><span>@I18n.T("Depreciation")</span><b>@(depreciationVoucher is null ? I18n.T("Pending") : I18n.T("Done"))</b></div>
+            <div class="px-metric"><span>@I18n.T("Allocation")</span><b>@(allocationVoucher is null ? I18n.T("Pending") : I18n.T("Done"))</b></div>
+            <div class="px-metric"><span>@I18n.T("Locked")</span><b class="@(monthLocked ? "ok" : "")">@(monthLocked ? I18n.T("Yes") : I18n.T("No"))</b></div>
+            <a class="px-btn" href="/accounts/fixed-assets">🏗️ @I18n.T("Fixed Assets")</a>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <div class="px-alert @MessageClass"><span>@Message</span><button type="button" @onclick='() => Message = ""'>✕</button></div>
+    }
+
+    <div class="fin-scroll">
+        @if (MonthEnd >= DateTime.Today)
+        {
+            <div class="px-note-box review">⏳ @I18n.T("This month has not ended yet. Month-end entries can be posted only after the month is over; the previews below are for checking.")</div>
+        }
+
+        <div class="fin-grid">
+            <!-- Step 1: depreciation -->
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>① 📉 @I18n.T("Depreciation") — @month.ToString("MMMM yyyy")</h2></div>
+                    <span class="px-tag @(depreciationVoucher is null ? "amber" : "green")">@(depreciationVoucher is null ? I18n.T("Not posted") : $"{I18n.T("Posted")} · {depreciationVoucher.VoucherNo}")</span>
+                </header>
+                <div class="px-card-body">
+                    <small class="muted">@I18n.T("Each active asset bought through the accounts loses a fixed part of its value every month. That part is an expense of the asset's department.")</small>
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("Asset")</th><th>@I18n.T("Department")</th><th class="r">@I18n.T("Amount")</th></tr></thead>
+                        <tbody>
+                            @foreach (var (asset, amount) in depreciationPreview)
+                            {
+                                <tr><td><b>@asset.AssetCode</b> @asset.Name</td><td class="muted">@CenterName(asset.CostCenterID)</td><td class="r">@I18n.FormatCurrency(amount)</td></tr>
+                            }
+                            @if (depreciationPreview.Count == 0) { <tr><td colspan="3" class="muted">@I18n.T("No depreciation due for this month.")</td></tr> }
+                        </tbody>
+                        @if (depreciationPreview.Count > 0)
+                        {
+                            <tfoot><tr class="grand"><td colspan="2">@I18n.T("Total")</td><td class="r">@I18n.FormatCurrency(depreciationPreview.Sum(x => x.Amount))</td></tr></tfoot>
+                        }
+                    </table>
+                </div>
+                <div class="fin-card-foot">
+                    @if (depreciationVoucher is null)
+                    {
+                        <button type="button" class="px-btn primary" disabled="@(IsBusy || monthLocked || depreciationPreview.Count == 0 || MonthEnd >= DateTime.Today)" @onclick="PostDepreciationAsync">@I18n.T("Post depreciation")</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="px-btn" disabled="@(IsBusy || monthLocked)" @onclick="UndoDepreciationAsync">↶ @I18n.T("Undo depreciation")</button>
+                    }
+                </div>
+            </section>
+
+            <!-- Step 2: allocation -->
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>② ⚖️ @I18n.T("Cost Allocation") — @month.ToString("MMMM yyyy")</h2></div>
+                    <span class="px-tag @(allocationVoucher is null ? "amber" : "green")">@(allocationVoucher is null ? I18n.T("Not posted") : $"{I18n.T("Posted")} · {allocationVoucher.VoucherNo}")</span>
+                </header>
+                <div class="px-card-body">
+                    <small class="muted">@I18n.T("Costs of service and admin departments (housekeeping, store, administration, shared costs) are spread over the departments that earn income, using the rules set in Cost Centers. Total expense does not change; each department's true profit becomes visible.")</small>
+                    @foreach (var w in allocationWarnings)
+                    {
+                        <div class="px-note-box review">⚠️ @w</div>
+                    }
+                    <table class="fin-table">
+                        <thead><tr><th>@I18n.T("From")</th><th>@I18n.T("To")</th><th class="r">@I18n.T("Amount")</th></tr></thead>
+                        <tbody>
+                            @foreach (var g in allocationPreview.GroupBy(x => (x.Source, x.Target)).OrderBy(g => g.Key.Source))
+                            {
+                                <tr><td>@CenterName(g.Key.Source)</td><td>@CenterName(g.Key.Target)</td><td class="r">@I18n.FormatCurrency(g.Sum(x => x.Amount))</td></tr>
+                            }
+                            @if (allocationPreview.Count == 0) { <tr><td colspan="3" class="muted">@I18n.T("Nothing to allocate for this month.")</td></tr> }
+                        </tbody>
+                        @if (allocationPreview.Count > 0)
+                        {
+                            <tfoot><tr class="grand"><td colspan="2">@I18n.T("Total")</td><td class="r">@I18n.FormatCurrency(allocationPreview.Sum(x => x.Amount))</td></tr></tfoot>
+                        }
+                    </table>
+                </div>
+                <div class="fin-card-foot">
+                    @if (allocationVoucher is null)
+                    {
+                        <button type="button" class="px-btn primary" disabled="@(IsBusy || monthLocked || allocationPreview.Count == 0 || MonthEnd >= DateTime.Today)" @onclick="PostAllocationAsync">@I18n.T("Post allocation")</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="px-btn" disabled="@(IsBusy || monthLocked)" @onclick="UndoAllocationAsync">↶ @I18n.T("Undo allocation")</button>
+                    }
+                    <a class="px-btn sm" href="/accounts/cost-centers">⚙️ @I18n.T("Allocation rules")</a>
+                </div>
+            </section>
+
+            <!-- Step 3: lock -->
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>③ 🛡️ @I18n.T("Lock the Month") — @month.ToString("MMMM yyyy")</h2></div>
+                    <span class="px-tag @(monthLocked ? "green" : "amber")">@(monthLocked ? I18n.T("Locked") : I18n.T("Open"))</span>
+                </header>
+                <div class="px-card-body">
+                    <small class="muted">@I18n.T("After depreciation and allocation, lock the month so no bill, voucher or reversal can change its figures. An administrator can unlock it from General Ledger & Closing if a correction is really needed.")</small>
+                </div>
+                <div class="fin-card-foot">
+                    <button type="button" class="px-btn primary" disabled="@(IsBusy || monthLocked || MonthEnd >= DateTime.Today)" @onclick="LockMonthAsync">🔒 @I18n.T("Lock") @month.ToString("MMMM yyyy")</button>
+                </div>
+            </section>
+
+            <!-- One time: opening medicine stock -->
+            <section class="px-card fin-card">
+                <header class="px-card-head">
+                    <div class="px-card-title"><h2>💊 @I18n.T("Opening Medicine Stock (one time)")</h2></div>
+                    <span class="px-tag @(openingStockVoucher is null ? "amber" : "green")">@(openingStockVoucher is null ? I18n.T("Not done") : $"{I18n.T("Done")} · {openingStockVoucher.VoucherDate:dd MMM yyyy}")</span>
+                </header>
+                <div class="px-card-body">
+                    <small class="muted">@I18n.T("From now on, medicine purchases are kept as stock (an asset) and become expense only when the medicine is sold, at its buying cost. The medicine already on the shelves was bought earlier and counted as expense then, so this one-time entry moves the current stock value into the Medicine Inventory account. Do it once, when you start using this.")</small>
+                    @if (openingStockVoucher is null)
+                    {
+                        <div class="px-note-box">@I18n.T("Current medicine stock at buying cost"): <b>@I18n.FormatCurrency(stockValue)</b></div>
+                        <label class="px-field">
+                            <span>@I18n.T("Entry date")</span>
+                            <input type="date" value="@openingDate.ToString("yyyy-MM-dd")" max="@DateTime.Today.ToString("yyyy-MM-dd")" @onchange="e => openingDate = DateTime.TryParse(e.Value?.ToString(), out var d) ? d.Date : openingDate" />
+                        </label>
+                    }
+                    else
+                    {
+                        <div class="px-note-box">@I18n.T("Moved to inventory"): <b>@openingStockVoucher.VoucherNo</b> · @openingStockVoucher.Narration</div>
+                    }
+                </div>
+                @if (openingStockVoucher is null)
+                {
+                    <div class="fin-card-foot">
+                        <button type="button" class="px-btn primary" disabled="@(IsBusy || stockValue <= 0)" @onclick="PostOpeningStockAsync">@I18n.T("Move stock into inventory")</button>
+                    </div>
+                }
+            </section>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string OpeningStockReference = "OPENING-MEDICINE-STOCK";
+    private DateTime month = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(-1);
+    private DateTime MonthEnd => EndOf(month);
+    private DateTime openingDate = DateTime.Today;
+    private List<CostCenter> centers = [];
+    private List<(FixedAsset Asset, decimal Amount)> depreciationPreview = [];
+    private List<(int Source, int Target, int AccountID, decimal Amount)> allocationPreview = [];
+    private List<string> allocationWarnings = [];
+    private AccountVoucher? depreciationVoucher, allocationVoucher, openingStockVoucher;
+    private bool monthLocked;
+    private decimal stockValue;
+
+    private static string DepreciationRef(DateTime m) => $"DEPRECIATION:{m:yyyy-MM}";
+    private static string AllocationRef(DateTime m) => $"ALLOCATION:{m:yyyy-MM}";
+    private static DateTime EndOf(DateTime m) => m.AddMonths(1).AddDays(-1);
+
+    protected override async Task OnFinanceInitializedAsync() => await SafeLoadAsync();
+
+    private async Task SafeLoadAsync()
+    {
+        try { await LoadAsync(); }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+    }
+
+    private async Task OnMonthChanged(ChangeEventArgs e)
+    {
+        if (IsBusy) return;
+        if (DateTime.TryParse($"{e.Value}-01", out var m)) { month = new DateTime(m.Year, m.Month, 1); await SafeLoadAsync(); }
+    }
+
+    private static Task<AccountVoucher?> ActiveVoucherAsync(HpmDbContext db, string reference) =>
+        db.AccountVouchers.AsNoTracking().Where(x => x.Reference == reference && x.IsPosted && x.Status != "Cancelled").OrderByDescending(x => x.ID).FirstOrDefaultAsync();
+
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        centers = await db.CostCenters.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
+        depreciationVoucher = await ActiveVoucherAsync(db, DepreciationRef(month));
+        allocationVoucher = await ActiveVoucherAsync(db, AllocationRef(month));
+        openingStockVoucher = await ActiveVoucherAsync(db, OpeningStockReference);
+        var mEnd = MonthEnd;
+        monthLocked = await db.FinancialPeriodLocks.AnyAsync(x => x.IsActive && x.FromDate <= month && x.ToDate >= mEnd);
+        depreciationPreview = depreciationVoucher is null ? await DepreciationDueAsync(db, month) : await PostedDepreciationAsync(db, month);
+        (allocationPreview, allocationWarnings) = await AllocationPlanAsync(db, month);
+        stockValue = openingStockVoucher is null ? await StockValueAsync(db) : 0;
+    }
+
+    private string CenterName(int id) => centers.FirstOrDefault(x => x.ID == id) is { } c ? $"{c.Code} · {c.Name}" : "—";
+
+    // ---------- Step 1: depreciation ----------
+    private static async Task<List<(FixedAsset, decimal)>> DepreciationDueAsync(HpmDbContext db, DateTime month)
+    {
+        var monthEnd = EndOf(month);
+        // Register-only assets (no purchase voucher) have no cost in the ledger, so nothing is depreciated there.
+        var assets = await db.FixedAssets.AsNoTracking().Where(x => x.Status == "Active" && x.InServiceDate <= monthEnd && x.PurchaseVoucherID != null).ToListAsync();
+        var charged = (await db.FixedAssetDepreciations.AsNoTracking().GroupBy(x => x.AssetID).Select(g => new { g.Key, Sum = g.Sum(x => x.Amount) }).ToListAsync())
+            .ToDictionary(x => x.Key, x => x.Sum);
+        var already = (await db.FixedAssetDepreciations.AsNoTracking().Where(x => x.PeriodMonth == month).Select(x => x.AssetID).ToListAsync()).ToHashSet();
+        var result = new List<(FixedAsset, decimal)>();
+        foreach (var a in assets.Where(a => !already.Contains(a.ID)))
+        {
+            var remaining = a.Cost - a.SalvageValue - a.OpeningAccumulatedDepreciation - charged.GetValueOrDefault(a.ID);
+            var amount = Math.Min(AccountsFixedAssets.MonthlyCharge(a), remaining);
+            if (amount > 0) result.Add((a, amount));
+        }
+        return result;
+    }
+
+    private static async Task<List<(FixedAsset, decimal)>> PostedDepreciationAsync(HpmDbContext db, DateTime month)
+    {
+        var rows = await db.FixedAssetDepreciations.AsNoTracking().Where(x => x.PeriodMonth == month).ToListAsync();
+        var ids = rows.Select(x => x.AssetID).ToArray();
+        var assets = await db.FixedAssets.AsNoTracking().Where(x => ids.Contains(x.ID)).ToDictionaryAsync(x => x.ID);
+        return rows.Where(r => assets.ContainsKey(r.AssetID)).Select(r => (assets[r.AssetID], r.Amount)).ToList();
+    }
+
+    private async Task PostDepreciationAsync()
+    {
+        if (!IsAdmin || IsBusy) return;
+        IsBusy = true;
+        try
+        {
+            var m = month; var mEnd = EndOf(m); var depRef = DepreciationRef(m); var allocRef = AllocationRef(m); var uid = CurrentUserId;
+            var mustUndoAllocation = I18n.T("Undo this month's allocation first, then post depreciation and allocate again.");
+            var alreadyPosted = I18n.T("Depreciation for this month is already posted.");
+            var noneDue = I18n.T("No depreciation due for this month.");
+            if (mEnd >= DateTime.Today) throw new InvalidOperationException(I18n.T("This month has not ended yet. Month-end entries can be posted only after the month is over."));
+            var (total, voucherNo) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                if (await ActiveVoucherAsync(db, depRef) is not null) throw new InvalidOperationException(alreadyPosted);
+                if (await ActiveVoucherAsync(db, allocRef) is not null) throw new InvalidOperationException(mustUndoAllocation);
+                await FinancialControl.EnsurePostingAllowedAsync(db, mEnd, uid);
+                var due = await DepreciationDueAsync(db, m);
+                if (due.Count == 0) throw new InvalidOperationException(noneDue);
+                var expenseId = await AccountingSetup.IdAsync(db, AccountCodes.Depreciation);
+                var headCodes = await db.AccountHeads.AsNoTracking().ToDictionaryAsync(x => x.ID, x => x.Code);
+                var lines = new List<AccountingPosting.PostingLine>();
+                foreach (var g in due.GroupBy(x => x.Item1.CostCenterID))
+                    lines.Add(new(expenseId, g.Sum(x => x.Item2), 0, g.Key));
+                foreach (var g in due.GroupBy(x => (x.Item1.AssetAccountID, x.Item1.CostCenterID)))
+                {
+                    var accDepId = await AccountingSetup.IdAsync(db, AccountingSetup.AccumulatedDepreciationCode(headCodes.GetValueOrDefault(g.Key.AssetAccountID) ?? ""));
+                    lines.Add(new(accDepId, 0, g.Sum(x => x.Item2), g.Key.CostCenterID));
+                }
+                var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", mEnd, $"Depreciation for {m:MMMM yyyy}", depRef, uid, lines.ToArray());
+                await db.SaveChangesAsync();
+                foreach (var (asset, amount) in due)
+                    db.FixedAssetDepreciations.Add(new FixedAssetDepreciation { AssetID = asset.ID, PeriodMonth = m, Amount = amount, CostCenterID = asset.CostCenterID, VoucherID = voucher.ID });
+                await db.SaveChangesAsync();
+                return (due.Sum(x => x.Item2), voucher.VoucherNo);
+            }, System.Data.IsolationLevel.Serializable);
+            Success($"{I18n.T("Depreciation")} {I18n.FormatCurrency(total)} {I18n.T("posted")} ({voucherNo}).");
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task UndoDepreciationAsync()
+    {
+        if (!IsAdmin || IsBusy || depreciationVoucher is null) return;
+        IsBusy = true;
+        try
+        {
+            var voucherId = depreciationVoucher.ID;
+            var allocRef = AllocationRef(month);
+            var uid = CurrentUserId;
+            var mustUndoAllocation = I18n.T("Undo this month's allocation first.");
+            var disposedAsset = I18n.T("An asset in this depreciation has since been disposed, so it cannot be undone.");
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                if (await ActiveVoucherAsync(db, allocRef) is not null) throw new InvalidOperationException(mustUndoAllocation);
+                if (await db.FixedAssetDepreciations.Where(d => d.VoucherID == voucherId)
+                        .Join(db.FixedAssets, d => d.AssetID, a => a.ID, (d, a) => a).AnyAsync(a => a.Status == "Disposed"))
+                    throw new InvalidOperationException(disposedAsset);
+                var voucher = await db.AccountVouchers.SingleAsync(x => x.ID == voucherId);
+                await AccountingPosting.ReversePostedVoucherAsync(db, voucher, "Month-end depreciation undone", uid, DateTime.Now, voucher.VoucherDate);
+                db.FixedAssetDepreciations.RemoveRange(await db.FixedAssetDepreciations.Where(x => x.VoucherID == voucher.ID).ToListAsync());
+                await db.SaveChangesAsync();
+                return true;
+            });
+            Success(I18n.T("Depreciation for this month was reversed."));
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    // ---------- Step 2: allocation ----------
+    private async Task<(List<(int, int, int, decimal)>, List<string>)> AllocationPlanAsync(HpmDbContext db, DateTime month)
+    {
+        var warnings = new List<string>();
+        var monthStart = month; var monthStop = month.AddMonths(1);
+        var allocationVoucherIds = db.AccountVouchers.Where(o => o.Reference != null && o.Reference.StartsWith("ALLOCATION:")).Select(o => o.ID);
+        var rules = await db.AllocationRules.AsNoTracking().Where(x => x.IsActive).ToListAsync();
+        var revenueCenters = centers.Where(x => x.IsActive && x.CenterType == "Revenue").ToList();
+        var revenueIds = revenueCenters.Select(x => x.ID).ToHashSet();
+
+        var posted = await (from l in db.AccountVoucherLines
+                            join v in db.AccountVouchers on l.VoucherID equals v.ID
+                            join a in db.AccountHeads on l.AccountID equals a.ID
+                            where v.IsPosted && v.Status != "Pending" && v.Status != "Rejected"
+                                  && v.VoucherDate >= monthStart && v.VoucherDate < monthStop && l.CostCenterID != null
+                                  && (a.AccountType == "Income" || a.AccountType == "Expense")
+                                  && (v.Reference == null || !v.Reference.StartsWith("ALLOCATION:"))
+                                  && (v.ReversalOfVoucherID == null || !allocationVoucherIds.Contains(v.ReversalOfVoucherID.Value))
+                            select new { CC = l.CostCenterID!.Value, l.AccountID, a.AccountType, l.Debit, l.Credit, l.VoucherID }).ToListAsync();
+
+        var incomeWeights = posted.Where(x => x.AccountType == "Income" && revenueIds.Contains(x.CC))
+            .GroupBy(x => x.CC).Select(g => (g.Key, g.Sum(x => x.Credit - x.Debit))).Where(x => x.Item2 > 0).ToList();
+        var billWeights = posted.Where(x => x.AccountType == "Income" && x.Credit > 0 && revenueIds.Contains(x.CC))
+            .GroupBy(x => x.CC).Select(g => (g.Key, (decimal)g.Select(x => x.VoucherID).Distinct().Count())).ToList();
+        var areaWeights = revenueCenters.Where(x => x.AreaSqFt > 0).Select(x => (x.ID, x.AreaSqFt!.Value)).ToList();
+
+        var plan = new List<(int, int, int, decimal)>();
+        foreach (var source in rules.Select(x => x.SourceCostCenterID).Distinct())
+        {
+            if (revenueIds.Contains(source)) continue;
+            var basis = rules.First(x => x.SourceCostCenterID == source).Basis;
+            List<(int Key, decimal Weight)> weights = basis switch
+            {
+                "Area" => areaWeights,
+                "BillCount" => billWeights,
+                "Fixed" => rules.Where(x => x.SourceCostCenterID == source && x.Basis == "Fixed" && x.TargetCostCenterID != null && x.Weight > 0)
+                                .Select(x => (x.TargetCostCenterID!.Value, x.Weight!.Value)).ToList(),
+                _ => incomeWeights
+            };
+            var expenses = posted.Where(x => x.CC == source && x.AccountType == "Expense")
+                .GroupBy(x => x.AccountID).Select(g => (Account: g.Key, Amount: g.Sum(x => x.Debit - x.Credit))).Where(x => x.Amount > 0).ToList();
+            if (expenses.Count == 0) continue;
+            if (basis == "Fixed" && weights.Sum(x => x.Weight) != 100)
+            {
+                warnings.Add($"{CenterName(source)}: {I18n.T("fixed percentages add up to")} {weights.Sum(x => x.Weight):0.##}%, {I18n.T("not 100%. Fix them in Cost Centers; not spread.")}");
+                continue;
+            }
+            if (weights.Count == 0)
+            {
+                warnings.Add($"{CenterName(source)}: {I18n.T("no")} {BasisLabel(basis)} {I18n.T("figures this month, spread by income share instead.")}");
+                weights = incomeWeights;
+            }
+            if (weights.Count == 0)
+            {
+                warnings.Add($"{CenterName(source)}: {I18n.T("no revenue department had income this month, not spread.")}");
+                continue;
+            }
+            foreach (var (account, amount) in expenses)
+                foreach (var (target, share) in AccountingPosting.Split(amount, weights))
+                    plan.Add((source, target, account, share));
+        }
+        return (plan, warnings);
+    }
+
+    private async Task PostAllocationAsync()
+    {
+        if (!IsAdmin || IsBusy) return;
+        IsBusy = true;
+        try
+        {
+            var m = month; var mEnd = EndOf(m); var allocRef = AllocationRef(m); var uid = CurrentUserId;
+            var alreadyPosted = I18n.T("Allocation for this month is already posted.");
+            var nothing = I18n.T("Nothing to allocate for this month.");
+            if (mEnd >= DateTime.Today) throw new InvalidOperationException(I18n.T("This month has not ended yet. Month-end entries can be posted only after the month is over."));
+            var (total, voucherNo) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                if (await ActiveVoucherAsync(db, allocRef) is not null) throw new InvalidOperationException(alreadyPosted);
+                await FinancialControl.EnsurePostingAllowedAsync(db, mEnd, uid);
+                var (plan, _) = await AllocationPlanAsync(db, m);
+                if (plan.Count == 0) throw new InvalidOperationException(nothing);
+                var lines = new List<AccountingPosting.PostingLine>();
+                foreach (var g in plan.GroupBy(x => (x.Item3, x.Item1)))
+                    lines.Add(new(g.Key.Item1, 0, g.Sum(x => x.Item4), g.Key.Item2));
+                foreach (var g in plan.GroupBy(x => (x.Item3, x.Item2)))
+                    lines.Add(new(g.Key.Item1, g.Sum(x => x.Item4), 0, g.Key.Item2));
+                var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", mEnd, $"Cost allocation for {m:MMMM yyyy}", allocRef, uid, lines.ToArray());
+                await db.SaveChangesAsync();
+                db.AllocationRuns.RemoveRange(await db.AllocationRuns.Where(x => x.PeriodMonth == m).ToListAsync());
+                db.AllocationRuns.Add(new AllocationRun { PeriodMonth = m, VoucherID = voucher.ID, RunBy = uid, RunAt = DateTime.Now });
+                await db.SaveChangesAsync();
+                return (plan.Sum(x => x.Item4), voucher.VoucherNo);
+            }, System.Data.IsolationLevel.Serializable);
+            Success($"{I18n.T("Allocation")} {I18n.FormatCurrency(total)} {I18n.T("posted")} ({voucherNo}).");
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private async Task UndoAllocationAsync()
+    {
+        if (!IsAdmin || IsBusy || allocationVoucher is null) return;
+        IsBusy = true;
+        try
+        {
+            var voucherId = allocationVoucher.ID;
+            var m = month;
+            var uid = CurrentUserId;
+            await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                var voucher = await db.AccountVouchers.SingleAsync(x => x.ID == voucherId);
+                await AccountingPosting.ReversePostedVoucherAsync(db, voucher, "Month-end allocation undone", uid, DateTime.Now, voucher.VoucherDate);
+                db.AllocationRuns.RemoveRange(await db.AllocationRuns.Where(x => x.PeriodMonth == m).ToListAsync());
+                await db.SaveChangesAsync();
+                return true;
+            });
+            Success(I18n.T("Allocation for this month was reversed."));
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    // ---------- Step 3: lock ----------
+    private async Task LockMonthAsync()
+    {
+        if (!IsAdmin || IsBusy) return;
+        IsBusy = true;
+        try
+        {
+            var m = month; var mEnd = EndOf(m);
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.FinancialPeriodLocks.AnyAsync(x => x.IsActive && x.FromDate <= mEnd && x.ToDate >= m))
+                throw new InvalidOperationException(I18n.T("Part of this month is already locked."));
+            db.FinancialPeriodLocks.Add(new FinancialPeriodLock { FromDate = m, ToDate = mEnd, Reason = $"Month-end close {m:MMMM yyyy}", IsActive = true, LockedBy = CurrentUserId, LockedAt = DateTime.Now });
+            await db.SaveChangesAsync();
+            Success($"{m:MMMM yyyy} {I18n.T("locked.")}");
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    // ---------- One time: opening medicine stock ----------
+    private static async Task<decimal> StockValueAsync(HpmDbContext db)
+    {
+        var batches = await db.MedicineStoreBalances.AsNoTracking().Where(x => x.Balance > 0).ToListAsync();
+        if (batches.Count == 0) return 0;
+        var challanIds = batches.Where(x => x.MedicineReceivingChallanSubID.HasValue).Select(x => x.MedicineReceivingChallanSubID!.Value).Distinct().ToArray();
+        var challanCost = challanIds.Length == 0 ? new Dictionary<long, decimal>() : await db.MedicineReceivingChallanItems.AsNoTracking()
+            .Where(x => challanIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.BuyRate);
+        var serviceIds = batches.Select(x => x.ServiceID).Distinct().ToArray();
+        var serviceCost = await db.Services.AsNoTracking().Where(x => serviceIds.Contains(x.ID)).ToDictionaryAsync(x => x.ID, x => x.BuyRate ?? 0);
+        return Math.Round(batches.Sum(b => b.Balance * (b.MedicineReceivingChallanSubID is long c && challanCost.TryGetValue(c, out var cost) ? cost : serviceCost.GetValueOrDefault(b.ServiceID))), 2);
+    }
+
+    private async Task PostOpeningStockAsync()
+    {
+        if (!IsAdmin || IsBusy) return;
+        IsBusy = true;
+        try
+        {
+            var date = openingDate.Date;
+            var uid = CurrentUserId;
+            if (date > DateTime.Today) throw new InvalidOperationException(I18n.T("The opening date cannot be in the future."));
+            if (date < new DateTime(2000, 1, 1)) throw new InvalidOperationException(I18n.T("The opening date cannot be before 01 Jan 2000."));
+            var alreadyPosted = I18n.T("Opening stock is already posted.");
+            var noStock = I18n.T("There is no medicine stock to move.");
+            var (value, voucherNo) = await ResilientTransaction.ExecuteAsync(DbFactory, async db =>
+            {
+                await FinancialControl.EnsurePostingAllowedAsync(db, date, uid);
+                if (await ActiveVoucherAsync(db, OpeningStockReference) is not null) throw new InvalidOperationException(alreadyPosted);
+                var v = await StockValueAsync(db);
+                if (v <= 0) throw new InvalidOperationException(noStock);
+                var voucher = AccountingPosting.AddPostedVoucher(db, "Journal", date, "Opening medicine stock moved from past expense to inventory", OpeningStockReference, uid,
+                [
+                    new AccountingPosting.PostingLine(await AccountingSetup.IdAsync(db, AccountCodes.MedicineInventory), v, 0),
+                    new AccountingPosting.PostingLine(await AccountingSetup.IdAsync(db, AccountCodes.RetainedEarnings), 0, v)
+                ]);
+                await db.SaveChangesAsync();
+                return (v, voucher.VoucherNo);
+            }, System.Data.IsolationLevel.Serializable);
+            Success($"{I18n.T("Medicine stock")} {I18n.FormatCurrency(value)} {I18n.T("moved to inventory")} ({voucherNo}).");
+            await LoadAsync();
+        }
+        catch (Exception ex) { Fail(RootMessage(ex)); }
+        finally { IsBusy = false; }
+    }
+
+    private string BasisLabel(string basis) => basis switch
+    {
+        "Area" => I18n.T("floor area"),
+        "BillCount" => I18n.T("bill count"),
+        "Fixed" => I18n.T("fixed percentage"),
+        _ => I18n.T("revenue")
+    };
+}
