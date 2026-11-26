@@ -34,7 +34,8 @@ public abstract class FinancePageBase : ComponentBase, IDisposable
         Localizer.OnLanguageChanged += HandleLanguageChanged;
         var user = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
         CurrentUserId = int.TryParse(user.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : 0;
-        IsAdmin = user.IsInRole(RoleNames.Administrator);
+        // Finance authority: Administrator (incl. Hospital Owner) or Accountant.
+        IsAdmin = user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.Accountant);
         await using (var db = await DbFactory.CreateDbContextAsync())
             Heads = await db.AccountHeads.AsNoTracking().OrderBy(x => x.Code).ToListAsync();
         await OnFinanceInitializedAsync();

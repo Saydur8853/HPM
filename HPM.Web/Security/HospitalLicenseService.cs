@@ -135,7 +135,10 @@ public sealed class HospitalLicenseService(IDbContextFactory<HpmDbContext> dbFac
     {
         RoleNames.Administrator or RoleNames.AppOwner or RoleNames.HospitalOwner or RoleNames.Patient => false,
         RoleNames.Reception => enabled.Overlaps([LicensedModules.Registration, LicensedModules.Appointments, LicensedModules.Diagnostics, LicensedModules.Ipd]),
-        RoleNames.Cashier => enabled.Overlaps([LicensedModules.Diagnostics, LicensedModules.Emergency, LicensedModules.Pharmacy, LicensedModules.Ipd, LicensedModules.Accounts, LicensedModules.Canteen]),
+        RoleNames.Cashier => enabled.Overlaps([LicensedModules.Registration, LicensedModules.Diagnostics, LicensedModules.Emergency, LicensedModules.Pharmacy, LicensedModules.Ipd, LicensedModules.Ot]),
+        RoleNames.Accountant => enabled.Overlaps([LicensedModules.Accounts, LicensedModules.Reports, LicensedModules.Mis]),
+        RoleNames.CanteenOperator => enabled.Contains(LicensedModules.Canteen),
+        RoleNames.HROfficer => enabled.Contains(LicensedModules.Hrm),
         RoleNames.Doctor => enabled.Overlaps([LicensedModules.Doctor, LicensedModules.Diagnostics, LicensedModules.Ipd, LicensedModules.Ot, LicensedModules.BloodBank]),
         RoleNames.Nurse => enabled.Overlaps([LicensedModules.Nursing, LicensedModules.Doctor, LicensedModules.BloodBank]),
         RoleNames.LabTechnician => enabled.Overlaps([LicensedModules.Diagnostics, LicensedModules.BloodBank]),

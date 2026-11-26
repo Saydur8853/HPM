@@ -67,13 +67,15 @@
                 <AuthorizeView Context="backOfficeAuth">
                     <Authorized>
                         <div class="header-module-menus">
-                            @foreach (var group in BackOfficeGroups.Where(group => CanViewGroup(backOfficeAuth.User, group)))
+                            @foreach (var group in BackOfficeGroups)
                             {
-                                var isOpen = openHeaderModule == group.Label;
+                                var groupDisabled = !CanViewGroup(backOfficeAuth.User, group);
+                                var isOpen = openHeaderModule == group.Label && !groupDisabled;
                                 <div class="header-backoffice-wrapper">
                                     @if (group.Href is not null)
                                     {
-                                        <NavLink class="header-backoffice-button" href="@group.Href" Match="NavLinkMatch.Prefix"
+                                        <NavLink class="@("header-backoffice-button" + (groupDisabled ? " menu-disabled" : ""))" href="@group.Href" Match="NavLinkMatch.Prefix"
+                                                 tabindex="@(groupDisabled ? "-1" : null)" aria-disabled="@(groupDisabled ? "true" : null)"
                                                  @onclick="CloseHeaderModule" title="@I18n.T(group.Label)">
                                             <span class="header-backoffice-label">@I18n.T(group.Label)</span>
                                             <span class="header-backoffice-short">@group.ShortLabel</span>
@@ -81,7 +83,8 @@
                                     }
                                     else
                                     {
-                                        <button type="button" class="header-backoffice-button @(isOpen ? "open" : string.Empty)"
+                                        <button type="button" class="header-backoffice-button @(isOpen ? "open" : string.Empty) @(groupDisabled ? "menu-disabled" : string.Empty)"
+                                                disabled="@groupDisabled"
                                                 @onclick="() => ToggleHeaderModule(group.Label)" aria-expanded="@isOpen" title="@I18n.T(group.Label)">
                                             <span class="header-backoffice-label">@I18n.T(group.Label)</span>
                                             <span class="header-backoffice-short">@group.ShortLabel</span>
@@ -90,15 +93,15 @@
 
                                     @if (isOpen && group.Href is null)
                                     {
-                                        var visibleItems = group.Items.Where(item => ModuleAccess.CanView(backOfficeAuth.User, item.Roles) && Licensed(item.Href)).ToList();
+                                        var visibleItems = group.Items.ToList();
                                         var meta = HeaderGroupMeta(group.Label);
-                                        var isLastGroup = BackOfficeGroups.LastOrDefault(g => CanViewGroup(backOfficeAuth.User, g)) == group;
+                                        var isLastGroup = BackOfficeGroups[^1] == group;
                                         <div class="header-backoffice-backdrop" @onclick="CloseHeaderModule"></div>
                                         <MegaMenuPanel PositionClass="header-backoffice-dropdown"
                                                        Icon="@meta.Icon"
                                                        Title="@meta.Title"
                                                        Subtitle="@meta.Subtitle"
-                                                       Sections="@BuildHeaderSections(visibleItems)"
+                                                       Sections="@BuildHeaderSections(visibleItems, backOfficeAuth.User)"
                                                        Footer="@HeaderGroupFooter(group.Label, backOfficeAuth.User)"
                                                        AlignEnd="@isLastGroup"
                                                        Compact="@(group.Label == "Accounts")"
@@ -110,10 +113,12 @@
                         </div>
                     </Authorized>
                 </AuthorizeView>
-                <AuthorizeView Roles="@RoleNames.Administrator">
+                <AuthorizeView Context="settingsAuth">
                     <Authorized>
+                        @{ var settingsDisabled = !settingsAuth.User.IsInRole(RoleNames.Administrator); }
                         <div class="header-settings-wrapper">
-                            <button type="button" class="header-settings-button @(isSettingsMenuOpen ? "open" : string.Empty)"
+                            <button type="button" class="header-settings-button @(isSettingsMenuOpen ? "open" : string.Empty) @(settingsDisabled ? "menu-disabled" : string.Empty)"
+                                    disabled="@settingsDisabled"
                                     @onclick="ToggleSettingsMenu" aria-expanded="@isSettingsMenuOpen" title="@I18n.T("Settings")">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <circle cx="12" cy="12" r="3"></circle>
@@ -122,7 +127,7 @@
                                 <span class="header-settings-label">@I18n.T("Settings")</span>
                             </button>
 
-                            @if (isSettingsMenuOpen)
+                            @if (isSettingsMenuOpen && !settingsDisabled)
                             {
                                 <div class="header-settings-backdrop" @onclick="CloseSettingsMenu"></div>
                                 <div class="header-settings-dropdown header-settings-mega-dropdown">
@@ -311,7 +316,7 @@
             <AuthorizeView Context="mobileBackOfficeAuth">
                 <Authorized>
                     @{
-                        var visibleGroups = BackOfficeGroups.Where(group => CanViewGroup(mobileBackOfficeAuth.User, group)).ToList();
+                        var visibleGroups = BackOfficeGroups.ToList();
                     }
                     @if (visibleGroups.Count > 0)
                     {
@@ -319,17 +324,18 @@
                             <div class="mobile-backoffice-divider">@I18n.T("Back Office & Modules")</div>
                             @foreach (var group in visibleGroups)
                             {
-                                var isExpanded = openMobileBackOffice == group.Label;
+                                var mobileDisabled = !CanViewGroup(mobileBackOfficeAuth.User, group);
+                                var isExpanded = openMobileBackOffice == group.Label && !mobileDisabled;
                                 @if (group.Href is not null)
                                 {
-                                    <NavLink class="mobile-backoffice-link" href="@group.Href" Match="NavLinkMatch.Prefix" @onclick="CloseMobileNav">
+                                    <NavLink class="@("mobile-backoffice-link" + (mobileDisabled ? " menu-disabled" : ""))" tabindex="@(mobileDisabled ? "-1" : null)" href="@group.Href" Match="NavLinkMatch.Prefix" @onclick="CloseMobileNav">
                                         <span>@I18n.T(group.Label)</span>
                                     </NavLink>
                                 }
                                 else
                                 {
                                     <div class="mobile-backoffice-group @(isExpanded ? "open" : string.Empty)">
-                                        <button type="button" class="mobile-backoffice-toggle @(isExpanded ? "is-open" : string.Empty)" @onclick="() => ToggleMobileBackOffice(group.Label)" aria-expanded="@isExpanded">
+                                        <button type="button" class="mobile-backoffice-toggle @(isExpanded ? "is-open" : string.Empty) @(mobileDisabled ? "menu-disabled" : string.Empty)" disabled="@mobileDisabled" @onclick="() => ToggleMobileBackOffice(group.Label)" aria-expanded="@isExpanded">
                                             <span>@I18n.T(group.Label)</span>
                                             <svg class="menu-root-caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                                                 <polyline points="6 9 12 15 18 9"></polyline>
@@ -338,9 +344,10 @@
                                         @if (isExpanded)
                                         {
                                             <div class="mobile-backoffice-items">
-                                                @foreach (var item in group.Items.Where(item => ModuleAccess.CanView(mobileBackOfficeAuth.User, item.Roles) && Licensed(item.Href)))
+                                                @foreach (var item in group.Items)
                                                 {
-                                                    <NavLink class="mobile-backoffice-subitem" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseMobileNav">
+                                                    var subOk = ModuleAccess.CanView(mobileBackOfficeAuth.User, item.Roles) && Licensed(item.Href);
+                                                    <NavLink class="@("mobile-backoffice-subitem" + (subOk ? "" : " menu-disabled"))" tabindex="@(subOk ? null : "-1")" href="@item.Href" Match="NavLinkMatch.All" @onclick="CloseMobileNav">
                                                         @if (!string.IsNullOrEmpty(item.Icon))
                                                         {
                                                             <span class="mobile-subitem-icon">@item.Icon</span>
@@ -851,20 +858,21 @@
         _ => "📁"
     };
 
-    private static IReadOnlyList<MegaMenuSection> BuildHeaderSections(IEnumerable<BackOfficeItem> items) => items
+    private IReadOnlyList<MegaMenuSection> BuildHeaderSections(IEnumerable<BackOfficeItem> items, System.Security.Claims.ClaimsPrincipal user) => items
         .GroupBy(x => x.Section)
         .Select(g => new MegaMenuSection(g.Key, HeaderSectionIcon(g.Key),
-            g.Select(x => new MegaMenuLink(x.Label, x.Href, string.IsNullOrEmpty(x.Icon) ? "•" : x.Icon, x.Subtitle)).ToList()))
+            g.Select(x => new MegaMenuLink(x.Label, x.Href, string.IsNullOrEmpty(x.Icon) ? "•" : x.Icon, x.Subtitle,
+                Disabled: !(ModuleAccess.CanView(user, x.Roles) && Licensed(x.Href)))).ToList()))
         .ToList();
 
     private static MegaMenuLink? HeaderGroupFooter(string label, System.Security.Claims.ClaimsPrincipal user) => label switch
     {
-        "Pharmacy" when user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.PharmacyOperator)
-            => new MegaMenuLink("Medicine List & Setup", "/pharmacy/masters", "⚙️", "Medicines, generics, dosage types, suppliers & stores"),
-        "Canteen" when user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.Cashier)
-            => new MegaMenuLink("Products & Menu", "/canteen/products", "📋", "Food items, pricing & menu catalogue"),
-        "Store" when user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.StoreKeeper)
-            => new MegaMenuLink("Item List & Setup", "/store/products", "⚙️", "Items, categories, suppliers, sub-stores & departments"),
+        "Pharmacy"
+            => new MegaMenuLink("Medicine List & Setup", "/pharmacy/masters", "⚙️", "Medicines, generics, dosage types, suppliers & stores", Disabled: !(user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.PharmacyOperator))),
+        "Canteen"
+            => new MegaMenuLink("Products & Menu", "/canteen/products", "📋", "Food items, pricing & menu catalogue", Disabled: !(user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.CanteenOperator))),
+        "Store"
+            => new MegaMenuLink("Item List & Setup", "/store/products", "⚙️", "Items, categories, suppliers, sub-stores & departments", Disabled: !(user.IsInRole(RoleNames.Administrator) || user.IsInRole(RoleNames.StoreKeeper))),
         _ => null
     };
 
@@ -886,11 +894,11 @@
             new("Purchase / Stock In", "/pharmacy/purchases", ModuleAccess.PharmacyPurchases, "Purchase & Suppliers", "📥", "Receive challan & add stock"),
             new("Supplier Due & Return", "/pharmacy/returns-payments", ModuleAccess.PharmacyReturns, "Purchase & Suppliers", "💳", "Supplier payment & purchase return")
         ]),
-        new("Canteen", "C", ModuleAccess.Canteen,
+        new("Canteen", "C", ModuleAccess.CanteenDues,
         [
             new("Canteen Sales (POS)", "/canteen/sales", ModuleAccess.Canteen, "Cafeteria Operations", "🍽️", "Walk-in food, beverage & staff POS billing"),
             new("Stock Challan", "/canteen/challan", ModuleAccess.Canteen, "Cafeteria Operations", "📥", "Kitchen raw materials & stock inward challan"),
-            new("Staff Dues Collection", "/canteen/dues", ModuleAccess.Canteen, "Cafeteria Operations", "🧾", "Collect staff credit dues, statement print")
+            new("Staff Dues Collection", "/canteen/dues", ModuleAccess.CanteenDues, "Cafeteria Operations", "🧾", "Collect staff credit dues, statement print")
         ]),
         new("Store", "S", ModuleAccess.StoreGroup,
         [
@@ -907,18 +915,18 @@
             new("Goods Receive (GRN)", "/store/challan", ModuleAccess.StoreManage, "Receiving & Reports", "📥", "Receive supplier items with batch & expiry"),
             new("Consumption Report", "/store/reports", ModuleAccess.StoreManage, "Receiving & Reports", "📊", "Department & item usage, item ledger")
         ]),
-        new("HRM", "HRM", ModuleAccess.AdministratorOnly, [], "/hrm"),
-        new("Accounts", "A", ModuleAccess.Reports,
+        new("HRM", "HRM", ModuleAccess.Hrm, [], "/hrm"),
+        new("Accounts", "A", ModuleAccess.AccountsGroup,
         [
-            new("Vouchers", "/accounts?view=voucher", ModuleAccess.Accounts, "Ledger", "🧾", "Receipt, payment, expense & journal vouchers"),
+            new("Vouchers", "/accounts?view=voucher", ModuleAccess.Finance, "Ledger", "🧾", "Receipt, payment, expense & journal vouchers"),
             new("Ledger & Closing", "/accounts?view=report", ModuleAccess.Accounts, "Ledger", "📒", "Account ledger, cash reconciliation & day closing"),
-            new("Chart of Accounts", "/accounts?view=particulars", ModuleAccess.Accounts, "Ledger", "🗂️", "Chart of accounts, ledger codes & head setup"),
-            new("Expense & Payments", "/accounts/expenses", ModuleAccess.Accounts, "Income & Expense", "💸", "Salary, utility bills, purchases, supplier & doctor dues"),
-            new("Profit & Loss", "/accounts/profit-loss", ModuleAccess.AdministratorOnly, "Income & Expense", "📈", "Income vs expense, department profit, trial balance, dues"),
-            new("Accounts Setup", "/accounts/setup", ModuleAccess.AdministratorOnly, "Income & Expense", "⚙️", "Doctor visit share, blood bag charge, payment ledgers"),
-            new("Cost Centers", "/accounts/cost-centers", ModuleAccess.AdministratorOnly, "Departments & Closing", "🏥", "Department result, service mapping, cost sharing rules"),
-            new("Fixed Assets", "/accounts/fixed-assets", ModuleAccess.AdministratorOnly, "Departments & Closing", "🏗️", "Machine & furniture register, transfer, disposal"),
-            new("Month-End Close", "/accounts/month-end", ModuleAccess.AdministratorOnly, "Departments & Closing", "🗓️", "Depreciation, cost allocation, month lock"),
+            new("Chart of Accounts", "/accounts?view=particulars", ModuleAccess.Finance, "Ledger", "🗂️", "Chart of accounts, ledger codes & head setup"),
+            new("Expense & Payments", "/accounts/expenses", ModuleAccess.Finance, "Income & Expense", "💸", "Salary, utility bills, purchases, supplier & doctor dues"),
+            new("Profit & Loss", "/accounts/profit-loss", ModuleAccess.Finance, "Income & Expense", "📈", "Income vs expense, department profit, trial balance, dues"),
+            new("Accounts Setup", "/accounts/setup", ModuleAccess.Finance, "Income & Expense", "⚙️", "Doctor visit share, blood bag charge, payment ledgers"),
+            new("Cost Centers", "/accounts/cost-centers", ModuleAccess.Finance, "Departments & Closing", "🏥", "Department result, service mapping, cost sharing rules"),
+            new("Fixed Assets", "/accounts/fixed-assets", ModuleAccess.Finance, "Departments & Closing", "🏗️", "Machine & furniture register, transfer, disposal"),
+            new("Month-End Close", "/accounts/month-end", ModuleAccess.Finance, "Departments & Closing", "🗓️", "Depreciation, cost allocation, month lock"),
             new("Financial Reports", "/reports/financial", ModuleAccess.Reports, "Reports", "💰", "Departmental revenue, discounts, dues & cashier summary"),
             new("MIS Report", "/reports/mis", ModuleAccess.Reports, "Reports", "📊", "Hospital KPIs, patient volume & occupancy metrics"),
             new("Reports Hub", "/reports", ModuleAccess.Reports, "Reports", "🏛️", "Unified reporting portal & live hospital pulse")
@@ -946,6 +954,9 @@
         if (user.IsInRole(RoleNames.Nurse)) return "Nurse";
         if (user.IsInRole(RoleNames.Authorizer)) return "Authorizer";
         if (user.IsInRole(RoleNames.StoreKeeper)) return "Store Keeper";
+        if (user.IsInRole(RoleNames.Accountant)) return "Accountant";
+        if (user.IsInRole(RoleNames.CanteenOperator)) return "Canteen";
+        if (user.IsInRole(RoleNames.HROfficer)) return "HR Officer";
         return "Staff";
     }
 

@@ -26,7 +26,8 @@ public static class ModuleAccess
     public static readonly string[] PharmacyPrescriptions = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.PharmacyOperator];
     public static readonly string[] PharmacyStock = [RoleNames.Administrator, RoleNames.PharmacyOperator];
     public static readonly string[] BloodBank = [RoleNames.Administrator, RoleNames.BloodBankOperator, RoleNames.LabTechnician, RoleNames.Doctor, RoleNames.Nurse, RoleNames.IPDOperator];
-    public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.Cashier];
+    public static readonly string[] Canteen = [RoleNames.Administrator, RoleNames.CanteenOperator];
+    public static readonly string[] CanteenDues = [RoleNames.Administrator, RoleNames.CanteenOperator, RoleNames.Accountant];
     /// <summary>Runs the hospital store: receive, issue, approve requisitions, stock control, setup.</summary>
     public static readonly string[] StoreManage = [RoleNames.Administrator, RoleNames.StoreKeeper];
     /// <summary>Department staff who may raise store requisitions.</summary>
@@ -35,8 +36,14 @@ public static class ModuleAccess
         RoleNames.Administrator, RoleNames.StoreKeeper, RoleNames.Nurse, RoleNames.LabTechnician, RoleNames.OTOperator,
         RoleNames.IPDOperator, RoleNames.EmergencyOperator, RoleNames.Reception, RoleNames.PharmacyOperator
     ];
-    public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Reception, RoleNames.Cashier];
-    public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Cashier];
+    /// <summary>Financial / MIS reports and the reports hub.</summary>
+    public static readonly string[] Reports = [RoleNames.Administrator, RoleNames.Accountant];
+    /// <summary>Vouchers, chart of accounts, expenses, profit &amp; loss, month-end.</summary>
+    public static readonly string[] Finance = [RoleNames.Administrator, RoleNames.Accountant];
+    /// <summary>Accounts page: finance staff, plus Cashier for their own day closing.</summary>
+    public static readonly string[] Accounts = [RoleNames.Administrator, RoleNames.Accountant, RoleNames.Cashier];
+    public static readonly string[] Hrm = [RoleNames.Administrator, RoleNames.HROfficer];
+    public static readonly string[] AccountsGroup = [RoleNames.Administrator, RoleNames.Accountant, RoleNames.Cashier];
     public static readonly string[] OperationList = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.OTOperator, RoleNames.Nurse];
     public static readonly string[] OtNotes = [RoleNames.Administrator, RoleNames.Doctor, RoleNames.OTOperator];
     public static readonly string[] NurseDesk = [RoleNames.Administrator, RoleNames.Nurse, RoleNames.Doctor, RoleNames.Reception];

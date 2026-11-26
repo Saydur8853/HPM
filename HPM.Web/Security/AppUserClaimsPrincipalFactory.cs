@@ -28,6 +28,9 @@ public sealed class AppUserClaimsPrincipalFactory(
             identity.AddClaim(new Claim(DoctorProfileIdClaim, user.DoctorProfileID.Value.ToString()));
         if (await UserManager.IsInRoleAsync(user, RoleNames.Patient) && !string.IsNullOrWhiteSpace(user.PhoneNumber))
             identity.AddClaim(new Claim(PatientContactFingerprintClaim, ContactFingerprint(user.PhoneNumber)));
+        // The hospital owner has every permission an administrator has.
+        if (await UserManager.IsInRoleAsync(user, RoleNames.HospitalOwner) && !identity.HasClaim(identity.RoleClaimType, RoleNames.Administrator))
+            identity.AddClaim(new Claim(identity.RoleClaimType, RoleNames.Administrator));
         if (user.MustChangePassword)
         {
             foreach (var roleClaim in identity.FindAll(identity.RoleClaimType).ToList())

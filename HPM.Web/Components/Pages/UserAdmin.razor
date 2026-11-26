@@ -10,6 +10,18 @@
 
 <PageTitle>@I18n.T("Users & Roles", "Users & Roles") | @Branding.HospitalName</PageTitle>
 
+<style>
+    .ua-role-groups { display: flex; flex-direction: column; gap: 8px; }
+    .ua-role-group-title { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; }
+    .ua-role-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .ua-role-chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 999px; background: #fff; color: #475569; font-size: 12px; font-weight: 650; cursor: pointer; user-select: none; transition: all .12s; }
+    .ua-role-chip:hover { border-color: #0284c7; color: #0284c7; }
+    .ua-role-chip.on { background: #0284c7; border-color: #0284c7; color: #fff; }
+    .ua-role-chip input { display: none; }
+    .ua-role-hint { display: block; margin-top: 6px; font-size: 11px; color: #64748b; }
+    .ua-role-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+</style>
+
 <div class="useradmin-container">
     <!-- Modern Header -->
     <div class="useradmin-header">
@@ -99,22 +111,37 @@
                         </div>
                     </div>
 
-                    <!-- Role Selection -->
+                    <!-- Role Selection (multiple) -->
                     <div class="useradmin-field">
                         <div class="useradmin-field-label">
-                            <span>@I18n.T("System Role", "System Role") <span class="req">*</span></span>
+                            <span>@I18n.T("Roles", "রোল") <span class="req">*</span></span>
                         </div>
-                        <InputSelect @bind-Value="editor.Role" class="useradmin-select">
-                            <option value="">@I18n.T("-- Select Operational Role --", "-- Select Operational Role --")</option>
-                            @foreach (var role in allowedRoles)
+                        <div class="ua-role-groups">
+                            @foreach (var group in RoleGroups)
                             {
-                                <option value="@role">@role</option>
+                                var groupRoles = group.Roles.Where(r => allowedRoles.Contains(r)).ToList();
+                                if (groupRoles.Count == 0) continue;
+                                <div class="ua-role-group">
+                                    <span class="ua-role-group-title">@I18n.T(group.Title, group.TitleBn)</span>
+                                    <div class="ua-role-chips">
+                                        @foreach (var role in groupRoles)
+                                        {
+                                            var r = role;
+                                            var on = editor.Roles.Contains(r);
+                                            <label class="ua-role-chip @(on ? "on" : "")">
+                                                <input type="checkbox" checked="@on" @onchange="() => ToggleRole(r)" />
+                                                <span>@r</span>
+                                            </label>
+                                        }
+                                    </div>
+                                </div>
                             }
-                        </InputSelect>
+                        </div>
+                        <small class="ua-role-hint">@I18n.T("One user can have several roles (e.g. Cashier + Canteen Operator).", "একজন user-কে একাধিক রোল দেওয়া যায় (যেমন Cashier + Canteen Operator)।")</small>
                     </div>
 
                     <!-- Doctor Profile Link (Trigger Modal) -->
-                    @if (editor.Role == RoleNames.Doctor)
+                    @if (editor.Roles.Contains(RoleNames.Doctor))
                     {
                         <div class="useradmin-field doctor-link-card">
                             <div class="useradmin-field-label">
@@ -305,7 +332,7 @@
                     <thead>
                         <tr>
                             <th>@I18n.T("Staff Member", "Staff Member")</th>
-                            <th>@I18n.T("Role", "Role")</th>
+                            <th>@I18n.T("Roles", "রোল")</th>
                             <th>@I18n.T("Status", "Status")</th>
                             <th>@I18n.T("Created", "Created")</th>
                             <th style="text-align: right;">@I18n.T("Action", "Action")</th>
@@ -325,7 +352,8 @@
                         {
                             @foreach (var user in FilteredUsers)
                             {
-                                var userRole = RoleOf(user.Id);
+                                var userRoleList = RolesOf(user.Id);
+                                var userRole = userRoleList.FirstOrDefault() ?? "No role";
                                 <tr class="@(editor.ID == user.Id ? "row-selected" : "")">
                                     <td>
                                         <div class="user-identity-cell">
@@ -345,9 +373,12 @@
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="role-badge @GetRoleBadgeClass(userRole)">
-                                            @userRole
-                                        </span>
+                                        <div class="ua-role-badges">
+                                            @foreach (var badgeRole in userRoleList)
+                                            {
+                                                <span class="role-badge @GetRoleBadgeClass(badgeRole)">@badgeRole</span>
+                                            }
+                                        </div>
                                     </td>
                                     <td>
                                         <span class="user-status-pill @(user.IsActive ? "status-active" : "status-inactive")">
@@ -450,7 +481,7 @@
     private UserEditor editor = new() { IsActive = true };
     private List<AppUser> users = [];
     private List<DoctorsProfile> doctors = [];
-    private Dictionary<int, string> userRoles = [];
+    private Dictionary<int, List<string>> userRoles = [];
     private List<string> allowedRoles = [];
     private string message = string.Empty;
     private string messageClass = "success";
@@ -515,8 +546,8 @@
 
     private IEnumerable<AppUser> FilteredUsers => users.Where(u =>
     {
-        var role = RoleOf(u.Id);
-        if (!string.IsNullOrWhiteSpace(roleFilter) && role != roleFilter) return false;
+        var roles = RolesOf(u.Id);
+        if (!string.IsNullOrWhiteSpace(roleFilter) && !roles.Contains(roleFilter)) return false;
         if (statusFilter == "active" && !u.IsActive) return false;
         if (statusFilter == "inactive" && u.IsActive) return false;
         if (!string.IsNullOrWhiteSpace(searchTerm))
@@ -525,7 +556,7 @@
             return (u.DisplayName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (u.UserName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
                 || (u.Email?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
-                || role.Contains(term, StringComparison.OrdinalIgnoreCase);
+                || roles.Any(r => r.Contains(term, StringComparison.OrdinalIgnoreCase));
         }
         return true;
     });
@@ -557,9 +588,10 @@
         userRoles = new();
         foreach (var user in users)
         {
-            userRoles[user.Id] = (await UserManager.GetRolesAsync(user)).FirstOrDefault(x => allowedRoles.Contains(x)) ?? "No role";
+            var assigned = await UserManager.GetRolesAsync(user);
+            userRoles[user.Id] = allowedRoles.Where(assigned.Contains).ToList();
         }
-        users = users.Where(x => allowedRoles.Contains(userRoles[x.Id])).ToList();
+        users = users.Where(x => userRoles[x.Id].Count > 0).ToList();
     }
 
     private void TogglePasswordVisibility()
@@ -581,13 +613,13 @@
 
     private async Task SaveAsync()
     {
-        if (string.IsNullOrWhiteSpace(editor.DisplayName) || string.IsNullOrWhiteSpace(editor.UserName) || string.IsNullOrWhiteSpace(editor.Role))
+        if (string.IsNullOrWhiteSpace(editor.DisplayName) || string.IsNullOrWhiteSpace(editor.UserName) || editor.Roles.Count == 0)
         {
-            Fail(I18n.IsBangla ? "নাম, ইউজারনেম এবং রোল আবশ্যক।" : "Display name, username and role are required.");
+            Fail(I18n.IsBangla ? "নাম, ইউজারনেম এবং অন্তত একটি রোল আবশ্যক।" : "Display name, username and at least one role are required.");
             return;
         }
 
-        if (!allowedRoles.Contains(editor.Role))
+        if (editor.Roles.Any(r => !allowedRoles.Contains(r)))
         {
             Fail(I18n.IsBangla ? "সঠিক রোল নির্বাচন করুন।" : "Select a valid role.");
             return;
@@ -636,7 +668,7 @@
             DisplayName = user.DisplayName,
             UserName = user.UserName ?? "",
             Email = user.Email,
-            Role = RoleOf(user.Id),
+            Roles = RolesOf(user.Id).ToList(),
             IsActive = user.IsActive,
             DoctorProfileID = user.DoctorProfileID,
             Password = string.Empty
@@ -673,13 +705,28 @@
         editor.DisplayName,
         editor.UserName,
         editor.Email,
-        editor.Role,
+        allowedRoles.Where(editor.Roles.Contains).ToList(),
         editor.Password,
         editor.IsActive,
-        editor.Role == RoleNames.Doctor ? editor.DoctorProfileID : null
+        editor.Roles.Contains(RoleNames.Doctor) ? editor.DoctorProfileID : null
     );
 
-    private string RoleOf(int id) => userRoles.TryGetValue(id, out var role) ? role : "No role";
+    private IReadOnlyList<string> RolesOf(int id) => userRoles.TryGetValue(id, out var roles) ? roles : [];
+
+    private void ToggleRole(string role)
+    {
+        if (!editor.Roles.Remove(role)) editor.Roles.Add(role);
+    }
+
+    private sealed record RoleGroup(string Title, string TitleBn, string[] Roles);
+
+    private static readonly RoleGroup[] RoleGroups =
+    [
+        new("Front desk & cash", "ফ্রন্ট ডেস্ক ও ক্যাশ", [RoleNames.Reception, RoleNames.Cashier, RoleNames.Authorizer]),
+        new("Clinical", "ক্লিনিক্যাল", [RoleNames.Doctor, RoleNames.Nurse, RoleNames.LabTechnician, RoleNames.IPDOperator, RoleNames.EmergencyOperator, RoleNames.OTOperator, RoleNames.BloodBankOperator]),
+        new("Pharmacy, store & canteen", "ফার্মেসি, স্টোর ও ক্যান্টিন", [RoleNames.PharmacyOperator, RoleNames.StoreKeeper, RoleNames.CanteenOperator]),
+        new("Office", "অফিস", [RoleNames.Accountant, RoleNames.HROfficer, RoleNames.Administrator]),
+    ];
 
     private void Reset()
     {
@@ -722,6 +769,10 @@
         RoleNames.LabTechnician => "role-badge-lab",
         RoleNames.PharmacyOperator => "role-badge-pharmacy",
         RoleNames.Authorizer => "role-badge-authorizer",
+        RoleNames.Accountant => "role-badge-admin",
+        RoleNames.CanteenOperator => "role-badge-pharmacy",
+        RoleNames.HROfficer => "role-badge-reception",
+        RoleNames.StoreKeeper => "role-badge-lab",
         _ => "role-badge-default"
     };
 
@@ -744,7 +795,7 @@
         public string DisplayName { get; set; } = "";
         public string UserName { get; set; } = "";
         public string? Email { get; set; }
-        public string Role { get; set; } = "";
+        public List<string> Roles { get; set; } = [];
         public string Password { get; set; } = "";
         public bool IsActive { get; set; } = true;
         public int? DoctorProfileID { get; set; }

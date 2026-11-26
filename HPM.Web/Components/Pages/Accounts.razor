@@ -1,5 +1,5 @@
 @page "/accounts"
-@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Cashier)]
+@attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Accountant + "," + RoleNames.Cashier)]
 @implements IDisposable
 @using HPM.Web.Components.Common
 @using HPM.Web.Data
@@ -455,6 +455,8 @@
         </div>
     }
 
+    @if (!cashierOnly)
+    {
     <div class="acc-kpi-grid">
         <div class="acc-kpi-card">
             <div>
@@ -495,6 +497,7 @@
             <button type="button" class="acc-tab-btn @(activeTab == "particulars" ? "active" : "")" @onclick='() => SwitchTab("particulars")'>@I18n.T("Chart of Accounts", "হিসাব খাত")</button>
         </div>
     </div>
+    }
 
     <!-- =========================================================================
          TAB 1: VOUCHERS, JOURNAL ENTRY & APPROVAL CONTROL
@@ -819,6 +822,8 @@
         <!-- =========================================================================
              TAB 2: GENERAL LEDGER, CASH RECONCILIATION & SHIFT CLOSING
              ========================================================================= -->
+        @if (!cashierOnly)
+        {
         <!-- 2A. General Ledger Statement Card -->
         <div class="acc-card">
             <div class="acc-card-header">
@@ -914,6 +919,7 @@
             </div>
         </div>
 
+        }
         <!-- 2B. Two-Column Grid: Reconciliation & Cashier Day Closing -->
         <div class="acc-grid-2col">
             <!-- Left: Cashier Day Closing & Financial Period Lock -->
@@ -1044,6 +1050,8 @@
                 }
             </div>
 
+            @if (!cashierOnly)
+            {
             <!-- Right: Cash vs General Ledger Daily Reconciliation -->
             <div class="acc-card">
                 <div class="acc-card-header">
@@ -1099,6 +1107,7 @@
                     </table>
                 </div>
             </div>
+            }
         </div>
     }
 
@@ -1604,7 +1613,10 @@
     private string coaSearchText = "";
     private string coaTypeFilter = "ALL";
 
+    // Finance authority: Administrator (incl. Hospital Owner) or Accountant.
     private bool isAdministrator;
+    // A Cashier without finance authority only sees their own day closing.
+    private bool cashierOnly;
 
     private IEnumerable<AccountHead> FilteredPickerAccounts
     {
@@ -1709,7 +1721,9 @@
     {
         I18n.OnLanguageChanged += HandleLanguageChanged;
         var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
-        isAdministrator = principal.IsInRole(RoleNames.Administrator);
+        isAdministrator = principal.IsInRole(RoleNames.Administrator) || principal.IsInRole(RoleNames.Accountant);
+        cashierOnly = !isAdministrator && principal.IsInRole(RoleNames.Cashier);
+        if (cashierOnly) activeTab = "report";
         var userId = int.TryParse(principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : 0;
         await using var db = await DbFactory.CreateDbContextAsync();
         var dbUser = userId > 0 ? await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userId) : null;
@@ -1725,14 +1739,14 @@
             var v = ViewParam.Trim().ToLowerInvariant();
             if (v is "voucher" or "report" or "particulars")
             {
-                activeTab = v;
+                activeTab = cashierOnly ? "report" : v;
             }
         }
     }
 
     private void SwitchTab(string tab)
     {
-        activeTab = tab;
+        activeTab = cashierOnly ? "report" : tab;
     }
 
     private void HandleLanguageChanged() => InvokeAsync(StateHasChanged);
