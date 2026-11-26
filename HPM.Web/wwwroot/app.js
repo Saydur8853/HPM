@@ -1165,7 +1165,7 @@ window.hpm = {
             ${isLabReport ? `
             @page {
                 size: A4 portrait;
-                margin: 8mm 10mm 14mm 10mm;
+                margin: 6mm 9mm 10mm 9mm;
                 @bottom-right {
                     content: "Page " counter(page) " of " counter(pages);
                     color: #64748b;

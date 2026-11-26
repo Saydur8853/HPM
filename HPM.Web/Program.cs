@@ -451,8 +451,17 @@ app.MapPost("/patient/login-submit", async (HttpContext http, SignInManager<AppU
     if (user is not null && (await userManager.IsLockedOutAsync(user) || !await userManager.IsInRoleAsync(user, RoleNames.Patient)))
         return Results.LocalRedirect("/patient/login?error=1");
 
+    static string NormalizeBdPhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var cleaned = raw.Trim().Replace(" ", "").Replace("-", "");
+        if (cleaned.StartsWith("+88", StringComparison.Ordinal)) cleaned = cleaned[3..];
+        else if (cleaned.StartsWith("8801", StringComparison.Ordinal) && cleaned.Length >= 13) cleaned = cleaned[2..];
+        return cleaned;
+    }
+
     if (registration is null || string.IsNullOrWhiteSpace(registration.Contact) ||
-        !string.Equals(registration.Contact.Trim(), phone, StringComparison.Ordinal))
+        !string.Equals(NormalizeBdPhone(registration.Contact), NormalizeBdPhone(phone), StringComparison.Ordinal))
     {
         if (user is not null) await userManager.AccessFailedAsync(user);
         return Results.LocalRedirect("/patient/login?error=1");
