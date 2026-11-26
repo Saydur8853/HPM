@@ -717,6 +717,8 @@ public sealed class HpmDbContext : IdentityDbContext<AppUser, IdentityRole<int>,
         e.Property(x => x.EnteredBy).HasColumnName("Entered_By");
         e.Property(x => x.EncounterID).HasColumnName("Encounter_ID");
         e.Property(x => x.Remarks).HasMaxLength(200);
+        e.Property(x => x.PaymentMethod).HasColumnName("Payment_Method").HasMaxLength(40);
+        e.Property(x => x.PaymentRef).HasColumnName("Payment_Ref").HasMaxLength(100);
         e.HasIndex(x => x.EncounterID);
         e.HasIndex(x => new { x.ModuleID, x.PatientType, x.ID });
         e.HasIndex(x => new { x.ModuleID, x.TransDate });

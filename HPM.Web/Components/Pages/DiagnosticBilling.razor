@@ -494,6 +494,38 @@
                                     </div>
 
                                     <div class="diag-totals-row input-row">
+                                        <span class="totals-label">@I18n.T("Payment By"):</span>
+                                        <div class="diag-pay-methods">
+                                            @if (addingPaymentMethod)
+                                            {
+                                                <input class="diag-pay-new" @bind="newPaymentMethodName" @bind:event="oninput" maxlength="40"
+                                                       placeholder="@I18n.T("e.g. Card, bKash")" @onkeydown="HandleNewMethodKeyDown" />
+                                                <button type="button" class="diag-pay-chip on" title="@I18n.T("Save method")" @onclick="AddPaymentMethodAsync">✓</button>
+                                                <button type="button" class="diag-pay-chip" title="@I18n.T("Cancel")" @onclick="CancelAddPaymentMethod">✕</button>
+                                            }
+                                            else
+                                            {
+                                                @foreach (var pm in PaymentMethodNames)
+                                                {
+                                                    var name = pm;
+                                                    <button type="button" class="diag-pay-chip @(name == CurrentPaymentMethod ? "on" : "")" @onclick="() => SelectPaymentMethod(name)">@name</button>
+                                                }
+                                                <button type="button" class="diag-pay-chip add" title="@I18n.T("Add new method")" @onclick="StartAddPaymentMethod">+</button>
+                                            }
+                                        </div>
+                                    </div>
+
+                                    @if (!IsCashPayment)
+                                    {
+                                        <div class="diag-totals-row input-row">
+                                            <span class="totals-label">@I18n.T("Ref / Txn ID"):</span>
+                                            <div class="totals-input-wrap">
+                                                <input class="classic-input diag-tot-input" @bind="editor.PaymentRef" maxlength="100" placeholder="@I18n.T("Optional")" />
+                                            </div>
+                                        </div>
+                                    }
+
+                                    <div class="diag-totals-row input-row">
                                         <span class="totals-label">@I18n.T("Received"):</span>
                                         <div class="totals-input-wrap">
                                             <InputNumber class="classic-input diag-tot-input" @bind-Value="editor.Paid" @bind-Value:after="PaidChanged" />
@@ -1083,7 +1115,7 @@
                                 <td>@GetCashierName()</td>
                                 <td>—</td>
                                 <td>@editor.TransDate.ToString("dd/MM/yy")</td>
-                                <td>Cash</td>
+                                <td>@CurrentPaymentMethod@(string.IsNullOrWhiteSpace(editor.PaymentRef) ? "" : $" ({editor.PaymentRef})")</td>
                                 <td style="text-align: right;">@editor.Paid.ToString("N2")</td>
                             </tr>
                         </tbody>
@@ -1346,6 +1378,79 @@
     private bool paidManuallyEdited;
     private bool authorizeReleaseWithDue = false;
 
+    // Payment method (shared list with Pharmacy POS: Cash, Bank, MFS, user-added)
+    private const string NewMethodOption = "__new__";
+    private List<PharmacyPaymentMethod> paymentMethods = [];
+    private bool addingPaymentMethod;
+    private string newPaymentMethodName = "";
+    private string CurrentPaymentMethod => string.IsNullOrWhiteSpace(editor.PaymentMethod) ? PharmacyPaymentMethod.Cash : editor.PaymentMethod!;
+    private bool IsCashPayment => AccountingSetup.IsCashMethod(CurrentPaymentMethod);
+
+    private async Task LoadPaymentMethodsAsync(HpmDbContext db)
+    {
+        paymentMethods = await db.PharmacyPaymentMethods.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToListAsync();
+        if (!paymentMethods.Any(x => x.Name == PharmacyPaymentMethod.Cash))
+            paymentMethods.Insert(0, new PharmacyPaymentMethod { Name = PharmacyPaymentMethod.Cash, IsSystem = true });
+    }
+
+    private IEnumerable<string> PaymentMethodNames =>
+        paymentMethods.Select(x => x.Name).Append(CurrentPaymentMethod).Distinct();
+
+    private void StartAddPaymentMethod()
+    {
+        addingPaymentMethod = true;
+        newPaymentMethodName = "";
+    }
+
+    private void SelectPaymentMethod(string value)
+    {
+        editor.PaymentMethod = value;
+        if (IsCashPayment) editor.PaymentRef = null;
+    }
+
+    private async Task HandleNewMethodKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await AddPaymentMethodAsync();
+        else if (e.Key == "Escape") CancelAddPaymentMethod();
+    }
+
+    private void CancelAddPaymentMethod()
+    {
+        addingPaymentMethod = false;
+        newPaymentMethodName = "";
+    }
+
+    private async Task AddPaymentMethodAsync()
+    {
+        var name = (newPaymentMethodName ?? "").Trim();
+        if (name.Length < 2 || name.Length > 40 || name == NewMethodOption)
+        {
+            Fail(I18n.IsBangla ? "নাম ২ থেকে ৪০ অক্ষরের মধ্যে হতে হবে।" : "Payment method name must be 2 to 40 characters.");
+            return;
+        }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var existing = await db.PharmacyPaymentMethods.FirstOrDefaultAsync(x => x.Name == name);
+            if (existing == null)
+            {
+                var nextOrder = (await db.PharmacyPaymentMethods.MaxAsync(x => (int?)x.SortOrder) ?? 0) + 1;
+                db.PharmacyPaymentMethods.Add(new PharmacyPaymentMethod { Name = name, IsActive = true, SortOrder = nextOrder });
+            }
+            else existing.IsActive = true;
+            await db.SaveChangesAsync();
+            await LoadPaymentMethodsAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Fail(I18n.IsBangla ? "পেমেন্ট মেথড যোগ করা যায়নি।" : "Cannot add payment method.", ex.GetBaseException().Message);
+            return;
+        }
+        addingPaymentMethod = false;
+        newPaymentMethodName = "";
+        editor.PaymentMethod = paymentMethods.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase))?.Name ?? name;
+    }
+
     private string message = "";
     private string messageClass = "success";
 
@@ -1428,6 +1533,7 @@
             .OrderBy(x => x.GetEffectiveName())
             .ToList();
         (serviceCategoryNames, serviceCategories, availableServices) = await MasterCache.GetDiagnosticCatalogAsync();
+        await LoadPaymentMethodsAsync(db);
 
         recentMemos = await db.EmergencyMemos.AsNoTracking()
             .Where(x => x.ModuleID == 2 && x.PatientType == currentPatientType)
@@ -2519,6 +2625,9 @@
                     editor.EncounterID = diagnosticOrder.EncounterID;
                 }
 
+                editor.PaymentMethod = CurrentPaymentMethod;
+                editor.PaymentRef = IsCashPayment || string.IsNullOrWhiteSpace(editor.PaymentRef) ? null : editor.PaymentRef.Trim();
+
                 if (editor.ID == 0)
                 {
                     editor.EnteredBy = userId;
@@ -2595,8 +2704,11 @@
                 }
 
                 await OperationalAccounting.SyncSplitRevenueAsync(db, $"DIAGNOSTIC:{editor.ID}", editor.ID,
-                    revenueAmount, editor.Paid, editor.TransDate, userId, $"Diagnostic memo #{editor.ID}", isIpdMode ? null : 12,
+                    revenueAmount, editor.Paid, editor.TransDate, userId,
+                    $"Diagnostic memo #{editor.ID}{(IsCashPayment || editor.Paid <= 0 ? "" : $" via {CurrentPaymentMethod}{(editor.PaymentRef == null ? "" : $" (Ref: {editor.PaymentRef})")}")}",
+                    isIpdMode ? null : 12,
                     await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome),
+                    await AccountingSetup.PaymentAccountIdAsync(db, CurrentPaymentMethod),
                     revenueSplit: await DiagnosticSplitAsync(db, editor.Items.Select(x => (x.TestID, (decimal)x.Rate * (decimal)x.Quantity))));
                 // Referring doctor's commission is the hospital's expense and the doctor's payable.
                 await AccountingSetup.SyncDiagnosticCommissionAsync(db, editor.ID, editor.DoctorID ?? 0, editor.TransDate,

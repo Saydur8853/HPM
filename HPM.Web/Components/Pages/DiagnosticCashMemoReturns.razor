@@ -1227,17 +1227,19 @@
                 }
 
                 var diagIncomeId = await AccountingSetup.IdAsync(db, AccountCodes.DiagnosticIncome);
+                // money came in (and goes back) through the memo's payment method: Cash / Bank / MFS
+                var paidAccountId = await AccountingSetup.PaymentAccountIdAsync(db, source.PaymentMethod);
                 var originalReference = $"DIAGNOSTIC:{source.ID}";
                 if (!await db.AccountVouchers.AnyAsync(x => x.Reference == originalReference && x.IsPosted && x.Status != "Cancelled"))
                 {
                     var originalLines = new List<(int AccountID, decimal Debit, decimal Credit)>();
-                    if (source.Paid > 0) originalLines.Add((AccountingPosting.Cash, source.Paid, 0));
+                    if (source.Paid > 0) originalLines.Add((paidAccountId, source.Paid, 0));
                     if (net - source.Paid > 0) originalLines.Add((AccountingPosting.PatientReceivable, net - source.Paid, 0));
                     originalLines.Add((diagIncomeId, 0, net));
                     AccountingPosting.AddPostedVoucher(db, source.Paid > 0 ? "Receipt" : "Journal", source.TransDate, $"Diagnostic memo #{source.ID}", originalReference, source.EnteredBy, originalLines.ToArray());
                 }
                 var returnLines = new List<(int AccountID, decimal Debit, decimal Credit)> { (diagIncomeId, adjustment, 0) };
-                if (refund > 0) returnLines.Add((AccountingPosting.Cash, 0, refund));
+                if (refund > 0) returnLines.Add((paidAccountId, 0, refund));
                 if (receivableAdjustment > 0) returnLines.Add((AccountingPosting.PatientReceivable, 0, receivableAdjustment));
                 AccountingPosting.AddPostedVoucher(db, "Sales Return", now, $"Investigation return for memo #{source.ID}", $"DIAGNOSTIC-RETURN:{header.ID}", userId, returnLines.ToArray());
                 if (refund > 0) db.CentralCashCollections.Add(new CentralCashCollection { Amount = -refund, ModuleFlag = 12, HeadID = 12, EnteredBy = userId, TransDate = now, TransDateCL = now, ReferenceID = source.ID });

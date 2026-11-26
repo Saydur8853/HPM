@@ -88,6 +88,8 @@ public sealed class CashMemoDInvestigation
     public int EnteredBy { get; set; } = 1;
     public long? EncounterID { get; set; }
     [StringLength(200)] public string? Remarks { get; set; }
+    [StringLength(40)] public string? PaymentMethod { get; set; }
+    [StringLength(100)] public string? PaymentRef { get; set; }
     public List<CashMemoSubDInvestigation> Items { get; set; } = [];
 }
 

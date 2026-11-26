@@ -40,6 +40,14 @@ public static class StartupSchema
             BEGIN
                 ALTER TABLE [Cash_Memo] ADD [Payment_Ref] nvarchar(100) NULL;
             END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]') AND name = 'Payment_Method')
+            BEGIN
+                ALTER TABLE [Cash_Memo_DInvestigation] ADD [Payment_Method] nvarchar(40) NULL;
+            END
+            IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID(N'[Cash_Memo_DInvestigation]') AND name = 'Payment_Ref')
+            BEGIN
+                ALTER TABLE [Cash_Memo_DInvestigation] ADD [Payment_Ref] nvarchar(100) NULL;
+            END
             IF OBJECT_ID(N'[Pharmacy_Payment_Method]', N'U') IS NULL
             BEGIN
                 CREATE TABLE [Pharmacy_Payment_Method] (
