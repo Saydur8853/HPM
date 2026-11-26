@@ -3,6 +3,7 @@
 @attribute [Authorize(Roles = RoleNames.Administrator + "," + RoleNames.Doctor + "," + RoleNames.Nurse)]
 @inject IDbContextFactory<HpmDbContext> DbFactory
 @inject AuthenticationStateProvider AuthStateProvider
+@implements IDisposable
 @using System.Security.Claims
 
 <PageTitle>@I18n.T("Doctor Desk") | @Branding.HospitalName</PageTitle>
@@ -14,101 +15,323 @@
     {
         <DoctorDeskSkeleton />
     }
+    else if (accountNotLinked)
+    {
+        <div class="desk-alert danger">
+            <span class="ico">@Icon("alert")</span>
+            <div><strong>@I18n.T("This Doctor account is not linked to a Doctors Profile. Contact an administrator.")</strong>
+                <small>@I18n.T("Patient data is hidden until the account is linked, so that one doctor cannot see another doctor's patients.")</small></div>
+        </div>
+    }
     else
     {
+        @if (!string.IsNullOrWhiteSpace(message))
+        {
+            <div class="desk-alert @(messageOk ? "ok" : "danger")"><span class="ico">@Icon(messageOk ? "check" : "alert")</span><div><strong>@message</strong></div></div>
+        }
+
         <section class="doctor-kpis">
-            <article><span class="blue">Q</span><div><small>TODAY'S VISITS</small><strong>@todayEncounters.Count</strong><em>@todayEncounters.Count(x => x.Status == EncounterStatuses.Waiting) waiting</em></div></article>
-            <article><span class="amber">▶</span><div><small>IN CONSULTATION</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.InConsultation)</strong><em>Active clinical sessions</em></div></article>
-            <article><span class="green">✓</span><div><small>COMPLETED</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.Completed)</strong><em>Visits closed today</em></div></article>
-            <article><span class="violet">F</span><div><small>FOLLOW-UP DUE</small><strong>@followUps.Count(x => x.FollowUpDate <= DateTime.Today)</strong><em>@followUps.Count upcoming in total</em></div></article>
-            <article><span class="red">L</span><div><small>OPEN LAB ORDERS</small><strong>@openLabOrders</strong><em>Pending or billed orders</em></div></article>
+            <a href="/doctor/queue"><span class="blue">@Icon("users")</span><div><small>@I18n.T("Today's visits")</small><strong>@todayEncounters.Count</strong><em>@todayEncounters.Count(x => x.Status == EncounterStatuses.Waiting) @I18n.T("waiting")</em></div></a>
+            <a href="/doctor/queue"><span class="amber">@Icon("pulse")</span><div><small>@I18n.T("In consultation")</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.InConsultation)</strong><em>@I18n.T("Active clinical sessions")</em></div></a>
+            <a href="/doctor/queue"><span class="green">@Icon("check")</span><div><small>@I18n.T("Completed")</small><strong>@todayEncounters.Count(x => x.Status == EncounterStatuses.Completed)</strong><em>@I18n.T("Visits closed today")</em></div></a>
+            <a href="/doctor/follow-ups"><span class="violet">@Icon("calendar")</span><div><small>@I18n.T("Follow-up due")</small><strong>@followUps.Count(x => x.FollowUpDate <= DateTime.Today)</strong><em>@followUps.Count @I18n.T("in the next 30 days")</em></div></a>
+            <a href="#desk-lab-orders"><span class="red">@Icon("flask")</span><div><small>@I18n.T("Open lab orders")</small><strong>@labOrders.Count</strong><em>@labOrders.Count(x => x.Stage == LabStage.AwaitingBilling) @I18n.T("awaiting billing")</em></div></a>
         </section>
+
+        @if (staleEncounters.Count > 0)
+        {
+            <section class="doctor-panel stale-panel">
+                <header>
+                    <div><small>@I18n.T("Needs attention")</small><h2>@I18n.T("Unclosed visits from previous days") (@staleEncounters.Count)</h2></div>
+                    <span class="hint">@I18n.T("These patients were never completed. Close them so the queue and reports stay correct.")</span>
+                </header>
+                @foreach (var row in staleEncounters)
+                {
+                    <div class="doctor-row">
+                        <time class="overdue"><b>@row.VisitDate.Day</b><small>@row.VisitDate.ToString("MMM")</small></time>
+                        <span class="main"><strong>#@row.QueueNo · @row.PatientName</strong><small>@(row.PatientID ?? I18n.T("Walk-in")) · @DoctorName(row.DoctorID) · @AgeText(row.VisitDate)</small></span>
+                        <i class="@StatusClass(row.Status)">@DisplayStatus(row.Status)</i>
+                        <div class="row-actions">
+                            <a class="btn-mini" href="@QueueLink(row)">@I18n.T("Open")</a>
+                            @if (canClose)
+                            {
+                                @if (row.Status == EncounterStatuses.Waiting)
+                                {
+                                    <button class="btn-mini" disabled="@busy" @onclick="() => CloseStaleAsync(row.ID, EncounterStatuses.NoShow)">@I18n.T("No-show")</button>
+                                }
+                                <button class="btn-mini danger" disabled="@busy" @onclick="() => CloseStaleAsync(row.ID, EncounterStatuses.Cancelled)">@I18n.T("Cancel visit")</button>
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+        }
 
         <section class="doctor-grid">
             <article class="doctor-panel queue-panel">
-                <header><div><small>LIVE QUEUE</small><h2>Today's patient flow</h2></div><a href="/doctor/queue">View full queue →</a></header>
+                <header>
+                    <div><small>@I18n.T("Live queue")</small><h2>@I18n.T("Today's patient flow")</h2></div>
+                    <div class="head-actions">
+                        <button class="btn-icon" title="@I18n.T("Refresh")" disabled="@busy" @onclick="RefreshAsync">@Icon("refresh")</button>
+                        <span class="updated">@I18n.T("Updated") @lastUpdated.ToString("hh:mm:ss tt")</span>
+                    </div>
+                </header>
+                @{ var current = todayEncounters.Where(x => x.Status == EncounterStatuses.InConsultation).OrderBy(x => x.QueueNo).FirstOrDefault();
+                   var next = todayEncounters.Where(x => x.Status == EncounterStatuses.Waiting).OrderBy(x => x.Priority == "Normal" ? 1 : 0).ThenBy(x => x.QueueNo).FirstOrDefault(); }
+                @if (current is not null || next is not null)
+                {
+                    <div class="next-bar">
+                        @if (current is not null)
+                        {
+                            <a class="next-card active" href="@QueueLink(current)"><small>@I18n.T("Now in consultation")</small><strong>#@current.QueueNo · @current.PatientName</strong><span>@I18n.T("Continue") →</span></a>
+                        }
+                        @if (next is not null)
+                        {
+                            <a class="next-card" href="@QueueLink(next)"><small>@I18n.T("Next patient") @(next.Priority != "Normal" ? $"· {next.Priority}" : "")</small><strong>#@next.QueueNo · @next.PatientName</strong><span>@I18n.T("Call next patient") →</span></a>
+                        }
+                    </div>
+                }
                 @foreach (var row in todayEncounters.OrderBy(x => x.Status == EncounterStatuses.InConsultation ? 0 : x.Status == EncounterStatuses.Waiting ? 1 : 2).ThenBy(x => x.QueueNo).Take(8))
                 {
-                    <a class="doctor-row" href="@($"/doctor/queue?encounterId={row.ID}")">
-                        <b>#@row.QueueNo</b><span><strong>@row.PatientName</strong><small>@(row.PatientID ?? "Walk-in") · @DoctorName(row.DoctorID)</small></span><i class="@StatusClass(row.Status)">@DisplayStatus(row.Status)</i>
+                    <a class="doctor-row" href="@QueueLink(row)">
+                        <b class="qno">#@row.QueueNo</b>
+                        <span class="main"><strong>@row.PatientName</strong><small>@(row.PatientID ?? I18n.T("Walk-in")) · @DoctorName(row.DoctorID) · @row.CheckedInAt.ToString("hh:mm tt")</small></span>
+                        @if (row.Priority != "Normal") { <i class="urgent">@row.Priority</i> }
+                        <i class="@StatusClass(row.Status)">@DisplayStatus(row.Status)</i>
                     </a>
                 }
-                @if (todayEncounters.Count == 0) { <div class="doctor-empty">No checked-in patients today.</div> }
+                @if (todayEncounters.Count == 0) { <div class="doctor-empty">@I18n.T("No checked-in patients today.")</div> }
+                @if (todayEncounters.Count > 8) { <a class="panel-more" href="/doctor/queue">@I18n.T("View full queue") (@todayEncounters.Count) →</a> }
             </article>
 
             <article class="doctor-panel follow-panel">
-                <header><div><small>CONTINUITY OF CARE</small><h2>Follow-up schedule</h2></div><a href="/doctor/follow-ups">Manage →</a></header>
-                @foreach (var row in followUps.OrderBy(x => x.FollowUpDate).Take(7))
+                <header><div><small>@I18n.T("Continuity of care")</small><h2>@I18n.T("Follow-up schedule")</h2></div><a href="/doctor/follow-ups">@I18n.T("Manage") →</a></header>
+                @foreach (var row in followUps.Take(7))
                 {
-                    <a class="doctor-row" href="@($"/doctor/patient-documents/{row.PatientID}")">
-                        <time class="@(row.FollowUpDate < DateTime.Today ? "overdue" : string.Empty)"><b>@row.FollowUpDate?.Day</b><small>@row.FollowUpDate?.ToString("MMM")</small></time>
-                        <span><strong>@row.PatientName</strong><small>@(row.FollowUpReason ?? "Clinical follow-up")</small></span>
+                    <a class="doctor-row" href="@PatientLink(row.PatientID, "/doctor/follow-ups")">
+                        <time class="@(row.FollowUpDate < DateTime.Today ? "overdue" : row.FollowUpDate == DateTime.Today ? "today" : string.Empty)"><b>@row.FollowUpDate?.Day</b><small>@row.FollowUpDate?.ToString("MMM")</small></time>
+                        <span class="main"><strong>@row.PatientName</strong><small>@(row.FollowUpReason ?? I18n.T("Clinical follow-up")) · @(row.PatientID ?? I18n.T("Walk-in"))</small></span>
+                        @if (row.FollowUpDate < DateTime.Today) { <i class="overdue">@I18n.T("Overdue")</i> }
+                        else if (row.FollowUpDate == DateTime.Today) { <i class="waiting">@I18n.T("Today")</i> }
                     </a>
                 }
-                @if (followUps.Count == 0) { <div class="doctor-empty">No pending follow-ups.</div> }
+                @if (followUps.Count == 0) { <div class="doctor-empty">@I18n.T("No pending follow-ups.")</div> }
             </article>
 
             <article class="doctor-panel recent-panel">
-                <header><div><small>RECENT ACTIVITY</small><h2>Recently completed visits</h2></div><a href="/doctor/patient-documents">Patient records →</a></header>
+                <header><div><small>@I18n.T("Recent activity")</small><h2>@I18n.T("Recently completed visits")</h2></div><a href="/doctor/patient-documents">@I18n.T("Patient records") →</a></header>
                 @foreach (var row in recentCompleted.Take(8))
                 {
-                    <div class="doctor-row"><span class="avatar">@Initials(row.PatientName)</span><span><strong>@row.PatientName</strong><small>@row.VisitDate.ToString("dd MMM") · @(row.Diagnosis ?? "Diagnosis not recorded")</small></span><i class="done">Completed</i></div>
+                    <a class="doctor-row" href="@PatientLink(row.PatientID, "/doctor/patient-documents")">
+                        <span class="avatar">@Initials(row.PatientName)</span>
+                        <span class="main"><strong>@row.PatientName</strong><small>@row.VisitDate.ToString("dd MMM") · @(row.Diagnosis ?? I18n.T("Diagnosis not recorded"))</small></span>
+                        <i class="done">@I18n.T("Completed")</i>
+                    </a>
                 }
-                @if (recentCompleted.Count == 0) { <div class="doctor-empty">No recent completed visits.</div> }
+                @if (recentCompleted.Count == 0) { <div class="doctor-empty">@I18n.T("No recent completed visits.")</div> }
             </article>
 
-            <article class="doctor-panel shortcuts-panel">
-                <header><div><small>QUICK ACCESS</small><h2>Clinical tools</h2></div></header>
-                <div class="doctor-shortcuts">
-                    <a href="/doctor/queue"><b>Q</b><span>My Queue<small>Consultation and vitals</small></span></a>
-                    <a href="/doctor/prescriptions"><b>Rx</b><span>Prescriptions<small>Medication orders</small></span></a>
-                    <a href="/doctor/patient-documents"><b>R</b><span>Patient Records<small>Reports and history</small></span></a>
-                    <a href="/doctor/follow-ups"><b>F</b><span>Follow-ups<small>Due and upcoming</small></span></a>
-                    <a href="/doctor/my-earnings"><b>৳</b><span>Diagnostic Earnings<small>Financial statement</small></span></a>
-                </div>
+            <article class="doctor-panel lab-panel" id="desk-lab-orders">
+                <header><div><small>@I18n.T("Diagnostics")</small><h2>@I18n.T("Open lab orders")</h2></div><span class="hint">@I18n.T("Ordered tests not yet reported")</span></header>
+                @foreach (var row in labOrders.Take(8))
+                {
+                    <a class="doctor-row" href="@(canOrder ? $"/doctor/orders?encounterId={row.EncounterID}" : PatientLink(row.PatientID, "/doctor/patient-documents"))">
+                        <span class="avatar lab">@Icon("flask")</span>
+                        <span class="main"><strong>@row.PatientName</strong><small>@row.ItemCount @I18n.T("test(s)") · @row.OrderedAt.ToString("dd MMM, hh:mm tt") · @(row.PatientID ?? I18n.T("Walk-in"))</small></span>
+                        <i class="@LabStageClass(row.Stage)">@LabStageText(row.Stage)</i>
+                    </a>
+                }
+                @if (labOrders.Count == 0) { <div class="doctor-empty">@I18n.T("No open lab orders.")</div> }
+                @if (labOrders.Count > 8) { <div class="panel-more muted">+@(labOrders.Count - 8) @I18n.T("more")</div> }
             </article>
         </section>
     }
 </main>
 
 @code {
+    private enum LabStage { AwaitingBilling, SamplePending, InLab }
+    private sealed record LabRow(long ID, long EncounterID, string? PatientID, string PatientName, DateTime OrderedAt, int ItemCount, LabStage Stage);
+
+    private const int RefreshSeconds = 30;
     private bool loading = true;
+    private bool busy;
+    private bool accountNotLinked;
+    private bool canClose;
+    private bool canOrder;
     private int? activeDoctorId;
+    private string? message;
+    private bool messageOk;
+    private DateTime lastUpdated = DateTime.Now;
     private List<DoctorsProfile> doctors = [];
     private List<PatientEncounter> todayEncounters = [];
+    private List<PatientEncounter> staleEncounters = [];
     private List<PatientEncounter> followUps = [];
     private List<PatientEncounter> recentCompleted = [];
-    private int openLabOrders;
+    private List<LabRow> labOrders = [];
+    private readonly CancellationTokenSource refreshCts = new();
 
     protected override async Task OnInitializedAsync()
     {
         var principal = (await AuthStateProvider.GetAuthenticationStateAsync()).User;
-        if (int.TryParse(principal.FindFirstValue(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim), out var doctorId)) activeDoctorId = doctorId;
-        await using var db = await DbFactory.CreateDbContextAsync();
-        doctors = await db.Doctors.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.Name).ToListAsync();
-        var todayQuery = db.PatientEncounters.AsNoTracking().Where(x => x.VisitDate == DateTime.Today);
-        var followQuery = db.PatientEncounters.AsNoTracking().Where(x => x.FollowUpRequired && x.FollowUpCompletedAt == null && x.FollowUpDate != null);
-        var recentQuery = db.PatientEncounters.AsNoTracking().Where(x => x.Status == EncounterStatuses.Completed);
-        var labQuery = db.DiagnosticOrders.AsNoTracking().Where(x => x.Status == "Pending" || x.Status == "Billed");
-        if (activeDoctorId.HasValue)
+        var isDoctor = principal.IsInRole(RoleNames.Doctor);
+        var isAdmin = principal.IsInRole(RoleNames.Administrator);
+        if (int.TryParse(principal.FindFirst(AppUserClaimsPrincipalFactory.DoctorProfileIdClaim)?.Value, out var doctorId)) activeDoctorId = doctorId;
+        // Same rule as My Queue: an unlinked Doctor account must not see the whole hospital's patients.
+        accountNotLinked = isDoctor && !activeDoctorId.HasValue;
+        canClose = isAdmin || (isDoctor && activeDoctorId.HasValue);
+        canOrder = isAdmin || isDoctor;
+        if (!accountNotLinked)
         {
-            todayQuery = todayQuery.Where(x => x.DoctorID == activeDoctorId.Value);
-            followQuery = followQuery.Where(x => x.DoctorID == activeDoctorId.Value);
-            recentQuery = recentQuery.Where(x => x.DoctorID == activeDoctorId.Value);
-            labQuery = labQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+            await LoadAsync();
+            _ = AutoRefreshAsync(refreshCts.Token);
         }
-        todayEncounters = await todayQuery.ToListAsync();
-        followUps = await followQuery.Where(x => x.FollowUpDate <= DateTime.Today.AddDays(30)).OrderBy(x => x.FollowUpDate).Take(100).ToListAsync();
-        recentCompleted = await recentQuery.OrderByDescending(x => x.CompletedAt).Take(20).ToListAsync();
-        var labOrders = await labQuery.Select(x => new { x.Status, x.BilledMemoID }).ToListAsync();
-        var memoIds = labOrders.Where(x => x.BilledMemoID.HasValue).Select(x => x.BilledMemoID!.Value).ToArray();
-        var sampleStates = memoIds.Length == 0 ? [] : await db.LabSampleCollections.AsNoTracking().Where(x => memoIds.Contains(x.MemoID)).Select(x => new { x.MemoID, x.Status }).ToListAsync();
-        openLabOrders = labOrders.Count(x => x.Status == "Pending" || !x.BilledMemoID.HasValue || !sampleStates.Where(s => s.MemoID == x.BilledMemoID.Value).Any() || sampleStates.Where(s => s.MemoID == x.BilledMemoID.Value).Any(s => s.Status != "Completed"));
         loading = false;
     }
 
-    private string DoctorName(int id) { var d = doctors.FirstOrDefault(x => x.ID == id); return d is null ? "Doctor" : $"{d.Title} {d.Name}".Trim(); }
+    private async Task LoadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var today = DateTime.Today;
+        doctors = await db.Doctors.AsNoTracking().OrderBy(x => x.Name).ToListAsync();
+        var encounters = db.PatientEncounters.AsNoTracking();
+        var labQuery = db.DiagnosticOrders.AsNoTracking().Where(x => x.Status == "Pending" || x.Status == "Billed");
+        if (activeDoctorId.HasValue)
+        {
+            encounters = encounters.Where(x => x.DoctorID == activeDoctorId.Value);
+            labQuery = labQuery.Where(x => x.DoctorID == activeDoctorId.Value);
+        }
+
+        todayEncounters = await encounters.Where(x => x.VisitDate == today).ToListAsync();
+        staleEncounters = await encounters
+            .Where(x => x.VisitDate < today && (x.Status == EncounterStatuses.Waiting || x.Status == EncounterStatuses.InConsultation))
+            .OrderByDescending(x => x.VisitDate).ThenBy(x => x.QueueNo).Take(50).ToListAsync();
+        followUps = await encounters
+            .Where(x => x.FollowUpRequired && x.FollowUpCompletedAt == null && x.FollowUpDate != null && x.FollowUpDate <= today.AddDays(30))
+            .OrderBy(x => x.FollowUpDate).Take(100).ToListAsync();
+        recentCompleted = await encounters.Where(x => x.Status == EncounterStatuses.Completed)
+            .OrderByDescending(x => x.CompletedAt).Take(8).ToListAsync();
+
+        var orders = await labQuery.OrderByDescending(x => x.OrderedAt)
+            .Select(x => new { x.ID, x.EncounterID, x.PatientID, x.PatientName, x.OrderedAt, x.Status, x.BilledMemoID, Items = x.Items.Count })
+            .Take(300).ToListAsync();
+        var memoIds = orders.Where(x => x.BilledMemoID.HasValue).Select(x => x.BilledMemoID!.Value).Distinct().ToArray();
+        var samples = memoIds.Length == 0 ? [] : await db.LabSampleCollections.AsNoTracking()
+            .Where(x => memoIds.Contains(x.MemoID)).Select(x => new { x.MemoID, x.Status }).ToListAsync();
+        var sampleByMemo = samples.GroupBy(x => x.MemoID).ToDictionary(g => g.Key, g => g.Select(s => s.Status).ToList());
+
+        labOrders = [];
+        foreach (var o in orders)
+        {
+            LabStage stage;
+            if (o.Status == "Pending" || !o.BilledMemoID.HasValue) stage = LabStage.AwaitingBilling;
+            else if (!sampleByMemo.TryGetValue(o.BilledMemoID.Value, out var states) || states.Count == 0) stage = LabStage.SamplePending;
+            else if (states.Any(s => s != "Completed")) stage = LabStage.InLab;
+            else continue; // all samples reported
+            labOrders.Add(new LabRow(o.ID, o.EncounterID, o.PatientID, o.PatientName, o.OrderedAt, o.Items, stage));
+        }
+        lastUpdated = DateTime.Now;
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (busy) return;
+        busy = true;
+        try { await LoadAsync(); }
+        finally { busy = false; }
+    }
+
+    private async Task AutoRefreshAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(RefreshSeconds));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+            {
+                // Run on the renderer's sync context so the lists never change in the middle of a render.
+                await InvokeAsync(async () =>
+                {
+                    if (busy || token.IsCancellationRequested) return;
+                    busy = true;
+                    try { await LoadAsync(); }
+                    catch (Exception) { /* keep the last good data; try again next tick */ }
+                    finally { busy = false; }
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task CloseStaleAsync(long encounterId, string status)
+    {
+        if (!canClose || busy) return;
+        busy = true;
+        message = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var entity = await db.PatientEncounters.SingleOrDefaultAsync(x => x.ID == encounterId);
+            if (entity is null || entity.VisitDate >= DateTime.Today ||
+                (entity.Status != EncounterStatuses.Waiting && entity.Status != EncounterStatuses.InConsultation) ||
+                (activeDoctorId.HasValue && entity.DoctorID != activeDoctorId.Value))
+            {
+                Show(I18n.T("This visit was already closed or is not yours."), false);
+            }
+            else
+            {
+                entity.Status = status;
+                entity.UpdatedAt = DateTime.Now;
+                await db.SaveChangesAsync();
+                Show($"{entity.PatientName}: {DisplayStatus(status)}", true);
+            }
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Show(ex.Message, false);
+        }
+        finally { busy = false; }
+    }
+
+    private void Show(string text, bool ok) { message = text; messageOk = ok; }
+
+    private static string QueueLink(PatientEncounter row) =>
+        row.VisitDate == DateTime.Today ? $"/doctor/queue?encounterId={row.ID}" : $"/doctor/queue?encounterId={row.ID}&date={row.VisitDate:yyyy-MM-dd}";
+    private static string PatientLink(string? patientId, string fallback) =>
+        string.IsNullOrWhiteSpace(patientId) ? fallback : $"/doctor/patient-documents/{Uri.EscapeDataString(patientId.Trim())}";
+    private string DoctorName(int id) { var d = doctors.FirstOrDefault(x => x.ID == id); return d is null ? I18n.T("Doctor") : $"{d.Title} {d.Name}".Trim(); }
+    private string AgeText(DateTime date) { var days = (DateTime.Today - date.Date).Days; return days == 1 ? I18n.T("1 day ago") : $"{days} {I18n.T("days ago")}"; }
     private static string Initials(string value) => string.Concat(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
-    private static string StatusClass(string value) => value switch { EncounterStatuses.Waiting => "waiting", EncounterStatuses.InConsultation => "active", _ => "done" };
-    private static string DisplayStatus(string value) => value == EncounterStatuses.InConsultation ? "In consultation" : value;
+    private static string StatusClass(string value) => value switch { EncounterStatuses.Waiting => "waiting", EncounterStatuses.InConsultation => "active", EncounterStatuses.Completed => "done", _ => "muted" };
+    private string DisplayStatus(string value) => value switch
+    {
+        EncounterStatuses.InConsultation => I18n.T("In consultation"),
+        EncounterStatuses.NoShow => I18n.T("No-show"),
+        _ => I18n.T(value)
+    };
+    private static string LabStageClass(LabStage s) => s switch { LabStage.AwaitingBilling => "overdue", LabStage.SamplePending => "waiting", _ => "active" };
+    private string LabStageText(LabStage s) => s switch
+    {
+        LabStage.AwaitingBilling => I18n.T("Awaiting billing"),
+        LabStage.SamplePending => I18n.T("Sample pending"),
+        _ => I18n.T("In lab")
+    };
+
+    private static MarkupString Icon(string name) => new("<svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">" + name switch
+    {
+        "users" => "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>",
+        "pulse" => "<path d=\"M22 12h-4l-3 9L9 3l-3 9H2\"/>",
+        "check" => "<path d=\"M22 11.08V12a10 10 0 1 1-5.93-9.14\"/><path d=\"m9 11 3 3L22 4\"/>",
+        "calendar" => "<rect x=\"3\" y=\"4\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M16 2v4M8 2v4M3 10h18\"/>",
+        "flask" => "<path d=\"M9 3h6M10 3v6L4.5 18.5A2 2 0 0 0 6.2 21.5h11.6a2 2 0 0 0 1.7-3L14 9V3\"/><path d=\"M7 15h10\"/>",
+        "refresh" => "<path d=\"M21 12a9 9 0 1 1-2.64-6.36L21 8\"/><path d=\"M21 3v5h-5\"/>",
+        _ => "<path d=\"M12 9v4M12 17h.01\"/><path d=\"M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z\"/>"
+    } + "</svg>");
+
+    public void Dispose()
+    {
+        refreshCts.Cancel();
+        refreshCts.Dispose();
+    }
 }
